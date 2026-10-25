@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ settings.app_name }}{% endblock %}
+{% macro field_row(item) %}
+  {% set f = item.field %}
+  {# Hint and error are both read out with the field, and a field with an error is marked invalid #}
+  {% set described = [] %}{% if f.help %}{% set _ = described.append('h-' ~ f.name) %}{% endif %}{% if item.error %}{% set _ = described.append('e-' ~ f.name) %}{% endif %}
+  {% set aria %}{% if described %}aria-describedby="{{ described|join(' ') }}"{% endif %} {% if item.error %}aria-invalid="true"{% endif %}{% endset %}
+  {% if f.kind == 'bool' %}
+  <div class="field check">
+    <input type="checkbox" id="f-{{ f.name }}" name="{{ f.name }}" value="1" {% if item.value in ('1', 'on') %}checked{% endif %} {{ aria }}>
+    <label for="f-{{ f.name }}">{{ f.label }}</label>
+    {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}
+    {% if item.error %}<p class="field-error" id="e-{{ f.name }}">{{ item.error }}</p>{% endif %}
+  </div>
+  {% else %}
+  <div class="field">
+    <label for="f-{{ f.name }}">{{ f.label }}</label>
+    {% if f.kind == 'effort' %}
+    <select id="f-{{ f.name }}" name="{{ f.name }}" {{ aria }}>
+      {% for e in ('low', 'medium', 'high') %}<option value="{{ e }}" {% if item.value == e %}selected{% endif %}>{{ e|capitalize }}</option>{% endfor %}
+    </select>
+    {% elif f.kind in ('lines', 'ids') %}
+    <textarea id="f-{{ f.name }}" name="{{ f.name }}" rows="4" {{ aria }}>{{ item.value }}</textarea>
+    {% else %}
+    <input id="f-{{ f.name }}" name="{{ f.name }}" type="text" value="{{ item.value }}"
+      {% if f.kind == 'int' %}inputmode="numeric"{% else %}spellcheck="false" autocapitalize="off"{% endif %} {{ aria }}>
+    {% endif %}
+    {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}
+    {% if item.error %}<p class="field-error" id="e-{{ f.name }}">{{ item.error }}</p>{% endif %}
+  </div>
+  {% endif %}
+{% endmacro %}
+{% block main %}
+<section class="page narrow">
+  <h1>Settings</h1>
+  <p class="lede">Changes apply to the next message, with no restart. Every change is kept in the <a href="/audit">audit log</a>. API keys and Slack tokens live in config.env on the mini PC and aren't shown here.</p>
+  <nav aria-label="Settings sections">
+    <ul class="settings-nav">
+      <li><a href="#health">Health and backups</a></li>
+      {% for sec in sections %}<li><a href="#{{ sec.key }}">{{ sec.title }}</a></li>{% endfor %}
+      <li><a href="#prompts">System prompt</a></li>
+      <li><a href="#history">Change history</a></li>
+    </ul>
+  </nav>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+
+  <section class="panel" id="health" aria-labelledby="health-title">
+    <h2 id="health-title">Health and backups</h2>
+    <ul class="health">
+      {% for row in health %}
+      <li>
+        <span class="health-label">{{ row.label }}</span>
+        <span class="pill {{ row.kind }}">{{ row.state }}</span>
+        <span class="health-detail">{{ row.detail }}{% if row.link %} <a href="{{ row.link }}">Release notes</a>{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="field-hint">If Slack or the Claude API fails for 15 minutes, admins get a Slack DM. Cloudflare's Zero Trust dashboard shows whether the tunnel is up.</p>
+    <h3>Recent backups</h3>
+    {% if backups %}
+    <ul class="simple-list">
+      {% for b in backups %}<li><span class="mono">{{ b.name }}</span> <span class="field-hint">{{ b.time }}, {{ b.size }}</span></li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="field-hint">No backups yet.</p>
+    {% endif %}
+    <p class="field-hint">Backups are saved in <span class="mono">{{ backup_folder }}</span>. To put one back, run restore.cmd in the SubZero AI folder on the mini PC.</p>
+    <form method="post" action="/settings/backup" class="form-actions">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button" type="submit">Back up now</button>
+    </form>
+  </section>
+
+  {% for sec in sections %}
+  <section class="panel" id="{{ sec.key }}" aria-labelledby="{{ sec.key }}-title">
+    <h2 id="{{ sec.key }}-title">{{ sec.title }}</h2>
+    <form method="post" action="/settings/{{ sec.key }}" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        {% for item in sec.fields %}{{ field_row(item) }}{% endfor %}
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">Save {{ sec.title if sec.key == 'claude' else sec.title|lower }}{{ ' settings' if sec.key == 'claude' else '' }}</button></div>
+    </form>
+  </section>
+  {% endfor %}
+
+  <section class="panel" id="prompts" aria-labelledby="prompts-title">
+    <h2 id="prompts-title">System prompt</h2>
+    <p class="field-hint">Claude reads these three layers, in this order, before every chat. Students don't see them. Changes apply to the next reply.</p>
+    {% for p in prompts %}
+    <form method="post" action="/settings/prompts/{{ p.slug }}" class="prompt-layer" id="prompt-{{ p.slug }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="p-{{ p.slug }}">{{ loop.index }}. {{ p.label }}{% if p.custom %} <span class="pill unknown">Changed from built-in</span>{% endif %}</label>
+        <p class="field-hint" id="ph-{{ p.slug }}">{{ p.help }}</p>
+        <textarea class="code-input" id="p-{{ p.slug }}" name="text" rows="14" spellcheck="true" aria-describedby="ph-{{ p.slug }}">{{ p.text }}</textarea>
+      </div>
+      <div class="form-actions">
+        <button class="button primary" type="submit">Save {{ p.label|lower }}</button>
+        {% if p.custom %}<button class="button quiet" type="submit" name="reset" value="1" data-confirm="Put back the built-in {{ p.label|lower }} layer? Your changes stay in the audit log.">Restore built-in</button>{% endif %}
+      </div>
+    </form>
+    {% endfor %}
+  </section>
+
+  <section class="panel" id="history" aria-labelledby="history-title">
+    <h2 id="history-title">Change history</h2>
+    {% if history %}
+    <div class="table-wrap">
+      <table class="audit">
+        <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Setting</th><th scope="col">Change</th></tr></thead>
+        <tbody>
+          {% for h in history %}
+          <tr><td>{{ h.time }}</td><td>{{ h.who }}</td><td>{{ h.what }}</td><td>{{ h.change or 'See the audit log for the before and after text.' }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="field-hint">Nothing has been changed here yet.</p>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

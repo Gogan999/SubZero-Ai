@@ -3,6 +3,8 @@ before anyone depends on them. Each Claude check is a tiny request that costs a 
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -40,6 +42,10 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
             "Set PUBLIC_URL to https://ai.yourdomain.org once the Cloudflare Tunnel is running.")
     else:
         add(FAIL, "PUBLIC_URL should start with https://", "Sign in with Slack and secure cookies need HTTPS.")
+    if os.name == "nt" and not settings.dev_login:
+        problem = data_folder_open(str(settings.data_dir))
+        if problem:
+            add(WARN, "Other accounts on this PC can open the data folder", problem)
     if settings.dev_login:
         add(WARN, "Test sign-in is on (DEV_LOGIN=1)",
             "Anyone using this PC can sign in as a sample person. Turn it off before students use the app.")
@@ -127,6 +133,21 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
     else:
         add(WARN, "No admins named", "Set ADMIN_SLACK_IDS to the coaches' Slack member IDs.")
     return results
+
+
+def data_folder_open(path: str, icacls_output: str | None = None) -> str:
+    """On Windows, the data folder (with config.env and the chats) should be open only to administrators,
+    SYSTEM, and the app's service account. Returns what's wrong, or an empty string."""
+    if icacls_output is None:
+        try:
+            icacls_output = subprocess.run(["icacls", path], capture_output=True, text=True, timeout=15).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    for group in ("BUILTIN\\Users", "Everyone", "NT AUTHORITY\\Authenticated Users", "CREATOR OWNER"):
+        if group.lower() in icacls_output.lower():
+            return (f"{group} has access to {path}. Run install.cmd again (it locks the folder down), "
+                    "and keep config.env private.")
+    return ""
 
 
 def _slack_reason(exc: Exception) -> str:

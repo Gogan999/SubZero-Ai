@@ -2,11 +2,11 @@
 
 A claude.ai-style chat for a high school robotics team. Students ask Claude about code, mechanisms, physics, and materials. Every student message waits for a mentor to approve it in Slack before Claude sees it, and the whole team can read approved chats.
 
-This is version 0.3.0: milestones 1 to 3 of the build plan.
+This is version 0.4.0: all four milestones of the build plan.
 
 ## What's in this version
 
-- **Sign in with Slack**, limited to full members of the team workspace. Guest accounts and bots are refused (set `ALLOW_SLACK_GUESTS=1` if some students are guests), and the daily account check signs out anyone who is deactivated or turned into a guest. Mentors are the members of the private #claude-approvals channel; admins are named in `config.env`.
+- **Sign in with Slack**, limited to full members of the team workspace. Guest accounts and bots are refused (set `ALLOW_SLACK_GUESTS=1` if some students are guests), and the daily account check signs out anyone who is deactivated or turned into a guest. Mentors are the members of the private #claude-approvals channel; admins are named on the setup page and the Settings page.
 - **Chat**: a conversation list with search and subteam and student filters, Markdown replies with highlighted code and copy buttons, and replies that stream in as Claude writes.
 - **Approvals**: each student message posts a card in #claude-approvals with Approve, Edit, Reject, and Handle privately. Students get a Slack DM when a mentor acts. The app's Review page does the same thing if Slack is down. A second mentor tapping a handled card is told who already handled it.
 - **Audit log** (admins): sign-ins, messages, every review with the before and after text of edits, alerts, and Slack problems.
@@ -15,17 +15,16 @@ This is version 0.3.0: milestones 1 to 3 of the build plan.
 - **Long chats**: once a chat sends Claude about 150,000 tokens per reply, the app suggests starting a fresh one.
 - Also: the three-layer system prompt with the child-safety layer, MENTOR ALERT handling, per-student limits, the permanent AI notice, and the "Using SubZero AI responsibly" page.
 
-Still to come: the Windows installer, setup page, Windows services, nightly backups, and admin settings page (milestone 4). Until then the app runs in a console window and settings live in `config.env`.
+- **Windows packaging and operations** (new in 0.4): a one-step installer with its own Python, a setup page that creates the Slack app for you, the app and the Cloudflare connector running as Windows services that start after a reboot with nobody signed in, nightly backups with a restore script, an update script, and an admin **Settings** page for models, limits, retention, subteams, admins, and the three system prompt layers. The Settings page also shows whether Slack, the Claude API, and the backups are working, and admins get a Slack DM if Slack or Claude fails for 15 minutes.
 
 ## Try it in test mode
 
-Test mode runs on any Windows PC with sample sign-ins and a pretend Claude, so you need no accounts or keys. It takes about 10 minutes.
+Test mode runs on any Windows PC with sample sign-ins and a pretend Claude, so you need no accounts or keys. It takes about 5 minutes.
 
-1. Install Python 3.12 or 3.13 from [python.org](https://www.python.org/downloads/windows/). In the installer, tick **Add python.exe to PATH**.
-2. Unzip this folder anywhere, for example `C:\SubZeroAI`.
-3. Double-click **start-test-mode.cmd**. The first run installs packages, then the browser opens.
-4. Sign in as **Ava (student)** and send a message.
-5. Open a private browser window, sign in as **Mentor Kim**, open **Review**, and approve it. Ava's window updates by itself and the reply streams in.
+1. Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases) and unzip it anywhere.
+2. Double-click **start-test-mode.cmd**. The browser opens by itself.
+3. Sign in as **Ava (student)** and send a message.
+4. Open a private browser window, sign in as **Mentor Kim**, open **Review**, and approve it. Ava's window updates by itself and the reply streams in.
 
 Also try:
 
@@ -33,52 +32,75 @@ Also try:
 - Signing in as **Ben (student)** to see what other students can and can't see.
 - A message containing `ALERT-TEST`, which makes the pretend Claude raise a mentor alert, or `ERROR-TEST`, which makes it fail so you can try **Try again**.
 - Attaching files, or ticking **Interactive explainer** to get a sample explainer. Its last line confirms the network is blocked inside the frame.
+- Signing in as **Head coach** and opening **Settings**.
 
-Test data lives in the `test-data` folder. Delete it to start over. Close the window to stop the app.
+Test data lives in the `test-data` folder next to the .cmd file. Delete it to start over. Close the window to stop the app.
 
-On a Mac or Linux computer, run `scripts/run.sh --test-mode --open` instead.
+From a copy of this repository instead of the release zip, install Python 3.12 or 3.13 (tick **Add python.exe to PATH**) and double-click the **start-test-mode.cmd** in the repository. On a Mac or Linux computer, run `scripts/run.sh --test-mode --open`.
 
-## Set it up for real
+## Install guide: Windows mini PC
 
-This connects real Slack sign-in, approval cards, and Claude. Do it on the mini PC.
+Expect about an hour. No Docker, no Python install, and no router changes.
 
-### 1. Create config.env
+### Before you start
 
-Double-click **start.cmd**. The first time, it creates `C:\ProgramData\SubZeroAI\config.env` and opens it in Notepad. Keep it open for the next two steps; the notes in the file say what goes where. Leave `DEV_LOGIN=0` and `FAKE_CLAUDE=0`.
+- [ ] The mini PC with all Windows updates installed, sleep set to **Never**, and the BIOS or UEFI power-loss option (often "Restore on AC power loss") set to **Power On**, so it restarts after an outage.
+- [ ] A free Cloudflare account with the team domain's DNS on Cloudflare. When you add the domain, check that Cloudflare imported the website's existing DNS records before switching nameservers.
+- [ ] A Slack account that can install apps in the team workspace.
+- [ ] A Claude Console account at [platform.claude.com](https://platform.claude.com).
 
-### 2. Claude API key
+### 1. Cloudflare Tunnel
 
-At [platform.claude.com](https://platform.claude.com), create a workspace named **SubZero AI**, set its monthly spend limit, and create an API key inside that workspace. The key goes in `ANTHROPIC_API_KEY`.
+In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and create a tunnel named **subzero-ai**. Choose Windows and copy the long token from the install command it shows (you paste it into the installer). Add a public hostname (Cloudflare may call it a published application route): **ai.yourdomain.org**, type **HTTP**, URL **localhost:8787**. The free Zero Trust plan asks for a payment method but doesn't charge for the plan.
 
-### 3. Slack app
+### 2. Run the installer
 
-1. Open `slack-manifest.yaml` and replace `ai.yourdomain.org` with the app's real address.
-2. Go to [api.slack.com/apps](https://api.slack.com/apps), choose **Create New App**, then **From a manifest**. Pick the team workspace, choose YAML, paste the file, and create the app.
-3. Click **Install to Workspace** and allow it.
-4. Copy these into `config.env`, then save it:
+Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases) and unzip it. Double-click **install.cmd** and choose **Yes** when Windows asks for permission. The installer:
 
-| Setting | Where to find it in the Slack app's settings |
+- copies the app, with its own Python, to `C:\Program Files\SubZeroAI`;
+- creates `C:\ProgramData\SubZeroAI` for settings, chats, files, backups, and logs, readable only by administrators and the app's service account;
+- installs the **SubZero AI** Windows service under its own low-privilege account, set to start automatically;
+- asks for the Cloudflare tunnel token and installs the Cloudflare connector as a Windows service;
+- opens `http://localhost:8787/setup` in the browser.
+
+Running install.cmd again repairs an install and keeps all data.
+
+### 3. Setup page
+
+The setup page only opens on the mini PC, saves each step as you go, and locks when you finish.
+
+1. **Address.** Enter `https://ai.yourdomain.org`.
+2. **Slack app.** Click **Create Slack app**, choose the team workspace, and confirm. In the new app, click **Install to Workspace**, then generate an app-level token with the `connections:write` scope. Paste the bot token, app-level token, client ID, and client secret. The page checks them with Slack before saving.
+3. **Approvals channel.** Create the private **#claude-approvals** channel in Slack, add the coaches and mentors, and type `/invite @SubZero AI` in it. Reload the setup page and pick the channel.
+4. **Claude.** At platform.claude.com, create a workspace named **SubZero AI**, set its monthly spend limit, and create an API key inside it. Paste it; the page sends one tiny test request.
+5. **Admins.** Paste the coaches' Slack member IDs (click a person's name in Slack, open the three-dot menu, and choose **Copy member ID**).
+6. **Finish.** Write down the recovery code it shows and keep it somewhere safe. SubZero AI restarts with the new settings.
+
+### 4. Check it
+
+Open `https://ai.yourdomain.org` on a phone and sign in with Slack as a coach. Open **Settings**: the health list should say Slack is working, and a backup should already be listed. Check the per-student limits, the retention period, and the three system prompt layers (ask a coach to review the safety layer). Then send a test message as a student and approve it in #claude-approvals.
+
+## Running it
+
+Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each tool asks for administrator permission.
+
+| Tool | What it does |
 | --- | --- |
-| `SLACK_BOT_TOKEN` (starts with `xoxb-`) | OAuth & Permissions, Bot User OAuth Token |
-| `SLACK_APP_TOKEN` (starts with `xapp-`) | Basic Information, App-Level Tokens: generate one with the `connections:write` scope |
-| `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` | Basic Information, App Credentials |
+| **update.cmd** | Downloads the newest release, backs up the data, replaces the app, and restarts it. If the new version doesn't start, it puts the old one back. The Settings page says when an update is available. If the repository is private, download the zip yourself and run `update.cmd -Zip path\to\SubZeroAI-windows.zip`. |
+| **restore.cmd** | Lists the backups and puts the one you pick back, after saving the current data as a `before-restore` backup. |
+| **back-up-now.cmd** | Makes a backup now. Admins can also click **Back up now** on the Settings page. |
+| **check-settings.cmd** | Checks the Slack and Claude settings and says what to fix. |
+| **recovery-code.cmd** | Makes a new recovery code (the old one stops working). |
+| **uninstall.cmd** | Removes the app and its service. The data folder is kept. |
 
-5. In Slack, create a private channel named **#claude-approvals**, add the coaches and mentors, and type `/invite @SubZero AI` in it. Click the channel name, copy the **Channel ID** at the bottom, and put it in `SLACK_APPROVALS_CHANNEL`.
-6. Put the coaches' Slack member IDs in `ADMIN_SLACK_IDS`, separated by commas. In Slack, click a person's name, open the three-dot menu, and choose **Copy member ID**.
+- **Backups.** Every night at 2:00 AM the app copies the database, attached files, and changed prompts into a zip in `C:\ProgramData\SubZeroAI\backups` and keeps 14 days. For an off-site copy, set `BACKUP_DIR` in config.env to a folder that OneDrive or Google Drive syncs (the app's service account needs permission to write there). Backups leave out config.env, because it holds the API key and Slack tokens; keep your own copy of it somewhere safe.
+- **Retention.** Chats with no activity for 730 days (this season and the next) are deleted after the nightly backup. Change it, or set 0 to keep chats forever, on the Settings page.
+- **Reboots and Windows updates.** Both services start on their own after a restart, with nobody signed in.
+- **Health.** The Settings page shows the Slack connection, Claude API status, the last backup, and whether an update is out. If Slack or Claude calls fail for 15 minutes, admins get a Slack DM, and another when it works again. Cloudflare's dashboard shows whether the tunnel is up. `http://localhost:8787/healthz` answers with the same status for scripts.
+- **If Slack sign-in breaks.** On the mini PC, open `http://localhost:8787/auth/recovery` and enter the recovery code to sign in as an admin. It doesn't work from anywhere else.
+- **Model changes.** When Anthropic retires a model, change the model ID on the Settings page. No code changes.
 
-### 4. Check the settings
-
-Double-click **check-settings.cmd**. It checks each setting, makes a tiny test request to each Claude model (a fraction of a cent), and says exactly what to fix. Run it again until nothing says FAIL.
-
-### 5. Cloudflare Tunnel
-
-In the Cloudflare Zero Trust dashboard, create a tunnel named **subzero-ai** and choose Windows. Follow the dashboard's steps to install the connector on the mini PC as a Windows service. Then add a public hostname (Cloudflare may call it a published application route): **ai.yourdomain.org**, type **HTTP**, URL **127.0.0.1:8787**.
-
-### 6. Start it
-
-Double-click **start.cmd**. It runs the settings check, then starts the app. Keep the window open: closing it stops the app. Milestone 4 turns the app into a Windows service that starts on its own after a reboot.
-
-Open `https://ai.yourdomain.org` on a phone and sign in with Slack.
+**Monthly check** (about 10 minutes): open Settings and confirm everything says Working or Done, confirm last night's backup is listed, apply any available update, and check the Claude Console spend for the month.
 
 ## Acceptance tests
 
@@ -104,6 +126,14 @@ Open `https://ai.yourdomain.org` on a phone and sign in with Slack.
 - [ ] A student with 3 messages waiting can't send a 4th.
 - [ ] A screenshot and a code file reach Claude, and Claude refers to them.
 
+**Milestone 4**
+
+- [ ] Someone follows only the install guide on a clean mini PC and gets a first approved prompt in under an hour.
+- [ ] After a restart of the mini PC, with nobody signed in, the site comes back by itself.
+- [ ] A backup restores cleanly with restore.cmd: a chat made after the backup disappears, and the earlier chats and their files are back.
+- [ ] update.cmd moves to a newer release and keeps every chat and setting.
+- [ ] Changing a limit on the Settings page applies to the next message without a restart.
+
 ## How it behaves
 
 | | Students | Mentors | Admins |
@@ -126,24 +156,31 @@ Open `https://ai.yourdomain.org` on a phone and sign in with Slack.
 
 Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` folder):
 
-- `config.env`: settings and secrets.
-- `data\subzero.db`: the database. Back it up by copying it while the app is stopped. Automatic backups arrive in milestone 4.
-- `logs\subzero.log`: the app's log, one file per day, kept for 14 days.
-- `prompts\`: optional replacements for the system prompt. Copy `subzero_ai\prompts\team.md` here and edit it to add the programming subteam's language and conventions. Changes apply to the next reply, with no restart.
+- `config.env`: the address, API key, and Slack tokens, written by the setup page.
+- `data\subzero.db`: the database, including settings changed on the Settings page (these win over config.env).
+- `files\`: attached files.
+- `prompts\`: system prompt layers changed on the Settings page.
+- `backups\`: the nightly backups.
+- `logs\`: `subzero.log` (one file per day, kept for 14 days) and the service's own logs.
 
 ## Troubleshooting
 
-- **"Python 3.12 or 3.13 isn't installed"**: install it from python.org with "Add python.exe to PATH" ticked, then close and reopen the window.
+- **The installer says SubZero AI didn't start**: read `C:\ProgramData\SubZeroAI\logs\subzero.log` and `SubZeroAI.err.log`. Run install.cmd again after fixing the cause.
+- **The setup page says "Not found"**: it only opens on the mini PC itself, at `http://localhost:8787/setup`, and only until setup is finished. To open it again, run `python\python.exe -m subzero_ai reset-setup` from `C:\Program Files\SubZeroAI` in an administrator window (with `DATA_DIR` set to `C:\ProgramData\SubZeroAI`), or change settings on the Settings page instead.
+- **"Python 3.12 or 3.13 isn't installed"** (only when running from a copy of the repository): install it from python.org with "Add python.exe to PATH" ticked, then close and reopen the window.
 - **Sign-in says the sign-in couldn't be verified or the link expired**: check that the computer's clock is right and that `PUBLIC_URL` matches the address in the browser exactly.
 - **Slack says "redirect_uri did not match"**: the Slack app's redirect URL must be `PUBLIC_URL` followed by `/auth/slack/callback`. Run the settings check to see the exact value.
 - **No cards appear in Slack**: run the settings check. Most often the app isn't in the channel (`/invite @SubZero AI`) or the channel ID is wrong.
-- **Buttons on the cards don't do anything**: `SLACK_APP_TOKEN` is missing or wrong, or the app window was closed.
-- **The site shows a Cloudflare error page**: the app isn't running, or the tunnel's URL isn't `127.0.0.1:8787`.
+- **Buttons on the cards don't do anything**: `SLACK_APP_TOKEN` is missing or wrong, or the SubZero AI service is stopped (check services.msc).
+- **The site shows a Cloudflare error page**: the SubZero AI service isn't running, or the tunnel's URL isn't `localhost:8787`.
 
 ## For developers
 
-- Run the tests: `python -m pip install -r requirements-dev.txt`, then `python -m unittest discover -s tests -t .`
+- Run the tests: `python -m pip install -r requirements-dev.txt` (or, for the exact versions that ship, `python -m pip install --no-deps -r packaging/requirements-lock.txt -r packaging/requirements-test.txt`), then `python -m unittest discover -s tests -t .`
 - `python -m subzero_ai --help` lists the commands.
-- Layout: `subzero_ai/web.py` (pages, actions, live updates), `approvals.py` (the approval loop), `generation.py` (Claude replies), `slack_*.py` and `socket_mode.py` (Slack), `auth.py` (Sign in with Slack), `store.py` and `db.py` (SQLite).
+- Layout: `subzero_ai/web.py` (pages, actions, live updates), `web_admin.py` (Settings, setup, and recovery pages), `saved_settings.py`, `backup.py`, `maintenance.py` (nightly backup, retention, update check), `health.py`, `approvals.py` (the approval loop), `generation.py` (Claude replies), `slack_*.py` and `socket_mode.py` (Slack), `auth.py` (Sign in with Slack), `store.py` and `db.py` (SQLite).
 - The app talks to Slack and the Claude API over plain HTTPS with `requests`, and to Slack Socket Mode with `websockets`, through small adapters with test stand-ins, instead of the Slack Bolt and Anthropic SDKs. That keeps the dependency list short for the Windows packaging and lets the whole approval loop be tested offline.
+- `python -m subzero_ai --help` also lists `backup`, `backups`, `restore`, `recovery-code`, and `reset-setup`.
+- **Windows release.** `python packaging/build_windows.py` builds `dist/SubZeroAI-windows.zip` on any OS: the embeddable Python 3.13, the packages pinned in `packaging/requirements-lock.txt` (installed for 64-bit Windows from `requirements-windows.txt`, which lists each wheel's SHA-256; refresh it with `--write-hashes` after changing the lock file), the [WinSW](https://github.com/winsw/winsw) service wrapper, cloudflared, and the scripts in `packaging/windows`. Every download is pinned by SHA-256. Pushing a tag like `v0.4.0` runs `.github/workflows/release.yml`, which tests, builds, and publishes the release that update.cmd downloads.
+- The Windows scripts are written for Windows PowerShell 5.1 and must stay ASCII-only.
 - Live updates use server-sent events. Each running app keeps them in memory, so run one copy of the app per database.

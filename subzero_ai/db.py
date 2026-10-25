@@ -101,6 +101,15 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_attachments_message ON attachments(message_id, id);
     """,
+    # Version 3: milestone 4 (settings changed on the admin page; they win over config.env)
+    """
+    CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_by INTEGER REFERENCES users(id),
+        updated_at TEXT NOT NULL
+    );
+    """,
 ]
 
 
@@ -164,6 +173,17 @@ class Database:
     def execute(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
         with self.connect() as conn:
             return conn.execute(sql, params)
+
+    def get_kv(self, key: str, default: str | None = None) -> str | None:
+        row = self.one("SELECT value FROM kv WHERE key = ?", (key,))
+        return row["value"] if row else default
+
+    def set_kv(self, key: str, value: str) -> None:
+        self.execute("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (key, value))
+
+    def delete_kv(self, key: str) -> None:
+        self.execute("DELETE FROM kv WHERE key = ?", (key,))
 
     def audit(
         self,

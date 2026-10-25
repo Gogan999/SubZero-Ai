@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Set up · {{ settings.app_name }}{% endblock %}
+{% macro status(key) %}<span class="pill {{ 'ok' if done[key] else 'unknown' }}">{{ 'Done' if done[key] else 'To do' }}</span>{% endmacro %}
+{% macro messages(key) %}
+  {% if errors.get(key) %}<p class="field-error" role="alert">{{ errors[key] }}</p>{% endif %}
+  {% if notes.get(key) %}<p class="flash" role="status">{{ notes[key] }}</p>{% endif %}
+{% endmacro %}
+{% block main %}
+<section class="page narrow">
+  <h1>Set up {{ settings.app_name }}</h1>
+  <p class="lede">Work through these steps in order. Each one is saved as you go, so you can close this page and come back. This page only opens on this PC, and it locks when you finish.</p>
+
+  <section class="panel" id="address" aria-labelledby="s1">
+    <div class="step-head"><h2 id="s1">1. The site's address</h2>{{ status('address') }}</div>
+    <p class="field-hint">The address from the Cloudflare Tunnel's public hostname, where the team will open the app.</p>
+    <form method="post" action="/setup/address">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="public_url">Address</label>
+        <input id="public_url" name="public_url" type="text" inputmode="url" spellcheck="false" autocapitalize="off"
+          placeholder="https://ai.yourdomain.org" value="{{ form.get('public_url', address) }}">
+      </div>
+      {{ messages('address') }}
+      <div class="form-actions"><button class="button primary" type="submit">Save address</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="slack" aria-labelledby="s2">
+    <div class="step-head"><h2 id="s2">2. Slack app</h2>{{ status('slack') }}</div>
+    {% if create_app_link %}
+    <ol class="steps">
+      <li><a class="button" href="{{ create_app_link }}" target="_blank" rel="noopener">Create Slack app</a> Choose the team's workspace, check the details, and click Create. The app's sign-in address is filled in for you: <span class="mono">{{ redirect_url }}</span></li>
+      <li>In the new app, open <strong>Install App</strong> and click <strong>Install to Workspace</strong>. Copy the <strong>Bot User OAuth Token</strong>.</li>
+      <li>Open <strong>Basic Information</strong>. Under App-Level Tokens, click <strong>Generate Token and Scopes</strong>, add the <span class="mono">connections:write</span> scope, and copy the token. Then copy the <strong>Client ID</strong> and <strong>Client Secret</strong> under App Credentials.</li>
+    </ol>
+    {% else %}
+    <p class="field-hint">Save the site's address first. The Create Slack app button appears here.</p>
+    {% endif %}
+    <form method="post" action="/setup/slack" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        <div class="field">
+          <label for="slack_bot_token">Bot token (starts with xoxb-)</label>
+          <input id="slack_bot_token" name="slack_bot_token" type="password" spellcheck="false" autocomplete="off" {% if done.slack %}placeholder="Saved. Leave blank to keep it."{% endif %}>
+        </div>
+        <div class="field">
+          <label for="slack_app_token">App-level token (starts with xapp-)</label>
+          <input id="slack_app_token" name="slack_app_token" type="password" spellcheck="false" autocomplete="off" {% if done.slack %}placeholder="Saved. Leave blank to keep it."{% endif %}>
+        </div>
+        <div class="field">
+          <label for="slack_client_id">Client ID</label>
+          <input id="slack_client_id" name="slack_client_id" type="text" spellcheck="false" autocomplete="off" {% if done.slack %}placeholder="Saved. Leave blank to keep it."{% endif %}>
+        </div>
+        <div class="field">
+          <label for="slack_client_secret">Client secret</label>
+          <input id="slack_client_secret" name="slack_client_secret" type="password" spellcheck="false" autocomplete="off" {% if done.slack %}placeholder="Saved. Leave blank to keep it."{% endif %}>
+        </div>
+      </div>
+      {{ messages('slack') }}
+      <div class="form-actions"><button class="button primary" type="submit" {% if not create_app_link %}disabled{% endif %}>Check and save</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="channel" aria-labelledby="s3">
+    <div class="step-head"><h2 id="s3">3. Approvals channel</h2>{{ status('channel') }}</div>
+    <p class="field-hint">In Slack, create a private channel named #claude-approvals and add the coaches and mentors. Everyone in it can approve student messages. Then type <span class="mono">/invite @SubZero AI</span> in the channel and reload this page.</p>
+    <form method="post" action="/setup/channel">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if channels %}
+      <div class="field">
+        <label for="channel">Channel</label>
+        <select id="channel" name="channel">
+          {% for c in channels %}<option value="{{ c.id }}" {% if c.id == channel or (not channel and c.name == 'claude-approvals') %}selected{% endif %}>#{{ c.name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% elif done.slack %}
+      <p class="field-hint">The app isn't in any private channels yet. Invite it, then reload this page, or paste the channel ID below.</p>
+      {% endif %}
+      <div class="field">
+        <label for="channel_id">Or paste the channel ID</label>
+        <input id="channel_id" name="channel_id" type="text" spellcheck="false" autocapitalize="characters" placeholder="{{ channel or 'C0123ABCDEF' }}" aria-describedby="channel-hint">
+        <p class="field-hint" id="channel-hint">In Slack, click the channel's name at the top. The channel ID is at the bottom.</p>
+      </div>
+      {{ messages('channel') }}
+      <div class="form-actions"><button class="button primary" type="submit" {% if not done.slack %}disabled{% endif %}>Save channel</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="claude" aria-labelledby="s4">
+    <div class="step-head"><h2 id="s4">4. Claude API key</h2>{{ status('claude') }}</div>
+    <p class="field-hint">At <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>, create a workspace named SubZero AI, set its monthly spend limit, and create an API key inside it. Saving sends one tiny test request, which costs a fraction of a cent.</p>
+    <form method="post" action="/setup/claude" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="anthropic_api_key">API key (starts with sk-ant-)</label>
+        <input id="anthropic_api_key" name="anthropic_api_key" type="password" spellcheck="false" autocomplete="off" {% if done.claude %}placeholder="Saved. Leave blank to keep it."{% endif %}>
+      </div>
+      {{ messages('claude') }}
+      <div class="form-actions"><button class="button primary" type="submit">Test and save</button></div>
+    </form>
+    <p class="field-hint">Models, limits, and the system prompt can be changed later on the Settings page.</p>
+  </section>
+
+  <section class="panel" id="admins" aria-labelledby="s5">
+    <div class="step-head"><h2 id="s5">5. Admins</h2>{{ status('admins') }}</div>
+    <p class="field-hint">Admins (usually both coaches) can change settings and read the audit log. In Slack, click a person's name, open the three-dot menu, and choose Copy member ID.</p>
+    <form method="post" action="/setup/admins">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="admins-input">Slack member IDs, one per line</label>
+        <textarea id="admins-input" name="admins" rows="3" spellcheck="false">{{ form.get('admins', admins) }}</textarea>
+      </div>
+      {{ messages('admins') }}
+      <div class="form-actions"><button class="button primary" type="submit">Save admins</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="finish" aria-labelledby="s6">
+    <h2 id="s6">6. Finish</h2>
+    <p class="field-hint">Finishing locks this page, shows a recovery code to keep somewhere safe, and restarts {{ settings.app_name }} with the new settings. Settings are saved in <span class="mono">{{ config_path }}</span>.</p>
+    <form method="post" action="/setup/finish">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {{ messages('finish') }}
+      <div class="form-actions"><button class="button primary" type="submit" {% if not all_done %}disabled{% endif %}>Finish setup</button></div>
+    </form>
+  </section>
+</section>
+{% endblock %}

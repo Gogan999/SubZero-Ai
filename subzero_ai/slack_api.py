@@ -93,6 +93,18 @@ class SlackWebApi:
         body = await self.call("users.info", user=user_id)
         return body["user"]
 
+    async def private_channels(self) -> list[dict[str, str]]:
+        """Private channels the bot has been invited to, for picking the approvals channel."""
+        channels: list[dict[str, str]] = []
+        cursor = None
+        while True:
+            body = await self.call("conversations.list", types="private_channel", exclude_archived=True,
+                                   limit=200, cursor=cursor)
+            channels += [{"id": c["id"], "name": c.get("name", c["id"])} for c in body.get("channels", [])]
+            cursor = (body.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                return sorted(channels, key=lambda c: c["name"])
+
     async def auth_test(self) -> dict[str, Any]:
         return await self.call("auth.test")
 
@@ -113,7 +125,9 @@ class FakeSlack:
     dms: list[dict[str, Any]] = field(default_factory=list)
     views: list[dict[str, Any]] = field(default_factory=list)
     team_id: str = "TDEV"
+    channels: list[dict[str, str]] = field(default_factory=list)
     fail_posts: bool = False
+    fail_auth: bool = False
     _ts: int = 1000
 
     async def post_message(self, channel: str, text: str, blocks: list | None = None,
@@ -144,8 +158,13 @@ class FakeSlack:
         return self.users.get(user_id, {"id": user_id, "deleted": False,
                                         "real_name": user_id, "profile": {"real_name": user_id}})
 
+    async def private_channels(self) -> list[dict[str, str]]:
+        return list(self.channels)
+
     async def auth_test(self) -> dict[str, Any]:
-        return {"ok": True, "team_id": self.team_id, "user_id": "UBOT"}
+        if self.fail_auth:
+            raise SlackError("auth.test", "invalid_auth")
+        return {"ok": True, "team_id": self.team_id, "team": "Test workspace", "user_id": "UBOT"}
 
     async def open_socket_url(self, app_token: str) -> str:
         return "wss://fake.invalid/socket"

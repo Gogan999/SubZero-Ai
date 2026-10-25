@@ -7,3 +7,5 @@ config.env
 *.db
 *.db-wal
 *.db-shm
+dist/
+packaging/.cache/

@@ -1,0 +1,34 @@
+# Builds SubZeroAI-windows.zip and publishes it as a GitHub release when a version tag is pushed,
+# for example:  git tag v0.4.0 && git push origin v0.4.0
+# update.cmd on the mini PC downloads the zip from the newest release. Runs only on tags, never on pull requests.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check the tag matches the app version
+        run: |
+          version=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('subzero_ai/__init__.py').read()).group(1))")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME doesn't match version $version"; exit 1; }
+      - name: Run the tests with the exact versions that ship
+        run: |
+          python -m pip install --no-deps -r packaging/requirements-lock.txt -r packaging/requirements-test.txt
+          python -m unittest discover -s tests -t .
+      - name: Build the Windows zip
+        run: python packaging/build_windows.py
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/SubZeroAI-windows.zip --title "SubZero AI ${GITHUB_REF_NAME#v}" --generate-notes
