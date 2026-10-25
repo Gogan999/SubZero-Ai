@@ -23,9 +23,13 @@ old code does not yet.
 3. **Calm, not cute.** The look is "drafting ink on cool drafting film": quiet
    blues and grays, one brand color, color reserved for meaning. No gradients,
    drop shadows, emoji decoration or animation for its own sake.
-4. **Works on a shop laptop and a phone.** Every page must work from 320px wide
+4. **No team name or number on screen.** Pages never show the team's name or
+   FRC number (the `TEAM_NAME` and `TEAM_NUMBER` settings). Say "the team" or
+   "your team" instead. Those settings may still go into Claude's instructions,
+   which students don't see. The app's own name (`APP_NAME`) is fine to show.
+5. **Works on a shop laptop and a phone.** Every page must work from 320px wide
    up to a desktop monitor, in light and dark mode, with a keyboard alone.
-5. **No build step.** Plain CSS and plain JavaScript served from `static/`. No
+6. **No build step.** Plain CSS and plain JavaScript served from `static/`. No
    frameworks, preprocessors, CSS-in-JS, web fonts or CDN assets. The site runs
    on a mini PC behind a tunnel and must load fast and offline-from-the-internet.
    This rule covers the site's own pages only. Explainer pages that Claude
@@ -103,10 +107,12 @@ Rules:
   Never go below .72rem, and never put sentences (more than a few words)
   below .8rem.
 - **Weights:** 400 body, 550–600 for emphasis and buttons, 650 for labels,
-  names and tags, 700–800 only for headings and the brand mark.
+  names and tags, 700–800 only for headings and the brand mark (the small brand-filled box in
+  the top bar; it holds a generic mark such as the app's initials, never the
+  team number).
 - **Line length:** keep reading text to about 62–75 characters. The thread
   column is capped at 780px for this reason; `.lede` caps at 62ch.
-- Numbers that line up or update (times, counts, team number) use
+- Numbers that line up or update (times, counts) use
   `font-variant-numeric: tabular-nums`.
 - Long words, URLs and code must not widen the page: use
   `overflow-wrap: anywhere` on user and Claude text, and let code blocks and
@@ -240,6 +246,8 @@ Every list has an empty state that says what's missing and what to do next
   "the bot" or "the assistant".
 - Error messages say what went wrong in plain words and how to fix it. No
   error codes or stack traces on screen.
+- Refer to the team generally ("the team", "your team", "team members"),
+  never by name or number. See principle 4.
 
 ## 7. Accessibility
 
@@ -289,7 +297,7 @@ Target: WCAG 2.2 level AA.
 - **Above 900px:** sidebar and thread side by side.
 - **900px and below:** sidebar hides behind an "All chats" toggle and opens as a
   full-screen panel under the top bar; user name and app name hide from the
-  top bar (the team number stays).
+  top bar (the brand mark stays).
 - **520px and below:** panels like sign-in lose their outer margin.
 - Grid and flex children that hold text use `minmax(0, 1fr)` or `min-width: 0`
   so long content can't push the layout wider than the screen.
@@ -323,6 +331,7 @@ looks, and tick each item:
 - [ ] Works with the keyboard alone, with a visible focus ring
 - [ ] New text and control colors meet WCAG AA contrast
 - [ ] Status is shown with words, not only color
+- [ ] No team name or number shown anywhere on screen
 - [ ] Screenshots of before and after attached (light and dark)
 - [ ] This file updated if a new token, component or rule was added
 
@@ -361,3 +370,10 @@ Each should be fixed in its own small PR.
    "Claude replied" when streaming ends.
 9. **Explainer iframe is always white.** In dark mode a white explainer is
    bright. Acceptable for now; revisit if explainers learn to read the theme.
+10. **Team name and number are on screen.** `base.html` puts
+    `settings.team_number` in the top-bar brand mark, `login.html` shows
+    "FRC Team {number} {name}" above the title, and `about.html` says
+    "Team {number} students". Replace them with the app's initials in the
+    brand mark, drop the sign-in line, and say "students on the team". Also
+    reword the "team number set like a robot bumper number" comment in
+    `app.css`.
