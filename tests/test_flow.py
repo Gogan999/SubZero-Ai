@@ -105,7 +105,7 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(reply["model"], "claude-sonnet-5-5")
         # Claude got the safety prompt and only the approved text, with no names
         call = self.h.claude.calls[0]
-        self.assertIn("FRC Team 5690 SubZero", call["system"])
+        self.assertIn("high school FIRST Robotics Competition team", call["system"])
         self.assertEqual(call["messages"], [{"role": "user", "content": "How do I tune the arm's feedforward?"}])
         self.assertNotIn("Ava", json.dumps(call["messages"]))
         self.assertEqual(call["effort"], "medium")

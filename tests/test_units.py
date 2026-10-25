@@ -110,18 +110,19 @@ class AlertMarkerTest(unittest.TestCase):
 class PromptTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.settings = load_settings(search_cwd=False, data_dir=self.tmp, team_name="SubZero", team_number="5690")
+        self.settings = load_settings(search_cwd=False, data_dir=self.tmp)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_three_layers_with_team_filled_in(self):
         text = load_system_prompt(self.settings)
-        self.assertIn("FRC Team 5690 SubZero", text)
+        self.assertIn("high school FIRST Robotics Competition team", text)
         self.assertIn("[MENTOR ALERT]", text)
         self.assertIn("## Team context", text)
         self.assertIn("## Formatting", text)
-        self.assertNotIn("{team_number}", text)
+        self.assertNotIn("{app_name}", text)
+        self.assertNotIn("5690", text)
 
     def test_a_file_in_the_data_folder_replaces_a_layer(self):
         (self.tmp / "prompts").mkdir()

@@ -48,8 +48,6 @@ class Settings:
     port: int = 8787
     session_secret: str = ""
     app_name: str = "SubZero AI"
-    team_name: str = "SubZero"
-    team_number: str = "5690"
     timezone: str = "America/Chicago"
 
     # Claude API

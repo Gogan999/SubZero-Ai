@@ -69,7 +69,7 @@ p { margin: 0 0 .75rem; }
 .topbar { position: sticky; top: 0; z-index: 5; background: var(--sheet); border-bottom: 1px solid var(--rule); }
 .topbar-inner { display: flex; align-items: center; gap: 1.25rem; height: var(--topbar); padding: 0 1rem; }
 .brand { display: flex; align-items: center; gap: .6rem; text-decoration: none; color: var(--ink); font-weight: 650; }
-/* The team number set like a robot bumper number */
+/* The app initials set like a robot bumper number */
 .brand-mark {
   background: var(--brand); color: var(--brand-ink);
   font-weight: 800; font-size: .95rem; letter-spacing: .04em;

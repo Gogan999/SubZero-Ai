@@ -1,3 +1,3 @@
-"""SubZero AI: a mentor-approved Claude chat for FRC Team 5690."""
+"""SubZero AI: a mentor-approved Claude chat for a high school robotics team."""
 
 __version__ = "0.3.0"

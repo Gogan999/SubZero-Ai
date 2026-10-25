@@ -6,7 +6,7 @@
 # 4. Click Install to Workspace, then follow README.md, "Connect Slack".
 display_information:
   name: SubZero AI
-  description: Mentor-approved Claude for FRC Team 5690
+  description: Mentor-approved Claude for the robotics team
   background_color: "#1a5a86"
 features:
   app_home:

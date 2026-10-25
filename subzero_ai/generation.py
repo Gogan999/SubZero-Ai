@@ -35,9 +35,7 @@ def load_system_prompt(settings: Settings) -> str:
         path = override if override.exists() else PACKAGE_PROMPTS / name
         parts.append(path.read_text(encoding="utf-8").strip())
     text = "\n\n".join(parts)
-    return (text.replace("{team_name}", settings.team_name)
-                .replace("{team_number}", settings.team_number)
-                .replace("{app_name}", settings.app_name))
+    return text.replace("{app_name}", settings.app_name)
 
 
 def build_context(rows, up_to_id: int, files: dict[int, list[dict]] | None = None) -> list[dict]:

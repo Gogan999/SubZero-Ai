@@ -1,6 +1,6 @@
 # SubZero AI
 
-A claude.ai-style chat for FRC Team 5690. Students ask Claude about code, mechanisms, physics, and materials. Every student message waits for a mentor to approve it in Slack before Claude sees it, and the whole team can read approved chats.
+A claude.ai-style chat for a high school robotics team. Students ask Claude about code, mechanisms, physics, and materials. Every student message waits for a mentor to approve it in Slack before Claude sees it, and the whole team can read approved chats.
 
 This is version 0.3.0: milestones 1 to 3 of the build plan.
 
