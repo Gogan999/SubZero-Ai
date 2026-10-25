@@ -24,8 +24,7 @@ jobs:
           test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME doesn't match version $version"; exit 1; }
       - name: Run the tests with the exact versions that ship
         run: |
-          python -m pip install --no-deps -r packaging/requirements-lock.txt
-          python -m pip install httpx==0.28.1
+          python -m pip install --no-deps -r packaging/requirements-lock.txt -r packaging/requirements-test.txt
           python -m unittest discover -s tests -t .
       - name: Build the Windows zip
         run: python packaging/build_windows.py

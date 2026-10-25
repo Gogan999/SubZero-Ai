@@ -1,5 +1,9 @@
 """Keeps track of whether Slack and the Claude API are working, for the admin page and /healthz,
-and sends admins a Slack DM when either has been failing for 15 minutes (and again when it recovers)."""
+and sends admins a Slack DM when either has been failing for 15 minutes (and again when it recovers).
+
+Slack is probed every few minutes, which is free. Claude is judged by real replies, and only while a call
+has just failed is it probed with a one-token request, so one stray error clears itself within minutes
+instead of looking like an outage until the next student asks something."""
 
 from __future__ import annotations
 
@@ -15,6 +19,10 @@ log = logging.getLogger("subzero.health")
 
 ALERT_AFTER_SECONDS = 15 * 60
 SLACK_PROBE_SECONDS = 5 * 60
+CLAUDE_PROBE_SECONDS = 5 * 60
+# How many failures in a row count as "not working": one Slack probe, but two Claude calls, since a single
+# busy (529) or empty reply happens now and then.
+FAILURES_NEEDED = {"slack": 1, "claude": 2}
 NAMES = {"slack": "Slack", "claude": "the Claude API"}
 
 
@@ -24,30 +32,39 @@ class Status:
     failing_since: float | None = None
     detail: str = ""
     alerted: bool = False
+    failures: int = 0  # in a row
+    needed: int = 1
+
+    @property
+    def failing(self) -> bool:
+        return self.failing_since is not None and self.failures >= self.needed
 
     @property
     def state(self) -> str:
-        if self.failing_since is not None:
+        if self.failing:
             return "failing"
         return "ok" if self.ok_at is not None else "unknown"
 
 
 class Health:
-    def __init__(self, settings: Settings, slack, *, clock: Callable[[], float] = time.time):
+    def __init__(self, settings: Settings, slack, claude=None, *, clock: Callable[[], float] = time.time):
         self.settings = settings
         self.slack = slack
+        self.claude = claude
         self.clock = clock
-        self.status = {name: Status() for name in NAMES}
+        self.status = {name: Status(needed=FAILURES_NEEDED[name]) for name in NAMES}
         self.socket_client = None  # set when Socket Mode starts
         self._probed_at: float | None = None
+        self._claude_probed_at: float | None = None
 
     def record(self, name: str, ok: bool, detail: str = "") -> None:
         status = self.status[name]
         now = self.clock()
         if ok:
-            status.ok_at, status.failing_since, status.detail = now, None, ""
+            status.ok_at, status.failing_since, status.detail, status.failures = now, None, "", 0
         else:
             status.detail = detail[:300]
+            status.failures += 1
             if status.failing_since is None:
                 status.failing_since = now
 
@@ -66,19 +83,36 @@ class Health:
             if not problem and client is not None and not client.connected.is_set():
                 problem = "The connection that carries Slack button taps is down."
             self.record("slack", not problem, problem)
+        await self._probe_claude(now)
         await self._send_alerts()
+
+    async def _probe_claude(self, now: float) -> None:
+        """While Claude's last call failed, check it now and then with a one-token request (a tiny fraction
+        of a cent), so it can recover, or be confirmed down, without waiting for a student."""
+        if self.claude is None or self.status["claude"].failing_since is None:
+            return
+        if self._claude_probed_at is not None and now - self._claude_probed_at < CLAUDE_PROBE_SECONDS:
+            return
+        self._claude_probed_at = now
+        try:
+            await self.claude.complete(model=self.settings.model_titles, system="Reply with OK.",
+                                       messages=[{"role": "user", "content": "Status check"}], max_tokens=1)
+        except Exception as exc:
+            self.record("claude", False, f"A status check didn't get through: {exc}")
+        else:
+            self.record("claude", True)
 
     async def _send_alerts(self) -> None:
         now = self.clock()
         for name, status in self.status.items():
-            if status.failing_since is not None and not status.alerted:
+            if status.failing and not status.alerted:
                 if now - status.failing_since >= ALERT_AFTER_SECONDS:
                     minutes = int((now - status.failing_since) // 60)
                     text = (f"{self.settings.app_name}: calls to {NAMES[name]} have been failing for {minutes} "
                             f"minutes. {status.detail} Check the admin page: {self.settings.url('/settings')}")
                     if await self._dm_admins(text):
                         status.alerted = True
-            elif status.failing_since is None and status.alerted:
+            elif not status.failing and status.alerted:
                 if await self._dm_admins(f"{self.settings.app_name}: {NAMES[name]} is working again."):
                     status.alerted = False
 

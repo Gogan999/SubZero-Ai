@@ -78,6 +78,9 @@ Rules:
 - On the admin Settings and setup pages, the approved pair also means "working" or
   "done" and the rejected pair "not working" or "failed" (`.pill.ok`, `.pill.bad`),
   always with those words.
+- The "needs attention" mark on the admins' Settings link (`.count.alert`) uses
+  the rejected pair. It shows a `!` with visually hidden "needs attention" text,
+  and appears only while something on the Settings page's health list is failing.
 - Every use of a status color must also carry a word ("Waiting for a mentor",
   "Not approved by Sam"). Color is never the only signal.
 - Text must meet WCAG AA contrast: 4.5:1 for normal text, 3:1 for large text
@@ -321,6 +324,7 @@ Target: WCAG 2.2 level AA.
   full-screen panel under the top bar; user name and app name hide from the
   top bar (the brand mark stays). The nav links scroll sideways inside the
   top bar if they don't fit (admins have four), so the page itself never does.
+  A fade on the bar's right edge shows there are more links.
 - **520px and below:** panels like sign-in lose their outer margin.
 - Grid and flex children that hold text use `minmax(0, 1fr)` or `min-width: 0`
   so long content can't push the layout wider than the screen.

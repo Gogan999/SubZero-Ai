@@ -1,0 +1,3 @@
+# Extra packages for the tests only (Starlette's test client), on top of requirements-lock.txt.
+httpx==0.28.1
+httpcore==1.0.9

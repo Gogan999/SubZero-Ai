@@ -253,6 +253,12 @@ async def setup_step(request: Request) -> Response:
     form = {k: str(v).strip() for k, v in (await request.form()).items() if isinstance(v, str)}
     errors: dict[str, str] = {}
     notes: dict[str, str] = {}
+    if any("\n" in value or "\r" in value for key, value in form.items() if key != "admins"):
+        # Tokens copied from a wrapped page sometimes pick up a line break; config.env can't hold one.
+        errors[step] = "That value has a line break in it. Paste it again on one line."
+        channels, problem = await _channel_choices(s)
+        return render(request, "setup.html", None, status_code=400,
+                      **setup_context(s, errors, None, channels, form))
 
     if step == "address":
         url = form.get("public_url", "").rstrip("/")

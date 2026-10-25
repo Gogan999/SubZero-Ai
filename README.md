@@ -176,11 +176,11 @@ Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` fo
 
 ## For developers
 
-- Run the tests: `python -m pip install -r requirements-dev.txt`, then `python -m unittest discover -s tests -t .`
+- Run the tests: `python -m pip install -r requirements-dev.txt` (or, for the exact versions that ship, `python -m pip install --no-deps -r packaging/requirements-lock.txt -r packaging/requirements-test.txt`), then `python -m unittest discover -s tests -t .`
 - `python -m subzero_ai --help` lists the commands.
 - Layout: `subzero_ai/web.py` (pages, actions, live updates), `web_admin.py` (Settings, setup, and recovery pages), `saved_settings.py`, `backup.py`, `maintenance.py` (nightly backup, retention, update check), `health.py`, `approvals.py` (the approval loop), `generation.py` (Claude replies), `slack_*.py` and `socket_mode.py` (Slack), `auth.py` (Sign in with Slack), `store.py` and `db.py` (SQLite).
 - The app talks to Slack and the Claude API over plain HTTPS with `requests`, and to Slack Socket Mode with `websockets`, through small adapters with test stand-ins, instead of the Slack Bolt and Anthropic SDKs. That keeps the dependency list short for the Windows packaging and lets the whole approval loop be tested offline.
 - `python -m subzero_ai --help` also lists `backup`, `backups`, `restore`, `recovery-code`, and `reset-setup`.
-- **Windows release.** `python packaging/build_windows.py` builds `dist/SubZeroAI-windows.zip` on any OS: the embeddable Python 3.13, the packages pinned in `packaging/requirements-lock.txt` (installed for 64-bit Windows), the [WinSW](https://github.com/winsw/winsw) service wrapper, cloudflared, and the scripts in `packaging/windows`. Every download is pinned by SHA-256. Pushing a tag like `v0.4.0` runs `.github/workflows/release.yml`, which tests, builds, and publishes the release that update.cmd downloads.
+- **Windows release.** `python packaging/build_windows.py` builds `dist/SubZeroAI-windows.zip` on any OS: the embeddable Python 3.13, the packages pinned in `packaging/requirements-lock.txt` (installed for 64-bit Windows from `requirements-windows.txt`, which lists each wheel's SHA-256; refresh it with `--write-hashes` after changing the lock file), the [WinSW](https://github.com/winsw/winsw) service wrapper, cloudflared, and the scripts in `packaging/windows`. Every download is pinned by SHA-256. Pushing a tag like `v0.4.0` runs `.github/workflows/release.yml`, which tests, builds, and publishes the release that update.cmd downloads.
 - The Windows scripts are written for Windows PowerShell 5.1 and must stay ASCII-only.
 - Live updates use server-sent events. Each running app keeps them in memory, so run one copy of the app per database.

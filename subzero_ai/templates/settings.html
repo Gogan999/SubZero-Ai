@@ -2,26 +2,28 @@
 {% block title %}Settings · {{ settings.app_name }}{% endblock %}
 {% macro field_row(item) %}
   {% set f = item.field %}
+  {# Hint and error are both read out with the field, and a field with an error is marked invalid #}
+  {% set described = [] %}{% if f.help %}{% set _ = described.append('h-' ~ f.name) %}{% endif %}{% if item.error %}{% set _ = described.append('e-' ~ f.name) %}{% endif %}
+  {% set aria %}{% if described %}aria-describedby="{{ described|join(' ') }}"{% endif %} {% if item.error %}aria-invalid="true"{% endif %}{% endset %}
   {% if f.kind == 'bool' %}
   <div class="field check">
-    <input type="checkbox" id="f-{{ f.name }}" name="{{ f.name }}" value="1" {% if item.value in ('1', 'on') %}checked{% endif %}>
+    <input type="checkbox" id="f-{{ f.name }}" name="{{ f.name }}" value="1" {% if item.value in ('1', 'on') %}checked{% endif %} {{ aria }}>
     <label for="f-{{ f.name }}">{{ f.label }}</label>
-    {% if f.help %}<p class="field-hint">{{ f.help }}</p>{% endif %}
+    {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}
     {% if item.error %}<p class="field-error" id="e-{{ f.name }}">{{ item.error }}</p>{% endif %}
   </div>
   {% else %}
   <div class="field">
     <label for="f-{{ f.name }}">{{ f.label }}</label>
     {% if f.kind == 'effort' %}
-    <select id="f-{{ f.name }}" name="{{ f.name }}">
+    <select id="f-{{ f.name }}" name="{{ f.name }}" {{ aria }}>
       {% for e in ('low', 'medium', 'high') %}<option value="{{ e }}" {% if item.value == e %}selected{% endif %}>{{ e|capitalize }}</option>{% endfor %}
     </select>
     {% elif f.kind in ('lines', 'ids') %}
-    <textarea id="f-{{ f.name }}" name="{{ f.name }}" rows="4" {% if f.help %}aria-describedby="h-{{ f.name }}"{% endif %}>{{ item.value }}</textarea>
+    <textarea id="f-{{ f.name }}" name="{{ f.name }}" rows="4" {{ aria }}>{{ item.value }}</textarea>
     {% else %}
     <input id="f-{{ f.name }}" name="{{ f.name }}" type="text" value="{{ item.value }}"
-      {% if f.kind == 'int' %}inputmode="numeric"{% else %}spellcheck="false" autocapitalize="off"{% endif %}
-      {% if f.help %}aria-describedby="h-{{ f.name }}"{% endif %} {% if item.error %}aria-invalid="true"{% endif %}>
+      {% if f.kind == 'int' %}inputmode="numeric"{% else %}spellcheck="false" autocapitalize="off"{% endif %} {{ aria }}>
     {% endif %}
     {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}
     {% if item.error %}<p class="field-error" id="e-{{ f.name }}">{{ item.error }}</p>{% endif %}

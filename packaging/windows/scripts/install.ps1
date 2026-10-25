@@ -65,7 +65,9 @@ try {
     # Run as its own low-privilege virtual account instead of SYSTEM.
     & sc.exe config $ServiceName obj= $ServiceAccount start= delayed-auto | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Couldn't set the service's account (sc.exe exit code $LASTEXITCODE)." }
-    # Restart it when the app exits with an error code too, not only after a crash. The setup page uses this.
+    # Restart it after a crash, and when the app exits with an error code (the setup page exits with 3 to
+    # load its new settings). Set every time, so running install.cmd again also repairs these rules.
+    & sc.exe failure $ServiceName reset= 3600 actions= restart/3000/restart/20000/restart/60000 | Out-Null
     & sc.exe failureflag $ServiceName 1 | Out-Null
     & icacls.exe $InstallDir /grant "${ServiceAccount}:(OI)(CI)RX" /Q | Out-Null
     Set-DataFolderAccess
@@ -78,6 +80,23 @@ try {
         throw "SubZero AI didn't start. The log is in $DataDir\logs (subzero.log and SubZeroAI.err.log)."
     }
     Write-Ok "Running version $($health.version) at http://localhost:$AppPort"
+
+    # Check that Windows really restarts the app when it stops on its own, which finishing setup relies on.
+    Write-Note "Checking that Windows restarts SubZero AI if it stops..."
+    $appPython = Join-Path $InstallDir "python\python.exe"
+    $child = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Where-Object { $_.ExecutablePath -eq $appPython } | Select-Object -First 1
+    if ($child) {
+        Stop-Process -Id $child.ProcessId -Force
+        Start-Sleep -Seconds 5
+        if ($null -ne (Wait-Healthy 60)) {
+            Write-Ok "It came back by itself."
+        } else {
+            Write-Problem "Windows didn't restart it. Starting it by hand. After finishing setup, if the site doesn't"
+            Write-Problem "come back, restart the SubZero AI service in services.msc, and report this."
+            Start-AppService
+            $null = Wait-Healthy 60
+        }
+    }
 
     # ------------------------------------------------------------------ Cloudflare Tunnel
     Write-Step "Cloudflare Tunnel"

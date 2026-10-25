@@ -45,6 +45,13 @@ try {
         Write-Note "Downloading version $newVersion..."
         $Zip = Join-Path $work $release.asset
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $Zip -UseBasicParsing -TimeoutSec 600
+        # GitHub lists each file's SHA-256; a download that doesn't match is cut short or tampered with.
+        if ($asset.digest -and $asset.digest -like "sha256:*") {
+            $expected = $asset.digest.Substring(7)
+            $actual = (Get-FileHash -Path $Zip -Algorithm SHA256).Hash
+            if ($actual -ne $expected) { throw "The download doesn't match the release's checksum. Nothing was changed; try again." }
+            Write-Ok "Checksum matches."
+        }
     }
 
     Write-Step "Unpacking"

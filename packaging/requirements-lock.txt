@@ -1,6 +1,7 @@
-# Exact versions bundled in the Windows release (Python 3.13, 64-bit). build_windows.py installs these with
-# --no-deps, so this list must include every dependency. Update it together with requirements.txt, then run
-# the tests with: python -m pip install -r packaging/requirements-lock.txt -r packaging/requirements-test.txt
+# Exact versions bundled in the Windows release (Python 3.13, 64-bit), and used for the tests. The build
+# installs these with --no-deps, so this list must include every dependency. After changing it, run
+# python packaging/build_windows.py --write-hashes  to refresh requirements-windows.txt.
+# Run the tests with: python -m pip install --no-deps -r packaging/requirements-lock.txt -r packaging/requirements-test.txt
 anyio==4.15.1
 certifi==2026.10.23
 cffi==2.1.1

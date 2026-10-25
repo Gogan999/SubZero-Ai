@@ -135,7 +135,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     approvals = ApprovalService(settings=settings, db=db, store=store, slack=slack, broker=broker, tasks=tasks,
                                 runner=runner, attachments=attachments)
     runner.on_alert = approvals.mentor_alert
-    health = Health(settings, slack)
+    health = Health(settings, slack, claude)
     runner.on_result = lambda ok, error: health.record("claude", ok, error)
     directory = Directory(settings, slack)
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,

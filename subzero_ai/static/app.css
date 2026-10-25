@@ -313,7 +313,7 @@ button.link { background: none; border: 0; padding: 0; color: var(--brand); font
 }
 .field textarea { max-width: none; resize: vertical; }
 .field textarea.code-input { font-family: var(--mono); font-size: .86rem; line-height: 1.5; }
-.field input[aria-invalid="true"] { border-color: var(--rejected); }
+.field [aria-invalid="true"]:not([type="checkbox"]) { border-color: var(--rejected); }
 .field-hint { color: var(--ink-2); font-size: .85rem; margin: 0; max-width: 62ch; }
 .panel > .field-hint { margin-top: .75rem; }
 .field-error { color: var(--rejected); font-size: .88rem; font-weight: 600; margin: .5rem 0 0; }
@@ -361,6 +361,8 @@ button.link { background: none; border: 0; padding: 0; color: var(--brand); font
   .topbar-inner { gap: .5rem; }
   /* Admins have four nav links; on a phone they scroll sideways inside the bar instead of widening the page */
   .nav { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  /* Fade the right edge so it is clear more links are off to the side (a mask uses only alpha, not color) */
+  .nav:has(a:nth-child(4)) { mask-image: linear-gradient(to right, #000 80%, transparent); padding-right: 1rem; }
   .nav a { flex: none; padding: .4rem .5rem; }
   .me { flex: none; }
   .brand-name { display: none; }

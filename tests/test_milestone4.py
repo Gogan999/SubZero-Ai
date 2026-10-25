@@ -135,6 +135,11 @@ class SettingsPageTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("kept off", resp.text)
         self.assertEqual(self.h.settings.model_default, "claude-sonnet-5-5")
+        # The error is tied to its field for screen readers
+        field = re.search(r'<input id="f-model_default"[^>]*>', resp.text).group(0)
+        self.assertIn('aria-describedby="h-model_default e-model_default"', field)
+        self.assertIn('aria-invalid="true"', field)
+        self.assertIn('id="e-model_default"', resp.text)
 
     def test_subteams(self):
         self.coach.post("/settings/people", {"subteams": "Software\nMechanical", "admin_slack_ids": ""}, headers=HTML)
@@ -246,6 +251,13 @@ class SetupPageTest(unittest.TestCase):
         resp = self.h.client.post("/setup/address", data={"csrf": self.csrf, "public_url": "https://a.team.net"},
                                   headers=TUNNEL)
         self.assertEqual(resp.status_code, 404)
+
+    def test_a_pasted_line_break_is_a_step_error(self):
+        self.step("address", public_url="ai.team-example.net")
+        resp = self.step("slack", slack_bot_token="xoxb-1\n2", slack_app_token="xapp-1", slack_client_id="1",
+                         slack_client_secret="s")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("line break", resp.text)
 
     def test_needs_the_form_token(self):
         resp = self.h.client.post("/setup/address", data={"public_url": "https://a.team.net"})
@@ -489,6 +501,8 @@ class HealthTest(TempDirTest):
 
     def test_admins_get_one_dm_after_15_minutes_and_one_when_it_recovers(self):
         self.health.record("claude", False, "Couldn't reach Claude (ConnectionError).")
+        self.assertEqual(self.health.snapshot()["claude"]["state"], "unknown", "one failed reply isn't an outage")
+        self.health.record("claude", False, "Couldn't reach Claude (ConnectionError).")
         self.run_check()
         self.assertEqual(self.slack.dms, [])
         self.clock.now += 14 * 60
@@ -522,12 +536,43 @@ class HealthTest(TempDirTest):
         self.run_check()
         self.assertIn("button taps", self.health.snapshot()["slack"]["detail"])
 
+    def test_one_stray_failure_clears_itself(self):
+        class Probe:
+            def __init__(self):
+                self.calls, self.fail = [], False
+
+            async def complete(self, **kwargs):
+                self.calls.append(kwargs)
+                if self.fail:
+                    raise ClaudeError("overloaded")
+                return "OK"
+
+        probe = Probe()
+        self.health.claude = probe
+        self.run_check()
+        self.assertEqual(probe.calls, [], "no probes while Claude is fine")
+        self.health.record("claude", False, "Claude returned an empty reply.")
+        self.run_check()
+        self.assertEqual(len(probe.calls), 1)
+        self.assertEqual(probe.calls[0]["max_tokens"], 1)
+        self.assertEqual(self.health.snapshot()["claude"]["state"], "ok")
+        # A real outage: the probe fails too, so it counts as not working and admins hear about it
+        probe.fail = True
+        self.health.record("claude", False, "Couldn't reach Claude.")
+        self.clock.now += 301
+        self.run_check()
+        self.assertEqual(self.health.snapshot()["claude"]["state"], "failing")
+        self.clock.now += 15 * 60
+        self.run_check()
+        self.assertTrue(any("Claude API" in dm["text"] for dm in self.slack.dms))
+
     def test_replies_feed_the_claude_status(self):
         h = Harness()
         try:
             kim = h.login(MENTOR)
-            kim.new_chat("ERROR-TEST please")
-            h.idle()
+            for _ in range(2):
+                kim.new_chat("ERROR-TEST please")
+                h.idle()
             self.assertEqual(h.services.health.snapshot()["claude"]["state"], "failing")
             kim.new_chat("A normal question")
             h.idle()
@@ -574,6 +619,13 @@ class PackagingTest(unittest.TestCase):
     def test_embedded_python_path_file(self):
         self.assertEqual(self.build.pth_contents("3.13.17"),
                          "python313.zip\n.\nLib\\site-packages\n..\\app\nimport site\n")
+
+    def test_windows_hashes_match_the_lock_file(self):
+        lock = self.build.pinned(ROOT / "packaging" / "requirements-lock.txt")
+        windows = self.build.pinned(ROOT / "packaging" / "requirements-windows.txt")
+        self.assertEqual(lock, windows, "run python packaging/build_windows.py --write-hashes")
+        text = (ROOT / "packaging" / "requirements-windows.txt").read_text()
+        self.assertEqual(text.count("--hash=sha256:"), len(lock))
 
     def test_lock_file_pins_everything_in_requirements(self):
         lock = {line.split("==")[0].lower().replace("_", "-") for line in
