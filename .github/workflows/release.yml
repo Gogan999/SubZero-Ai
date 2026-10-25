@@ -1,5 +1,6 @@
 # Builds SubZeroAI-windows.zip and publishes it as a GitHub release when a version tag is pushed,
 # for example:  git tag v0.4.0 && git push origin v0.4.0
+# Publishing a release on GitHub with a new v* tag works too: the zip is then added to that release.
 # update.cmd on the mini PC downloads the zip from the newest release. Runs only on tags, never on pull requests.
 name: Release
 
@@ -31,4 +32,9 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/SubZeroAI-windows.zip --title "SubZero AI ${GITHUB_REF_NAME#v}" --generate-notes
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/SubZeroAI-windows.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/SubZeroAI-windows.zip --title "SubZero AI ${GITHUB_REF_NAME#v}" --generate-notes
+          fi
