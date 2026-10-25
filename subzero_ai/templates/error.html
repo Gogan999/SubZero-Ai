@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <h1>{{ title }}</h1>
+  <p class="lede">{{ detail }}</p>
+  <p><a class="button" href="/chats">Back to chats</a></p>
+</section>
+{% endblock %}

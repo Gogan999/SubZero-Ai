@@ -1,0 +1,24 @@
+<div class="review" data-review="{{ m.id }}">
+  <div class="actions">
+    <button class="button small approve" type="button" data-action="/m/{{ m.id }}/approve">Approve</button>
+    <button class="button small" type="button" data-open="edit-{{ m.id }}">Edit</button>
+    <button class="button small reject" type="button" data-open="reject-{{ m.id }}">Reject</button>
+    <button class="button small quiet" type="button" data-action="/m/{{ m.id }}/hold"
+      data-confirm="Handle privately? Nothing goes to Claude, and the chat is hidden from the team. Follow up with the student in person.">Handle privately</button>
+  </div>
+  <form class="inline-form" id="edit-{{ m.id }}" data-form-action="/m/{{ m.id }}/approve" hidden>
+    <label for="edit-text-{{ m.id }}">Message Claude will see</label>
+    <textarea id="edit-text-{{ m.id }}" name="text" rows="4" required>{{ m.raw }}</textarea>
+    <div class="actions"><button class="button small approve" type="submit">Approve edited version</button>
+      <button class="button small quiet" type="button" data-close>Cancel</button></div>
+    <p class="form-error" role="alert" hidden></p>
+  </form>
+  <form class="inline-form" id="reject-{{ m.id }}" data-form-action="/m/{{ m.id }}/reject" hidden>
+    <label for="reject-reason-{{ m.id }}">Reason the student will see</label>
+    <textarea id="reject-reason-{{ m.id }}" name="reason" rows="2" maxlength="500" required
+      placeholder="For example: ask about one subsystem at a time"></textarea>
+    <div class="actions"><button class="button small reject" type="submit">Reject</button>
+      <button class="button small quiet" type="button" data-close>Cancel</button></div>
+    <p class="form-error" role="alert" hidden></p>
+  </form>
+</div>

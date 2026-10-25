@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <link rel="stylesheet" href="/assets/code.css?v={{ version }}">
+  <script src="/static/app.js?v={{ version }}" defer></script>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/chats">
+        <span class="brand-mark" aria-hidden="true">{{ settings.team_number }}</span>
+        <span class="brand-name">{{ settings.app_name }}</span>
+      </a>
+      {% if viewer %}
+      <nav class="nav" aria-label="Main">
+        <a href="/chats" {% if path.startswith('/chats') or path.startswith('/c/') %}aria-current="page"{% endif %}>Chats</a>
+        {% if viewer.is_mentor %}
+        <a href="/queue" {% if path.startswith('/queue') %}aria-current="page"{% endif %}>Review
+          {% if pending_count %}<span class="count" aria-label="{{ pending_count }} waiting">{{ pending_count }}</span>{% endif %}</a>
+        {% endif %}
+        {% if viewer.is_admin %}
+        <a href="/audit" {% if path.startswith('/audit') %}aria-current="page"{% endif %}>Audit log</a>
+        {% endif %}
+      </nav>
+      <div class="me">
+        <span class="me-name">{{ viewer.name }}{% if viewer.is_mentor %} <span class="role">{{ 'Admin' if viewer.is_admin else 'Mentor' }}</span>{% endif %}</span>
+        <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Sign out</button></form>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+  <aside class="notice" role="note">
+    <p>You're chatting with Claude, an AI made by Anthropic, not a person. It can be wrong, so check important answers with a mentor. Mentors review every student message, and the team can see approved chats. <a href="/about">How this works</a></p>
+  </aside>
+  {% if dev_mode %}<p class="devbar">Test mode: anyone on this PC can sign in as a sample person. Turn off DEV_LOGIN before students use the app.</p>{% endif %}
+  <main id="main">
+    {% block main %}{% endblock %}
+  </main>
+</body>
+</html>

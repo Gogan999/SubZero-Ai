@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Audit log · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page">
+  <h1>Audit log</h1>
+  <p class="lede">The latest 300 actions: sign-ins, messages sent, reviews, alerts, and Slack problems. Newest first.</p>
+  <div class="table-wrap">
+    <table class="audit">
+      <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Target</th><th scope="col">Details</th></tr></thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td>{{ e.time }}</td>
+          <td>{{ e.actor }}</td>
+          <td>{{ e.action }}</td>
+          <td>{% if e.link %}<a href="{{ e.link }}">{{ e.target }}</a>{% else %}{{ e.target }}{% endif %}</td>
+          <td>
+            <div class="details">
+              {% for k, v in e.details.items() %}
+                {% if k in ('before', 'after') %}<details><summary>{{ 'Original' if k == 'before' else 'Edited version' }}</summary><div class="plain">{{ v }}</div></details>
+                {% elif v is not none %}<span>{{ k }}: {{ v }}</span>{% endif %}
+              {% endfor %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nothing has happened yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

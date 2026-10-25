@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Using {{ settings.app_name }} responsibly{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <h1>Using {{ settings.app_name }} responsibly</h1>
+  <div class="prose">
+  <p>{{ settings.app_name }} lets Team {{ settings.team_number }} students ask Claude for help with robot code, CAD, fabrication, physics, and materials, with a mentor checking every message first.</p>
+
+  <h2>What it's for</h2>
+  <p>Use it to understand things: why code behaves the way it does, how a mechanism works, which material fits a part, how to check a calculation. Claude is set up to teach, so expect explanations and questions back, not just finished answers.</p>
+
+  <h2>How approval works</h2>
+  <ul>
+    <li>When you send a message, it waits for a mentor. You'll get a Slack DM when they act on it.</li>
+    <li>A mentor can approve it, edit it before Claude sees it, reject it with a reason, or follow up with you in person.</li>
+    <li>Every follow-up message needs its own approval.</li>
+    <li>Mentors' own messages go straight to Claude.</li>
+  </ul>
+
+  <h2>Who can see what</h2>
+  <ul>
+    <li>Approved messages and Claude's replies are visible to everyone on the team.</li>
+    <li>Messages waiting for review, and rejected ones, are visible only to you and the mentors.</li>
+    <li>Nothing here is a private conversation. Don't share personal information like your address or phone number.</li>
+    <li>Your chats are stored on the team's server. Anthropic, which makes Claude, normally deletes the messages it receives within 30 days and doesn't use them to train its models.</li>
+  </ul>
+
+  <h2>Check before you trust it</h2>
+  <p>Claude can be wrong. Confirm load ratings, material limits, wiring, and anything else safety-critical with a mentor before it goes on the robot. Never use Claude's answer as a reason to skip shop safety rules.</p>
+
+  <h2>If something's wrong</h2>
+  <p>If you're going through something hard, talk to a parent, a mentor, or your school counselor. In the US you can call or text 988 any time, and call 911 in an emergency.</p>
+  </div>
+</section>
+{% endblock %}
