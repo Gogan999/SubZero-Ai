@@ -2,7 +2,7 @@
 
 A claude.ai-style chat for a high school robotics team. Students ask Claude about code, mechanisms, physics, and materials. Every student message waits for a mentor to approve it in Slack before Claude sees it, and the whole team can read approved chats.
 
-This is version 0.4.0: all four milestones of the build plan.
+This is version 0.4.1: all four milestones of the build plan.
 
 ## What's in this version
 
@@ -21,7 +21,7 @@ This is version 0.4.0: all four milestones of the build plan.
 
 Test mode runs on any Windows PC with sample sign-ins and a pretend Claude, so you need no accounts or keys. It takes about 5 minutes.
 
-1. Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases) and unzip it anywhere.
+1. Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases) then right-click it and choose **Extract All**. The .cmd files only work from the extracted folder, not from inside the zip.
 2. Double-click **start-test-mode.cmd**. The browser opens by itself.
 3. Sign in as **Ava (student)** and send a message.
 4. Open a private browser window, sign in as **Mentor Kim**, open **Review**, and approve it. Ava's window updates by itself and the reply streams in.
@@ -55,7 +55,7 @@ In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and crea
 
 ### 2. Run the installer
 
-Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases) and unzip it. Double-click **install.cmd** and choose **Yes** when Windows asks for permission. The installer:
+Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases), right-click it, and choose **Extract All**. In the extracted folder, double-click **install.cmd** and choose **Yes** when Windows asks for permission. The installer:
 
 - copies the app, with its own Python, to `C:\Program Files\SubZeroAI`;
 - creates `C:\ProgramData\SubZeroAI` for settings, chats, files, backups, and logs, readable only by administrators and the app's service account;
