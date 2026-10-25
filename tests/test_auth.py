@@ -155,6 +155,46 @@ class SignInFlowTest(unittest.TestCase):
         self.assertIsNone(self.h.services.store.user_by_slack_id("U0OUT"))
         self.assertEqual(self.client.get("/chats", follow_redirects=False).status_code, 303)
 
+    def test_guests_and_bots_are_refused(self):
+        for user, info in [("U0GUEST", {"is_restricted": True}), ("U0SCG", {"is_ultra_restricted": True}),
+                           ("U0BOT", {"is_bot": True})]:
+            with self.subTest(user=user):
+                self.client.cookies.clear()
+                self.h.slack.users[user] = {"id": user, "profile": {}, **info}
+                state, nonce = self.begin()
+                self.session.token = id_token(nonce, user=user)
+                resp = self.client.get(f"/auth/slack/callback?code=abc&state={state}")
+                self.assertIn("Guest accounts can&#39;t sign in", resp.text)
+                self.assertIsNone(self.h.services.store.user_by_slack_id(user))
+                self.assertEqual(self.client.get("/chats", follow_redirects=False).status_code, 303)
+
+    def test_guests_can_be_allowed(self):
+        self.h.settings.allow_slack_guests = True
+        self.h.slack.users["U0GUEST"] = {"id": "U0GUEST", "profile": {}, "is_restricted": True}
+        state, nonce = self.begin()
+        self.session.token = id_token(nonce, user="U0GUEST")
+        self.client.get(f"/auth/slack/callback?code=abc&state={state}")
+        self.assertIsNotNone(self.h.services.store.user_by_slack_id("U0GUEST"))
+
+    def test_sign_in_fails_closed_when_slack_cant_say_who_it_is(self):
+        async def broken_user_info(user_id):
+            raise ConnectionError("slack down")
+
+        self.h.slack.user_info = broken_user_info
+        state, nonce = self.begin()
+        self.session.token = id_token(nonce)
+        resp = self.client.get(f"/auth/slack/callback?code=abc&state={state}")
+        self.assertIn("Couldn&#39;t reach Slack", resp.text)
+        self.assertIsNone(self.h.services.store.user_by_slack_id("U0AVA"))
+
+    def test_daily_check_signs_out_people_who_became_guests(self):
+        state, nonce = self.begin()
+        self.session.token = id_token(nonce)
+        self.client.get(f"/auth/slack/callback?code=abc&state={state}")
+        self.h.slack.users["U0AVA"]["is_restricted"] = True
+        self.assertEqual(self.h.call(self.h.services.approvals.check_accounts), 1)
+        self.assertEqual(self.client.get("/chats", follow_redirects=False).status_code, 303)
+
     def test_forged_state_is_refused(self):
         _, nonce = self.begin()
         self.session.token = id_token(nonce)

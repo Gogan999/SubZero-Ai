@@ -41,7 +41,7 @@ from .db import Database
 from .generation import ReplyRunner
 from .live import Broker, Tasks
 from .render import EXPLAINER_CSP, explainer_download, explainers, markdown_html, plain_html, pygments_css
-from .roles import DEV_USERS, Directory
+from .roles import DEV_USERS, Directory, is_excluded_account
 from .slack_api import FakeSlack, SlackWebApi
 from .slack_handlers import SlackInteractions
 from .socket_mode import SocketModeClient, WebsocketsTransport
@@ -436,12 +436,24 @@ async def auth_callback(request: Request) -> Response:
         request.session["login_error"] = str(exc)
         return RedirectResponse("/login", status_code=303)
     profile = profile_from_claims(claims)
-    if not profile["avatar_url"] and s.slack is not None:
+    info: dict = {}
+    if s.slack is not None:
         try:
             info = await s.slack.user_info(profile["slack_user_id"])
-            profile["avatar_url"] = (info.get("profile") or {}).get("image_72")
         except Exception:
-            log.warning("Couldn't look up the Slack picture for %s", profile["slack_user_id"], exc_info=True)
+            log.warning("Couldn't look up the Slack account %s", profile["slack_user_id"], exc_info=True)
+            if not s.settings.allow_slack_guests:
+                # Fail closed: without the account details we can't tell a guest from a member.
+                request.session["login_error"] = "Couldn't reach Slack to finish signing in. Try again in a minute."
+                return RedirectResponse("/login", status_code=303)
+    if is_excluded_account(info, s.settings) and profile["slack_user_id"] not in s.settings.admin_slack_ids:
+        request.session["login_error"] = ("SubZero AI is for full members of the team's Slack workspace. "
+                                          "Guest accounts can't sign in. Ask a coach if you think this is a mistake.")
+        s.db.audit("sign_in_refused", actor_id=None, details={"slack_user_id": profile["slack_user_id"],
+                                                               "reason": "guest or bot account"})
+        return RedirectResponse("/login", status_code=303)
+    if not profile["avatar_url"]:
+        profile["avatar_url"] = (info.get("profile") or {}).get("image_72")
     role = await s.directory.role_for(profile["slack_user_id"], force=True)
     user = s.store.upsert_user(slack_user_id=profile["slack_user_id"], name=profile["name"], role=role,
                                team_id=profile["team_id"], email=profile["email"], avatar_url=profile["avatar_url"],

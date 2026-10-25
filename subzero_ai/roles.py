@@ -28,6 +28,15 @@ def is_dev_user(slack_user_id: str) -> bool:
     return slack_user_id.startswith("DEV-")
 
 
+def is_excluded_account(info: dict, settings: Settings) -> bool:
+    """Slack accounts that can't use the app: deleted ones, bots, and (unless allowed) guests,
+    who might be parents, sponsors, alumni, or other teams' mentors."""
+    if info.get("deleted") or info.get("is_bot"):
+        return True
+    guest = info.get("is_restricted") or info.get("is_ultra_restricted")
+    return bool(guest) and not settings.allow_slack_guests
+
+
 class Directory:
     def __init__(self, settings: Settings, slack, ttl_seconds: float = 300):
         self.settings = settings

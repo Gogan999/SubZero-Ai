@@ -6,7 +6,7 @@ This is version 0.3.0: milestones 1 to 3 of the build plan.
 
 ## What's in this version
 
-- **Sign in with Slack**, limited to the team workspace. Mentors are the members of the private #claude-approvals channel; admins are named in `config.env`.
+- **Sign in with Slack**, limited to full members of the team workspace. Guest accounts and bots are refused (set `ALLOW_SLACK_GUESTS=1` if some students are guests), and the daily account check signs out anyone who is deactivated or turned into a guest. Mentors are the members of the private #claude-approvals channel; admins are named in `config.env`.
 - **Chat**: a conversation list with search and subteam and student filters, Markdown replies with highlighted code and copy buttons, and replies that stream in as Claude writes.
 - **Approvals**: each student message posts a card in #claude-approvals with Approve, Edit, Reject, and Handle privately. Students get a Slack DM when a mentor acts. The app's Review page does the same thing if Slack is down. A second mentor tapping a handled card is told who already handled it.
 - **Audit log** (admins): sign-ins, messages, every review with the before and after text of edits, alerts, and Slack problems.

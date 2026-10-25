@@ -73,6 +73,7 @@ class Settings:
     slack_team_id: str = ""
     slack_approvals_channel: str = ""
     admin_slack_ids: frozenset[str] = frozenset()
+    allow_slack_guests: bool = False  # guest accounts may be parents, sponsors, alumni, or other teams
 
     # Approval rules
     mentors_need_approval: bool = False

@@ -12,7 +12,7 @@ from .config import Settings
 from .db import Database, utcnow
 from .generation import ReplyRunner
 from .live import Broker, Tasks
-from .roles import is_dev_user
+from .roles import is_dev_user, is_excluded_account
 from .store import (
     APPROVED,
     AUTO,
@@ -366,7 +366,7 @@ class ApprovalService:
         return sent
 
     async def check_accounts(self) -> int:
-        """Deactivate people who were removed from Slack. Runs daily."""
+        """Deactivate people who were removed from Slack or became guests. Runs daily."""
         if self.slack is None:
             return 0
         removed = 0
@@ -378,7 +378,7 @@ class ApprovalService:
             except Exception:
                 log.warning("Couldn't check Slack account %s", user["slack_user_id"], exc_info=True)
                 continue
-            if info.get("deleted"):
+            if is_excluded_account(info, self.settings) and user["slack_user_id"] not in self.settings.admin_slack_ids:
                 self.store.deactivate_user(user["id"])
                 self.db.audit("user_deactivated", actor_id=None, target_type="user", target_id=user["id"])
                 removed += 1
