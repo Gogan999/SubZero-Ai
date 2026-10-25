@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from .attachments import size_label
+
 CARD_TEXT_LIMIT = 2800
 MODAL_TEXT_LIMIT = 2900
 
@@ -41,12 +43,27 @@ def card_body(text: str, link: str) -> str:
     return quoted
 
 
+def files_line(files: list[tuple[str, int]], link: str) -> str:
+    """Slack can't load files from behind the app's sign-in, so the card lists them and links to the chat."""
+    names = ", ".join(f"{_mrkdwn_escape(name)} ({size_label(size)})" for name, size in files)
+    word = "file" if len(files) == 1 else "files"
+    return f":paperclip: {len(files)} {word}: {names}. <{link}|View in SubZero AI>"
+
+
 def approval_card(*, message_id: int, student_name: str, subteam: str | None, title: str | None,
-                  text: str, link: str, previous_reply: str | None = None) -> list[dict]:
+                  text: str, link: str, previous_reply: str | None = None,
+                  files: list[tuple[str, int]] | None = None, explainer: bool = False) -> list[dict]:
     blocks: list[dict] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": card_header(student_name, subteam, title, link)}},
         {"type": "section", "text": {"type": "mrkdwn", "text": card_body(text, link)}},
     ]
+    extras = []
+    if files:
+        extras.append({"type": "mrkdwn", "text": files_line(files, link)})
+    if explainer:
+        extras.append({"type": "mrkdwn", "text": ":bulb: Asked for an interactive explainer (costs a little more)"})
+    if extras:
+        blocks.append({"type": "context", "elements": extras})
     if previous_reply:
         snippet = previous_reply.strip().replace("\n", " ")
         if len(snippet) > 200:

@@ -1,0 +1,12 @@
+<div class="composer-tools">
+  <label class="attach">
+    <input class="visually-hidden" type="file" name="files" multiple accept="{{ accept }}" data-files
+      data-max-files="{{ max_files }}" data-max-bytes="{{ max_file_bytes }}" {% if waiting %}disabled{% endif %}>
+    <span aria-hidden="true">+</span> Attach files
+  </label>
+  <label class="explainer-toggle" title="Claude builds a small interactive web page, like a simulation or a graph you can play with. It costs a little more.">
+    <input type="checkbox" name="explainer" value="1" {% if waiting %}disabled{% endif %}> Interactive explainer
+  </label>
+  <span class="composer-hint">Code, text, or PNG/JPG screenshots, up to {{ max_files }} files of 5 MB. Don't attach photos of people.</span>
+</div>
+<ul class="chosen-files" data-chosen hidden></ul>

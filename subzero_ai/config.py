@@ -59,7 +59,10 @@ class Settings:
     model_hard: str = "claude-opus-5-5"  # mentors can switch a conversation to this for hard problems
     model_titles: str = "claude-haiku-5-5"
     effort_default: str = "medium"
+    effort_high: str = "high"  # for explainers and messages with files attached (usually code reviews)
     max_tokens_chat: int = 8000
+    max_tokens_explainer: int = 16000
+    long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
 
     # Slack
@@ -78,6 +81,9 @@ class Settings:
     reminder_minutes: int = 120
     show_pending_to_team: bool = False
     show_rejected_to_team: bool = False
+
+    # Attachments (images and other files are capped at 5 MB each, 5 per message)
+    max_text_file_kb: int = 200
 
     # Local testing only. Never turn this on for the public site.
     dev_login: bool = False

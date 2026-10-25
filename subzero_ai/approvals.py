@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from . import slack_cards
+from .attachments import MAX_FILES, Attachments, Prepared
 from .config import Settings
 from .db import Database, utcnow
 from .generation import ReplyRunner
@@ -56,8 +57,9 @@ class Outcome:
 
 class ApprovalService:
     def __init__(self, *, settings: Settings, db: Database, store: Store, slack, broker: Broker,
-                 tasks: Tasks, runner: ReplyRunner):
+                 tasks: Tasks, runner: ReplyRunner, attachments: Attachments):
         self.settings = settings
+        self.attachments = attachments
         self.db = db
         self.store = store
         self.slack = slack
@@ -90,10 +92,15 @@ class ApprovalService:
 
     # ---------------------------------------------------------------- submit
     async def submit(self, viewer: Viewer, text: str, conversation_id: int | None = None,
-                     subteam: str | None = None) -> Outcome:
+                     subteam: str | None = None, files: list[Prepared] | tuple = (),
+                     explainer: bool = False) -> Outcome:
         text = clean_text(text)
         if not text:
+            if files:
+                return Outcome(False, "invalid", "Add a message saying what you'd like Claude to do with the files.")
             return Outcome(False, "invalid", "Type a message first.")
+        if len(files) > MAX_FILES:
+            return Outcome(False, "invalid", f"You can attach up to {MAX_FILES} files to one message.")
         if len(text) > MAX_MESSAGE_CHARS:
             return Outcome(False, "invalid", f"That message is over {MAX_MESSAGE_CHARS:,} characters. "
                                              "Shorten it or split it into parts.")
@@ -128,9 +135,17 @@ class ApprovalService:
                 self.db.audit("conversation_started", actor_id=viewer.id, target_type="conversation",
                               target_id=conversation_id, conn=conn)
             message_id = self.store.add_message(conn, conversation_id=conversation_id, author_id=viewer.id,
-                                                role="user", content=text, status=status)
+                                                role="user", content=text, status=status,
+                                                wants_explainer=explainer)
+            for item in files:
+                self.attachments.save(conn, message_id, item)
+            details = {"conversation": conversation_id, "status": status, "chars": len(text)}
+            if files:
+                details["files"] = [f"{item.name} ({item.size:,} bytes)" for item in files]
+            if explainer:
+                details["explainer"] = True
             self.db.audit("message_sent", actor_id=viewer.id, target_type="message", target_id=message_id,
-                          details={"conversation": conversation_id, "status": status, "chars": len(text)}, conn=conn)
+                          details=details, conn=conn)
 
         self._publish(conversation_id, {"type": "changed", "id": message_id})
         if status == PENDING:
@@ -149,7 +164,9 @@ class ApprovalService:
         blocks = slack_cards.approval_card(
             message_id=message_id, student_name=msg["author_name"], subteam=conv["subteam"], title=conv["title"],
             text=msg["content"], link=self.link(conv["id"]),
-            previous_reply=previous["content"] if previous else None)
+            previous_reply=previous["content"] if previous else None,
+            files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id)],
+            explainer=bool(msg["wants_explainer"]))
         try:
             posted = await self.slack.post_message(self.settings.slack_approvals_channel,
                                                    slack_cards.card_fallback_text(msg["author_name"]), blocks)

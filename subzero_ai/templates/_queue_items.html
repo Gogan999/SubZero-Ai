@@ -10,6 +10,8 @@
     </div>
     {% if m.previous %}<p class="queue-context">Replying to Claude: {{ m.previous }}</p>{% endif %}
     <div class="msg-body plain">{{ m.html|safe }}</div>
+    {% if m.files %}{% include "_files.html" %}{% endif %}
+    {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
     {% include "_review_controls.html" %}
   </li>
   {% else %}

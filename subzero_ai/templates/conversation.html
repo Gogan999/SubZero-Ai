@@ -29,11 +29,15 @@
         {% include "_message.html" %}
       {% endfor %}
     </ol>
+    {% if can_send and long_chat %}
+    <p class="long-chat" role="note">This chat has gotten long, so each reply costs more and Claude can lose track of early details. For a new question, <a href="/chats">start a fresh chat</a> with a short summary of where you got to.</p>
+    {% endif %}
     {% if can_send %}
     <form class="composer" data-composer data-url="/c/{{ conv.id }}/messages" {% if needs_review %}data-needs-review{% endif %}>
       <label class="visually-hidden" for="reply-text">Message</label>
       <textarea id="reply-text" name="text" rows="2" maxlength="20000" required
         placeholder="{{ composer_hint }}" {% if waiting %}disabled{% endif %}></textarea>
+      {% include "_composer_tools.html" %}
       <button class="button primary" type="submit" {% if waiting or replying %}disabled{% endif %}>{{ 'Send for review' if needs_review else 'Send' }}</button>
       <p class="form-error" role="alert" hidden></p>
       <p class="composer-note">Claude is an AI and can make mistakes. Check important answers with a mentor.</p>

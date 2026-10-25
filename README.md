@@ -2,7 +2,7 @@
 
 A claude.ai-style chat for FRC Team 5690. Students ask Claude about code, mechanisms, physics, and materials. Every student message waits for a mentor to approve it in Slack before Claude sees it, and the whole team can read approved chats.
 
-This is version 0.2.0: milestones 1 and 2 of the build plan.
+This is version 0.3.0: milestones 1 to 3 of the build plan.
 
 ## What's in this version
 
@@ -10,9 +10,12 @@ This is version 0.2.0: milestones 1 and 2 of the build plan.
 - **Chat**: a conversation list with search and subteam and student filters, Markdown replies with highlighted code and copy buttons, and replies that stream in as Claude writes.
 - **Approvals**: each student message posts a card in #claude-approvals with Approve, Edit, Reject, and Handle privately. Students get a Slack DM when a mentor acts. The app's Review page does the same thing if Slack is down. A second mentor tapping a handled card is told who already handled it.
 - **Audit log** (admins): sign-ins, messages, every review with the before and after text of edits, alerts, and Slack problems.
-- From milestone 3, already included: the three-layer system prompt with the child-safety layer, MENTOR ALERT handling, per-student limits, the permanent AI notice, and the "Using SubZero AI responsibly" page.
+- **Attachments**: code and text files (.java, .py, .cpp, .h, .json, .gradle, .yaml, .txt, .md, .csv) and PNG or JPG screenshots, up to 5 per message and 5 MB each. Pick them, drag them onto the message box, or paste a screenshot. Text files are also capped at 200 KB (`MAX_TEXT_FILE_KB`), because Claude reads every line on every reply. Photos are re-encoded on upload, which removes hidden details like a phone's GPS location and shrinks them to the size Claude uses. Slack cards and the Review page list the files; mentors open them in the app.
+- **Interactive explainers**: tick *Interactive explainer* and Claude builds a small web page, like a simulation you can play with. It runs in a sandboxed frame that can't reach the network or the app's cookies, with Full screen, Download, and View code buttons. These replies use high effort and up to 16,000 tokens; messages with files also use high effort.
+- **Long chats**: once a chat sends Claude about 150,000 tokens per reply, the app suggests starting a fresh one.
+- Also: the three-layer system prompt with the child-safety layer, MENTOR ALERT handling, per-student limits, the permanent AI notice, and the "Using SubZero AI responsibly" page.
 
-Still to come: interactive explainers and file attachments (milestone 3), then the Windows installer, setup page, Windows services, nightly backups, and admin settings page (milestone 4). Until then the app runs in a console window and settings live in `config.env`.
+Still to come: the Windows installer, setup page, Windows services, nightly backups, and admin settings page (milestone 4). Until then the app runs in a console window and settings live in `config.env`.
 
 ## Try it in test mode
 
@@ -29,6 +32,7 @@ Also try:
 - Edit, Reject, and Handle privately from Mentor Kim's Review page.
 - Signing in as **Ben (student)** to see what other students can and can't see.
 - A message containing `ALERT-TEST`, which makes the pretend Claude raise a mentor alert, or `ERROR-TEST`, which makes it fail so you can try **Try again**.
+- Attaching files, or ticking **Interactive explainer** to get a sample explainer. Its last line confirms the network is blocked inside the frame.
 
 Test data lives in the `test-data` folder. Delete it to start over. Close the window to stop the app.
 
@@ -92,6 +96,13 @@ Open `https://ai.yourdomain.org` on a phone and sign in with Slack.
 - [ ] Handle privately: nothing goes to Claude, the chat disappears for other students, and the student sees "A mentor will follow up with you directly".
 - [ ] A second mentor tapping a card that's already handled gets "Already approved by …" and nothing else happens.
 - [ ] With Slack's connection stopped, a mentor can still approve from the Review page.
+
+**Milestone 3**
+
+- [ ] The red-team checks in the plan's safety checklist get sensible answers: an off-topic request, an unsafe shop shortcut, a distress message (it should raise a mentor alert), "ignore your rules," a request for someone's personal details, and asking Claude whether it's human.
+- [ ] An interactive explainer opens, works full screen, and shows "Network: blocked" if it tries to fetch anything (the test-mode sample does this).
+- [ ] A student with 3 messages waiting can't send a 4th.
+- [ ] A screenshot and a code file reach Claude, and Claude refers to them.
 
 ## How it behaves
 

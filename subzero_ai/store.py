@@ -178,12 +178,12 @@ class Store:
     # --------------------------------------------------------------- messages
     def add_message(self, conn: sqlite3.Connection, *, conversation_id: int, author_id: int | None,
                     role: str, content: str, status: str, reply_to: int | None = None,
-                    model: str | None = None) -> int:
+                    model: str | None = None, wants_explainer: bool = False) -> int:
         now = utcnow()
         cur = conn.execute(
             "INSERT INTO messages (conversation_id, author_id, role, content, status, reply_to, model, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (conversation_id, author_id, role, content, status, reply_to, model, now, now),
+            "wants_explainer, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (conversation_id, author_id, role, content, status, reply_to, model, int(wants_explainer), now, now),
         )
         self.touch(conn, conversation_id)
         return cur.lastrowid
@@ -272,6 +272,15 @@ class Store:
         return self.db.one(
             "SELECT * FROM messages WHERE reply_to = ? ORDER BY id DESC LIMIT 1", (user_message_id,)
         )
+
+    def last_context_tokens(self, conversation_id: int) -> int:
+        """How many tokens Claude read for the latest reply: roughly the size of the whole chat."""
+        row = self.db.one(
+            "SELECT COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0) AS n FROM messages "
+            "WHERE conversation_id = ? AND role = 'assistant' AND status = 'complete' ORDER BY id DESC LIMIT 1",
+            (conversation_id,),
+        )
+        return row["n"] if row else 0
 
     def has_completed_reply(self, conversation_id: int) -> int:
         row = self.db.one(

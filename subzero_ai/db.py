@@ -85,6 +85,22 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # Version 2: milestone 3 (attachments and interactive explainers)
+    """
+    ALTER TABLE messages ADD COLUMN wants_explainer INTEGER NOT NULL DEFAULT 0;
+
+    CREATE TABLE attachments (
+        id INTEGER PRIMARY KEY,
+        message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'image')),
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_attachments_message ON attachments(message_id, id);
+    """,
 ]
 
 

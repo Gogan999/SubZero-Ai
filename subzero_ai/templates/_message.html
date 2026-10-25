@@ -21,6 +21,8 @@
     <time>{{ m.time }}</time>
   </div>
   <div class="msg-body plain">{{ m.html|safe }}</div>
+  {% if m.files %}{% include "_files.html" %}{% endif %}
+  {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
   {% if m.original %}
   <details class="original"><summary>Show what was originally sent</summary><div class="plain">{{ m.original }}</div></details>
   {% endif %}

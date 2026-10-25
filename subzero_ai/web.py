@@ -33,13 +33,14 @@ from starlette.templating import Jinja2Templates
 
 from . import __version__
 from .approvals import ApprovalService, Outcome
+from .attachments import ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, Attachments, Prepared, prepare, size_label
 from .auth import LoginError, SlackLogin, profile_from_claims
 from .claude import ClaudeClient, FakeClaude
 from .config import Settings, load_settings
 from .db import Database
 from .generation import ReplyRunner
 from .live import Broker, Tasks
-from .render import markdown_html, plain_html, pygments_css
+from .render import EXPLAINER_CSP, explainer_download, explainers, markdown_html, plain_html, pygments_css
 from .roles import DEV_USERS, Directory
 from .slack_api import FakeSlack, SlackWebApi
 from .slack_handlers import SlackInteractions
@@ -106,6 +107,7 @@ class Services:
     directory: Directory
     interactions: SlackInteractions
     login: SlackLogin
+    attachments: Attachments
 
 
 def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
@@ -118,15 +120,17 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
         claude = FakeClaude() if settings.fake_claude else ClaudeClient(
             settings.anthropic_api_key, base_url=settings.anthropic_base_url)
     broker, tasks = Broker(), Tasks()
-    runner = ReplyRunner(settings=settings, db=db, store=store, claude=claude, broker=broker, tasks=tasks)
+    attachments = Attachments(db, settings.data_dir / "files")
+    runner = ReplyRunner(settings=settings, db=db, store=store, claude=claude, broker=broker, tasks=tasks,
+                         attachments=attachments)
     approvals = ApprovalService(settings=settings, db=db, store=store, slack=slack, broker=broker, tasks=tasks,
-                                runner=runner)
+                                runner=runner, attachments=attachments)
     runner.on_alert = approvals.mentor_alert
     directory = Directory(settings, slack)
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
     return Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
-                    SlackLogin(settings))
+                    SlackLogin(settings), attachments)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -177,6 +181,26 @@ def dev_login_allowed(request: Request) -> bool:
     host = request.url.hostname or ""
     client = request.client.host if request.client else ""
     return host in {"localhost", "127.0.0.1", "::1", "testserver"} and client in {"127.0.0.1", "::1", "testclient"}
+
+
+def upload_context() -> dict[str, Any]:
+    return {"accept": ACCEPT, "max_files": MAX_FILES, "max_file_bytes": MAX_FILE_BYTES}
+
+
+async def read_uploads(form, settings: Settings) -> list[Prepared]:
+    """The files sent with a message, checked and converted. Raises AttachmentError."""
+    try:
+        uploads = [f for f in form.getlist("files") if hasattr(f, "read") and getattr(f, "filename", "")]
+        if len(uploads) > MAX_FILES:
+            raise AttachmentError(f"You can attach up to {MAX_FILES} files to one message.")
+        prepared = []
+        for upload in uploads:
+            data = await upload.read(MAX_FILE_BYTES + 1)
+            prepared.append(await asyncio.to_thread(prepare, upload.filename, data,
+                                                    max_text_bytes=settings.max_text_file_kb * 1024))
+        return prepared
+    finally:
+        await form.close()  # delete the temporary copies of the uploads
 
 
 def json_error(outcome: Outcome) -> JSONResponse:
@@ -255,9 +279,16 @@ def error_page(request: Request, viewer: Viewer | None, code: int, title: str, d
     return render(request, "error.html", viewer, status_code=code, title=title, detail=detail)
 
 
-def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = None) -> dict[str, Any]:
+def file_views(s: Services, message_id: int, rows=None) -> list[dict[str, Any]]:
+    rows = s.attachments.for_message(message_id) if rows is None else rows
+    return [{"id": f["id"], "name": f["name"], "size": size_label(f["size"]), "kind": f["kind"],
+             "url": f"/files/{f['id']}"} for f in rows]
+
+
+def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = None, files=None) -> dict[str, Any]:
     """Everything a template needs to draw one message for this viewer.
-    last_id is the newest message in the conversation (only the newest failed reply can be retried)."""
+    last_id is the newest message in the conversation (only the newest failed reply can be retried).
+    files is the message's attachments, when the caller already has them."""
     is_author = m["author_id"] is not None and m["author_id"] == viewer.id
     view: dict[str, Any] = {
         "id": m["id"], "role": m["role"], "status": m["status"], "time": fmt_time(s.store, m["created_at"]),
@@ -265,14 +296,14 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
         "author_is_mentor": m["author_role"] in ("mentor", "admin"),
         "reviewer_name": m["reviewer_name"], "note": m["review_note"], "error": m["error"],
         "reply_to": m["reply_to"], "can_review": False, "can_withdraw": False, "can_retry": False,
-        "original": None, "tag": None, "tag_kind": None,
+        "original": None, "tag": None, "tag_kind": None, "files": [], "explainer": False,
     }
     if m["role"] == "assistant":
         if m["status"] == STREAMING:
             text, seq = s.runner.live_text(m["id"])
             view["html"], view["seq"] = plain_html(text), seq
         elif m["status"] == COMPLETE:
-            view["html"] = markdown_html(m["content"])
+            view["html"] = markdown_html(m["content"], explainer_base=f"/c/{conv['id']}/x/{m['id']}")
         else:
             view["html"] = plain_html(m["content"])
         view["can_retry"] = (m["status"] == ERROR and m["id"] == last_id
@@ -280,6 +311,8 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
         return view
     view["html"] = plain_html(m["content"])
     view["raw"] = m["content"]
+    view["files"] = file_views(s, m["id"], files)
+    view["explainer"] = bool(m["wants_explainer"])
     status = m["status"]
     reviewer = m["reviewer_name"] or "a mentor"
     if status == PENDING:
@@ -452,7 +485,8 @@ async def logout(request: Request) -> Response:
 @page()
 async def chats(request: Request, viewer: Viewer) -> Response:
     s = services(request)
-    return render(request, "chats.html", viewer, current_id=None, **sidebar_context(s, viewer, request))
+    return render(request, "chats.html", viewer, current_id=None, **upload_context(),
+                  **sidebar_context(s, viewer, request))
 
 
 @page()
@@ -464,7 +498,9 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
                           "This chat doesn't exist, or it's private to the student and mentors.")
     visible = s.store.visible_messages(viewer, conv)
     last_id = s.store.last_message_id(conv["id"])
-    messages = [message_view(s, viewer, conv, m, last_id) for m in visible]
+    files = s.attachments.for_conversation(conv["id"])
+    messages = [message_view(s, viewer, conv, m, last_id, files.get(m["id"], [])) for m in visible]
+    long_chat = s.store.last_context_tokens(conv["id"]) >= s.settings.long_chat_tokens
     own = conv["owner_id"] == viewer.id
     needs_review = (not viewer.is_mentor) or s.settings.mentors_need_approval
     waiting = own and needs_review and s.store.conversation_has_pending(conv["id"])
@@ -482,7 +518,8 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
     models = [(m, model_label(m)) for m in dict.fromkeys([s.settings.model_default, s.settings.model_hard, conv["model"]])]
     return render(request, "conversation.html", viewer, conv=conv, messages=messages, own=own, title=title,
                   can_send=own, waiting=waiting, replying=replying, composer_hint=hint, needs_review=needs_review,
-                  model_options=models, current_id=conv["id"], **sidebar_context(s, viewer))
+                  model_options=models, current_id=conv["id"], long_chat=long_chat, **upload_context(),
+                  **sidebar_context(s, viewer))
 
 
 @page()
@@ -521,7 +558,12 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
     subteam = form.get("subteam") if form.get("subteam") in SUBTEAMS else None
-    outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam)
+    try:
+        files = await read_uploads(form, s.settings)
+    except AttachmentError as exc:
+        return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
+    outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam, files=files,
+                                       explainer=form.get("explainer") == "1")
     if not outcome.ok:
         return json_error(outcome)
     return JSONResponse({"ok": True, "url": f"/c/{outcome.conversation_id}", "message_id": outcome.message_id})
@@ -531,7 +573,12 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
 async def send_message(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
-    outcome = await s.approvals.submit(viewer, str(form.get("text", "")), conversation_id=request.path_params["cid"])
+    try:
+        files = await read_uploads(form, s.settings)
+    except AttachmentError as exc:
+        return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
+    outcome = await s.approvals.submit(viewer, str(form.get("text", "")), conversation_id=request.path_params["cid"],
+                                       files=files, explainer=form.get("explainer") == "1")
     if not outcome.ok:
         return json_error(outcome)
     return JSONResponse({"ok": True, "message_id": outcome.message_id})
@@ -587,10 +634,58 @@ def _queue_items(s: Services) -> list[dict[str, Any]]:
             "id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
             "avatar": m["author_avatar"], "title": m["conversation_title"] or "New chat",
             "subteam": m["conversation_subteam"], "html": plain_html(m["content"]), "raw": m["content"],
-            "waited": waited(m["created_at"]),
+            "waited": waited(m["created_at"]), "files": file_views(s, m["id"]),
+            "explainer": bool(m["wants_explainer"]),
             "previous": (prev["content"][:200] + ("…" if len(prev["content"]) > 200 else "")) if prev else None,
         })
     return items
+
+
+@page()
+async def explainer_page(request: Request, viewer: Viewer) -> Response:
+    """One interactive explainer from a reply, shown inside the chat's sandboxed frame."""
+    s = services(request)
+    conv = s.store.conversation(request.path_params["cid"])
+    msg = s.store.message(request.path_params["mid"])
+    if (conv is None or msg is None or msg["conversation_id"] != conv["id"] or msg["role"] != "assistant"
+            or msg["status"] != COMPLETE or not s.store.can_view_message(viewer, conv, msg)):
+        return PlainTextResponse("Not found", status_code=404)
+    pages = explainers(msg["content"])
+    index = request.path_params["n"]
+    if index >= len(pages):
+        return PlainTextResponse("Not found", status_code=404)
+    headers = {"Content-Security-Policy": EXPLAINER_CSP, "Cache-Control": "private, no-cache"}
+    page_html = pages[index]
+    if request.query_params.get("download"):
+        page_html = explainer_download(page_html)
+        name = f"explainer-{conv['id']}-{msg['id']}-{index + 1}.html"
+        headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    return HTMLResponse(page_html, headers=headers)
+
+
+@page()
+async def attachment_file(request: Request, viewer: Viewer) -> Response:
+    """An attached file, for anyone who can see the message it belongs to."""
+    s = services(request)
+    row = s.attachments.get(request.path_params["aid"])
+    msg = s.store.message(row["message_id"]) if row is not None else None
+    conv = s.store.conversation(msg["conversation_id"]) if msg is not None else None
+    if conv is None or not s.store.can_view_message(viewer, conv, msg):
+        return PlainTextResponse("Not found", status_code=404)
+    try:
+        data = s.attachments.read(row)
+    except OSError:
+        return PlainTextResponse("This file is missing from the server.", status_code=404)
+    media_type = row["media_type"] if row["kind"] == "image" else "text/plain; charset=utf-8"
+    disposition = "attachment" if request.query_params.get("download") else "inline"
+    ascii_name = row["name"].encode("ascii", "replace").decode().replace('"', "'").replace("?", "_")
+    headers = {
+        # A file is only ever shown, never run, even if someone opens it directly.
+        "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+        "Content-Disposition": f'{disposition}; filename="{ascii_name}"',
+        "Cache-Control": "private, max-age=3600",
+    }
+    return Response(data, media_type=media_type, headers=headers)
 
 
 @page(require="admin")
@@ -692,11 +787,14 @@ class SecurityHeaders:
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
+                # Explainer pages and attachments set their own policy; explainers are framed by the chat page.
+                own_policy = any(name.lower() == b"content-security-policy" for name, _ in headers)
+                if not own_policy:
+                    headers.append((b"content-security-policy", CSP.encode()))
                 headers += [
-                    (b"content-security-policy", CSP.encode()),
                     (b"x-content-type-options", b"nosniff"),
                     (b"referrer-policy", b"same-origin"),
-                    (b"x-frame-options", b"DENY"),
+                    (b"x-frame-options", b"SAMEORIGIN" if own_policy else b"DENY"),
                 ]
                 if self.https:
                     headers.append((b"strict-transport-security", b"max-age=31536000"))
@@ -704,6 +802,46 @@ class SecurityHeaders:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+class LimitBody:
+    """Refuse request bodies bigger than any real message with attachments, before reading them all."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        declared = dict(scope.get("headers") or []).get(b"content-length")
+        if declared is not None and declared.isdigit() and int(declared) > self.max_bytes:
+            return await self._too_big(send)
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise BodyTooBig()
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except BodyTooBig:
+            await self._too_big(send)
+
+    @staticmethod
+    async def _too_big(send):
+        response = JSONResponse({"ok": False, "error": f"That's too much to send at once. Attach up to {MAX_FILES} "
+                                                       "files of up to 5 MB each."}, status_code=413)
+        await response({"type": "http"}, None, send)
+
+
+class BodyTooBig(Exception):
+    pass
 
 
 async def _every(seconds: float, job: Callable[[], Awaitable[Any]], stop: asyncio.Event, first_delay: float = 5) -> None:
@@ -776,6 +914,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/c/{cid:int}/m/{mid:int}", message_partial),
         Route("/c/{cid:int}/events", conversation_events),
         Route("/c/{cid:int}/model", set_model, methods=["POST"]),
+        Route("/c/{cid:int}/x/{mid:int}/{n:int}", explainer_page),
+        Route("/files/{aid:int}", attachment_file),
         *review_routes,
         Route("/queue", queue_page),
         Route("/queue/items", queue_items),
@@ -788,6 +928,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
     ]
     middleware = [
         Middleware(SecurityHeaders, https=settings.https),
+        Middleware(LimitBody, max_bytes=MAX_FILES * MAX_FILE_BYTES + 1024 * 1024),
         Middleware(SessionMiddleware, secret_key=settings.session_secret, session_cookie="subzero_session",
                    max_age=14 * 24 * 3600, same_site="lax", https_only=settings.https),
     ]

@@ -11,4 +11,5 @@ requests>=2.31,<3             # calls to Slack and the Claude API (tested: 2.34.
 PyJWT[crypto]>=2.8,<3         # checks Sign in with Slack tokens (tested: 2.15.0)
 anyio>=4,<5                   # (tested: 4.15.1)
 websockets>=13,<17            # the Slack connection for button taps (Socket Mode)
+Pillow>=11,<14                # checks and shrinks attached screenshots (tested: 13.0.0)
 tzdata; sys_platform == "win32"   # time zones, which Windows doesn't include

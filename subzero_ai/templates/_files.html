@@ -1,0 +1,9 @@
+<ul class="files" aria-label="Attached files">
+  {% for f in m.files %}
+  <li class="file {{ f.kind }}">
+    {% if f.kind == 'image' %}<a class="file-thumb" href="{{ f.url }}" target="_blank" rel="noopener"><img src="{{ f.url }}" alt="{{ f.name }}" loading="lazy"></a>{% endif %}
+    <a class="file-name" href="{{ f.url }}" target="_blank" rel="noopener">{{ f.name }}</a>
+    <span class="file-size">{{ f.size }}</span>
+  </li>
+  {% endfor %}
+</ul>

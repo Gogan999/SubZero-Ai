@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from .attachments import Attachments
 from .config import Settings
 from .db import Database, utcnow
 from .live import Broker, Tasks
@@ -16,6 +17,10 @@ log = logging.getLogger("subzero.generation")
 ALERT_MARK = "[MENTOR ALERT]"
 PACKAGE_PROMPTS = Path(__file__).parent / "prompts"
 PROMPT_FILES = ("safety.md", "team.md", "formats.md")
+
+EXPLAINER_REQUEST = (
+    "The student ticked \"Interactive explainer\" for their latest message. Include one interactive explainer "
+    "in your reply, as described in the formatting rules, plus a short explanation outside it.")
 
 TITLE_SYSTEM = ("Write a title of 3 to 6 words for this robotics team chat. "
                 "Reply with the title only, with no quotes and no ending punctuation.")
@@ -35,9 +40,11 @@ def load_system_prompt(settings: Settings) -> str:
                 .replace("{app_name}", settings.app_name))
 
 
-def build_context(rows, up_to_id: int) -> list[dict]:
-    """Messages Claude should see: approved student messages and finished replies, in order.
-    Consecutive messages from the same side are merged so the turns alternate."""
+def build_context(rows, up_to_id: int, files: dict[int, list[dict]] | None = None) -> list[dict]:
+    """Messages Claude should see: approved student messages (with their attachments, given as content
+    blocks in files) and finished replies, in order. Consecutive messages from the same side are merged
+    so the turns alternate."""
+    files = files or {}
     out: list[dict] = []
     for m in rows:
         if m["id"] > up_to_id:
@@ -48,13 +55,25 @@ def build_context(rows, up_to_id: int) -> list[dict]:
             role, text = "assistant", m["content"]
         else:
             continue
+        blocks = files.get(m["id"]) if role == "user" else None
+        content: str | list[dict] = [*blocks, {"type": "text", "text": text}] if blocks else text
         if out and out[-1]["role"] == role:
-            out[-1]["content"] += "\n\n" + text
+            out[-1]["content"] = _join(out[-1]["content"], content)
         else:
-            out.append({"role": role, "content": text})
+            out.append({"role": role, "content": content})
     while out and out[0]["role"] != "user":
         out.pop(0)
     return out
+
+
+def _join(first: str | list[dict], second: str | list[dict]) -> str | list[dict]:
+    if isinstance(first, str) and isinstance(second, str):
+        return first + "\n\n" + second
+
+    def as_blocks(content):
+        return [{"type": "text", "text": content}] if isinstance(content, str) else content
+
+    return as_blocks(first) + as_blocks(second)
 
 
 def detect_alert(head: str, final: bool) -> tuple[bool, bool, str]:
@@ -73,8 +92,10 @@ def detect_alert(head: str, final: bool) -> tuple[bool, bool, str]:
 
 
 class ReplyRunner:
-    def __init__(self, *, settings: Settings, db: Database, store: Store, claude, broker: Broker, tasks: Tasks):
+    def __init__(self, *, settings: Settings, db: Database, store: Store, claude, broker: Broker, tasks: Tasks,
+                 attachments: Attachments):
         self.settings = settings
+        self.attachments = attachments
         self.db = db
         self.store = store
         self.claude = claude
@@ -102,7 +123,19 @@ class ReplyRunner:
     async def _run(self, conversation_id: int, user_message_id: int, reply_id: int) -> None:
         topic = f"conv:{conversation_id}"
         conv = self.store.conversation(conversation_id)
-        context = build_context(self.store.messages(conversation_id), user_message_id)
+        files = {mid: self.attachments.claude_blocks(rows)
+                 for mid, rows in self.attachments.for_conversation(conversation_id).items()}
+        context = build_context(self.store.messages(conversation_id), user_message_id, files)
+        asked = self.store.message(user_message_id)
+        wants_explainer = bool(asked and asked["wants_explainer"])
+        # Explainers and questions with files attached (usually code reviews) get more effort, and explainers
+        # get room for a whole web page. Everyday questions stay at the default, which costs less.
+        if wants_explainer:
+            max_tokens, effort = self.settings.max_tokens_explainer, self.settings.effort_high
+        elif user_message_id in files:
+            max_tokens, effort = self.settings.max_tokens_chat, self.settings.effort_high
+        else:
+            max_tokens, effort = self.settings.max_tokens_chat, self.settings.effort_default
         parts: list[str] = []
         self._live[reply_id] = parts
         head = ""
@@ -120,7 +153,7 @@ class ReplyRunner:
         try:
             async for event in self.claude.stream(
                 model=conv["model"], system=load_system_prompt(self.settings), messages=context,
-                max_tokens=self.settings.max_tokens_chat, effort=self.settings.effort_default,
+                max_tokens=max_tokens, effort=effort, system_extra=EXPLAINER_REQUEST if wants_explainer else None,
             ):
                 if event.kind == "text":
                     if decided:
