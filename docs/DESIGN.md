@@ -28,6 +28,9 @@ old code does not yet.
 5. **No build step.** Plain CSS and plain JavaScript served from `static/`. No
    frameworks, preprocessors, CSS-in-JS, web fonts or CDN assets. The site runs
    on a mini PC behind a tunnel and must load fast and offline-from-the-internet.
+   This rule covers the site's own pages only. Explainer pages that Claude
+   writes may load libraries from the CDNs allowed in `EXPLAINER_CDNS`
+   (`render.py`) inside their sandbox; that is deliberate.
 
 ## 2. Color
 
@@ -202,7 +205,7 @@ punched eyelet showing a student message's status. Rules:
 ### Explainers
 
 Interactive explainers sit in an `.explainer` frame with a bar holding the
-label and text-style actions (full screen, show code, open). The iframe is
+label and text-style actions (Full screen, Download, View code). The iframe is
 sandboxed; never relax the sandbox for styling reasons.
 
 ### Composer
@@ -340,9 +343,10 @@ Each should be fixed in its own small PR.
 3. **Spacing and type sizes aren't tokens.** Sizes are written as literal
    `rem` values. Once the scale in sections 3 and 4 settles, turn them into
    `--space-*` and `--text-*` tokens.
-4. **Small touch targets.** The remove button on file chips, the code Copy
-   button and `.button.small` are under 44px tall on phones. At minimum they
-   pass 24px; enlarge them in the 900px breakpoint.
+4. **Small touch targets.** The × that removes a chosen file is about
+   18×20px and fails the 24px minimum today; fix it first. The code Copy
+   button, explainer actions and `.button.small` pass 24px but are under 44px
+   on phones; enlarge them in the 900px breakpoint.
 5. **`100vh` on phones.** The layout and sidebar heights use `100vh`, which on
    mobile browsers includes the hidden address bar area. Use `100dvh` with a
    `100vh` fallback.
