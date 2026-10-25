@@ -284,7 +284,7 @@ Target: WCAG 2.2 level AA.
 - **Breakpoints:** 900px and 520px, both `max-width`. Don't add new ones unless
   a layout truly breaks; reuse these.
 - **Above 900px:** sidebar and thread side by side.
-- **900px and below:** sidebar hides behind a "Chats" toggle and opens as a
+- **900px and below:** sidebar hides behind an "All chats" toggle and opens as a
   full-screen panel under the top bar; user name and app name hide from the
   top bar (the team number stays).
 - **520px and below:** panels like sign-in lose their outer margin.
