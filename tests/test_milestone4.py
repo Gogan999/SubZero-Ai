@@ -554,6 +554,16 @@ class UpdateCheckTest(TempDirTest):
         self.assertGreater(maintenance.version_tuple("0.10.0"), maintenance.version_tuple("0.9.9"))
 
 
+class DataFolderCheckTest(unittest.TestCase):
+    def test_open_folder_is_flagged(self):
+        from subzero_ai.checks import data_folder_open
+        locked = ("C:\\ProgramData\\SubZeroAI BUILTIN\\Administrators:(OI)(CI)(F)\n"
+                  "  NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n  NT SERVICE\\SubZeroAI:(OI)(CI)(M)\n")
+        self.assertEqual(data_folder_open("C:\\ProgramData\\SubZeroAI", locked), "")
+        opened = locked + "  BUILTIN\\Users:(OI)(CI)(RX)\n"
+        self.assertIn("install.cmd", data_folder_open("C:\\ProgramData\\SubZeroAI", opened))
+
+
 class PackagingTest(unittest.TestCase):
     def setUp(self):
         import importlib.util
