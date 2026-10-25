@@ -10,6 +10,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
@@ -115,6 +116,17 @@ class PrepareTest(unittest.TestCase):
                 prepare(name, data, max_text_bytes=200 * 1024)
             self.assertIn(words, str(ctx.exception))
 
+    def test_huge_images_are_refused_before_decoding(self):
+        # A blank 7500 x 7500 PNG is tiny on disk but would take hundreds of MB to decode. Pillow alone
+        # only refuses images above twice its limit, so prepare() checks the size from the header first.
+        out = io.BytesIO()
+        Image.new("L", (7500, 7500)).save(out, "PNG")
+        self.assertLess(len(out.getvalue()), 1024 * 1024)
+        with mock.patch.object(Image.Image, "load", side_effect=AssertionError("decoded the pixels")):
+            with self.assertRaises(AttachmentError) as ctx:
+                prepare("bomb.png", out.getvalue(), max_text_bytes=1000)
+        self.assertIn("too large an image", str(ctx.exception))
+
     def test_a_gif_named_png_is_refused(self):
         out = io.BytesIO()
         Image.new("RGB", (4, 4)).save(out, "GIF")
@@ -142,6 +154,22 @@ class ContextTest(unittest.TestCase):
         out = build_context(rows, 2, {2: [image]})
         self.assertEqual(out, [{"role": "user", "content": [
             {"type": "text", "text": "first"}, image, {"type": "text", "text": "second"}]}])
+
+
+class SearchTest(unittest.TestCase):
+    def test_wildcards_are_searched_literally(self):
+        h = Harness()
+        try:
+            ava = h.login(STUDENT)
+            ava.new_chat("Tuning kP_2 on the arm")
+            ava.new_chat("Tuning kPx2 on the arm")
+            h.idle()
+            listing = ava.get("/chats?q=kP_2&scope=mine").text
+            self.assertIn("Tuning kP_2", listing)
+            self.assertNotIn("Tuning kPx2", listing)
+            self.assertIn("Tuning kPx2", ava.get("/chats?q=kP&scope=mine").text)
+        finally:
+            h.close()
 
 
 class MigrationTest(unittest.TestCase):

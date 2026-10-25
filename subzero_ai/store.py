@@ -159,10 +159,12 @@ class Store:
             params.append(viewer.id)
         if query:
             where.append(
-                "(c.title LIKE ? OR EXISTS (SELECT 1 FROM messages m3 WHERE m3.conversation_id = c.id AND "
-                "m3.content LIKE ? AND (m3.role = 'assistant' OR m3.status IN ('approved','edited','auto') OR c.owner_id = ?)))"
+                "(c.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM messages m3 WHERE m3.conversation_id = c.id AND "
+                "m3.content LIKE ? ESCAPE '\\' AND (m3.role = 'assistant' OR m3.status IN ('approved','edited','auto') OR c.owner_id = ?)))"
             )
-            like = f"%{query}%"
+            # Search for what was typed: % and _ are wildcards in LIKE, so escape them.
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like = f"%{escaped}%"
             params += [like, like, viewer.id]
         sql = (
             "SELECT c.*, u.name AS owner_name, u.avatar_url AS owner_avatar, "

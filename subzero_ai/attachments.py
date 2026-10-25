@@ -23,7 +23,9 @@ MAX_FILE_BYTES = 5 * 1024 * 1024
 # Claude reads images best at up to about 1568 pixels on the long edge; bigger ones cost more and gain nothing.
 IMAGE_MAX_EDGE = 1568
 # Refuse images that would take a lot of memory to open (a phone photo is about 12 million pixels).
-Image.MAX_IMAGE_PIXELS = 50_000_000
+# A tiny PNG can claim huge dimensions, so this is checked from the header before any pixels are decoded.
+MAX_IMAGE_PIXELS = 50_000_000
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS  # Pillow's own backstop (it only refuses above twice this)
 
 
 class AttachmentError(Exception):
@@ -103,6 +105,8 @@ def _prepare_image(name: str, data: bytes) -> Prepared:
             if img.format not in ("PNG", "JPEG"):
                 raise AttachmentError(f"{name} isn't a PNG or JPG image.")
             fmt = img.format
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise AttachmentError(f"{name} is too large an image. Send a screenshot or a smaller photo.")
             img.load()
             img = ImageOps.exif_transpose(img)
             img.thumbnail((IMAGE_MAX_EDGE, IMAGE_MAX_EDGE))
