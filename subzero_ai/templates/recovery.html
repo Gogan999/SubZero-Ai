@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Recovery sign-in · {{ settings.app_name }}{% endblock %}
+{% block body_class %}signin{% endblock %}
+{% block main %}
+<section class="signin-panel">
+  <h1>Recovery sign-in</h1>
+  <p class="lede">For when Slack sign-in isn't working. Enter the recovery code from setup to sign in as an admin. This only works on this PC.</p>
+  <form method="post" action="/auth/recovery" class="fields">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="field">
+      <label for="code">Recovery code</label>
+      <input id="code" name="code" type="password" autocomplete="off" spellcheck="false" autocapitalize="characters" required>
+    </div>
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    <button class="button primary block" type="submit">Sign in</button>
+  </form>
+  <p class="fine">Lost the code? Run recovery-code.cmd in the SubZero AI folder to make a new one.</p>
+</section>
+{% endblock %}

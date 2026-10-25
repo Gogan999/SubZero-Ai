@@ -100,6 +100,7 @@ class ReplyRunner:
         self.broker = broker
         self.tasks = tasks
         self.on_alert: Callable[[int, int], Awaitable[None]] | None = None
+        self.on_result: Callable[[bool, str], None] | None = None  # tells the health checks how the call went
         # Text streamed so far for replies in progress, so someone who opens the chat mid-reply sees all of it.
         self._live: dict[int, list[str]] = {}
 
@@ -189,6 +190,8 @@ class ReplyRunner:
         )
         self._live.pop(reply_id, None)
         self.broker.publish(topic, {"type": "done", "id": reply_id})
+        if self.on_result is not None:
+            self.on_result(status == COMPLETE, error)
         if status == COMPLETE and not conv["title"]:
             await self._make_title(conversation_id)
 

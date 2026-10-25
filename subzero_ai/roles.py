@@ -23,9 +23,17 @@ DEV_USERS = [
 ]
 _DEV_ROLES = {u["slack_user_id"]: u["role"] for u in DEV_USERS}
 
+# The admin who signs in on the mini PC with the recovery code when Slack sign-in is broken.
+RECOVERY_USER = {"slack_user_id": "LOCAL-recovery", "name": "Recovery admin", "role": "admin"}
+
 
 def is_dev_user(slack_user_id: str) -> bool:
     return slack_user_id.startswith("DEV-")
+
+
+def is_builtin_user(slack_user_id: str) -> bool:
+    """Sample people and the recovery admin, who aren't Slack accounts."""
+    return slack_user_id.startswith(("DEV-", "LOCAL-"))
 
 
 def is_excluded_account(info: dict, settings: Settings) -> bool:
@@ -69,7 +77,7 @@ class Directory:
         self._fetched_at = None
 
     async def role_for(self, slack_user_id: str, force: bool = False) -> str:
-        if slack_user_id in self.settings.admin_slack_ids:
+        if slack_user_id in self.settings.admin_slack_ids or slack_user_id == RECOVERY_USER["slack_user_id"]:
             return "admin"
         if is_dev_user(slack_user_id):
             return _DEV_ROLES.get(slack_user_id, "student")

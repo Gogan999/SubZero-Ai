@@ -12,7 +12,7 @@ from .config import Settings
 from .db import Database, utcnow
 from .generation import ReplyRunner
 from .live import Broker, Tasks
-from .roles import is_dev_user, is_excluded_account
+from .roles import is_builtin_user, is_excluded_account
 from .store import (
     APPROVED,
     AUTO,
@@ -371,7 +371,7 @@ class ApprovalService:
             return 0
         removed = 0
         for user in self.store.active_users():
-            if is_dev_user(user["slack_user_id"]):
+            if is_builtin_user(user["slack_user_id"]):
                 continue
             try:
                 info = await self.slack.user_info(user["slack_user_id"])

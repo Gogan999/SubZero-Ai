@@ -96,5 +96,9 @@ if ($Check) {
 Write-Host ""
 Write-Host "Starting SubZero AI. Keep this window open; closing it stops the app." -ForegroundColor Cyan
 Write-Host ""
-& $VenvPython -m subzero_ai
-exit $LASTEXITCODE
+# Exit code 3 means the app asked to restart (the setup page does this once it's finished).
+do {
+    & $VenvPython -m subzero_ai
+    $code = $LASTEXITCODE
+} while ($code -eq 3)
+exit $code

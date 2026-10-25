@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Setup finished · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <h1>Setup finished</h1>
+  <p class="lede">Write down this recovery code and keep it somewhere safe, like the coaches' password manager. It's shown only once.</p>
+  <p class="recovery-code">{{ code }}</p>
+  <p class="field-hint">If Slack sign-in ever breaks, open <span class="mono">http://localhost:8787/auth/recovery</span> on this PC and enter the code to sign in as an admin. It doesn't work from anywhere else. To make a new code, run <span class="mono">recovery-code.cmd</span> in the SubZero AI folder.</p>
+  <h2>Next</h2>
+  <ol class="steps">
+    {% if restarting %}<li>{{ settings.app_name }} is restarting with the new settings. Give it about 30 seconds.</li>{% else %}<li>Restart {{ settings.app_name }} so it uses the new settings.</li>{% endif %}
+    <li>On a phone, open <a href="{{ public_url }}">{{ public_url }}</a> and sign in with Slack as an admin.</li>
+    <li>Open <strong>Settings</strong> to check the health list, the per-student limits, the retention period, and the three system prompt layers.</li>
+    <li>Send a test message as a student, and approve it in #claude-approvals.</li>
+  </ol>
+</section>
+{% endblock %}

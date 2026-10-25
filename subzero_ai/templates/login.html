@@ -10,11 +10,18 @@
   {% if slack_ready %}
   <a class="button primary slack-signin" href="/auth/login">Sign in with Slack</a>
   <p class="fine">Use your account in the team's Slack workspace.</p>
+  {% elif setup_open and local %}
+  <p class="fine">{{ settings.app_name }} isn't set up yet. <a href="/setup">Open the setup page</a>.</p>
+  {% elif setup_open %}
+  <p class="fine">{{ settings.app_name }} isn't set up yet. An admin needs to finish setup on the mini PC.</p>
   {% else %}
-  <p class="fine">Slack sign-in isn't set up yet. An admin needs to add the Slack app details to config.env.</p>
+  <p class="fine">Slack sign-in isn't set up. An admin needs to add the Slack app details to config.env.</p>
   {% endif %}
   {% if dev_allowed %}
   <p class="fine"><a href="/auth/dev">Sign in as a sample person (test mode)</a></p>
+  {% endif %}
+  {% if local and not setup_open %}
+  <p class="fine"><a href="/auth/recovery">Sign in with the recovery code</a> (works only on this PC)</p>
   {% endif %}
 </section>
 {% endblock %}

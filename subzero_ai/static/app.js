@@ -118,6 +118,13 @@
       return;
     }
 
+    // Plain form buttons that do something hard to undo ask first, like the data-action buttons below.
+    const confirmSubmit = event.target.closest('button[type="submit"][data-confirm]');
+    if (confirmSubmit && !window.confirm(confirmSubmit.dataset.confirm)) {
+      event.preventDefault();
+      return;
+    }
+
     const action = event.target.closest("[data-action]");
     if (action) {
       if (action.dataset.confirm && !window.confirm(action.dataset.confirm)) return;

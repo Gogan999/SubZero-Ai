@@ -1,0 +1,26 @@
+<!-- WinSW settings for the SubZero AI Windows service. install.ps1 registers it; the app reads its
+     settings from C:\ProgramData\SubZeroAI\config.env. Changes to this file apply when the service restarts. -->
+<service>
+  <id>SubZeroAI</id>
+  <name>SubZero AI</name>
+  <description>Mentor-approved Claude for the robotics team. Answers on 127.0.0.1:8787 for the Cloudflare Tunnel.</description>
+  <executable>%BASE%\..\python\python.exe</executable>
+  <arguments>-m subzero_ai</arguments>
+  <workingdirectory>%BASE%\..</workingdirectory>
+  <env name="DATA_DIR" value="%ProgramData%\SubZeroAI"/>
+  <env name="PYTHONUTF8" value="1"/>
+  <env name="PYTHONDONTWRITEBYTECODE" value="1"/>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <!-- Restart after a crash, and after the setup page asks for a restart (the app exits with code 3). -->
+  <onfailure action="restart" delay="3 sec"/>
+  <onfailure action="restart" delay="20 sec"/>
+  <onfailure action="restart" delay="1 min"/>
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>20 sec</stoptimeout>
+  <logpath>%ProgramData%\SubZeroAI\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>

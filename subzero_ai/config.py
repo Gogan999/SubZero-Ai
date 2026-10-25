@@ -30,7 +30,13 @@ def _as_bool(value: str) -> bool:
 
 
 def _as_set(value: str) -> frozenset[str]:
-    return frozenset(part.strip() for part in str(value).split(",") if part.strip())
+    return frozenset(part.strip() for part in str(value).replace("\n", ",").split(",") if part.strip())
+
+
+def _as_list(value: str) -> tuple[str, ...]:
+    """Comma-separated in config.env, one per line when saved from the settings page."""
+    parts = str(value).split("\n") if "\n" in str(value) else str(value).split(",")
+    return tuple(dict.fromkeys(part.strip() for part in parts if part.strip()))
 
 
 def default_data_dir() -> Path:
@@ -84,6 +90,18 @@ class Settings:
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200
 
+    subteams: tuple[str, ...] = ("Programming", "Fab and design", "Business and outreach")
+
+    # Data kept on the mini PC
+    retention_days: int = 730  # delete chats with no activity for this long (two seasons); 0 keeps them forever
+    backup_dir: str = ""  # defaults to DATA_DIR/backups; point it at a synced OneDrive or Google Drive folder
+    backup_hour: int = 2  # nightly backup at this hour, local time
+    backup_keep_days: int = 14
+
+    # Updates: the admin page says when this GitHub repository has a newer release
+    update_repo: str = "Gogan999/SubZero-Ai"
+    check_for_updates: bool = True
+
     # Local testing only. Never turn this on for the public site.
     dev_login: bool = False
 
@@ -108,6 +126,15 @@ class Settings:
     def db_path(self) -> Path:
         return self.data_dir / "data" / "subzero.db"
 
+    @property
+    def backups_path(self) -> Path:
+        return Path(self.backup_dir) if self.backup_dir else self.data_dir / "backups"
+
+    @property
+    def config_path(self) -> Path:
+        """Where settings are saved: the config.env that was read, or DATA_DIR/config.env."""
+        return Path(self.config_file) if self.config_file else self.data_dir / "config.env"
+
     def url(self, path: str) -> str:
         return self.public_url.rstrip("/") + path
 
@@ -119,8 +146,40 @@ _CONVERTERS = {
     "bool": _as_bool,
     "int": int,
     "frozenset[str]": _as_set,
+    "tuple[str, ...]": _as_list,
     "Path": Path,
 }
+
+
+def convert(name: str, raw: str):
+    """Turn a text value into the type of the named setting."""
+    f = next(f for f in fields(Settings) if f.name == name)
+    return _CONVERTERS.get(f.type, str)(raw)
+
+
+def update_env_file(path: Path, updates: dict[str, str]) -> None:
+    """Set KEY=value lines in config.env, keeping its notes and order. Keys it doesn't have yet go at the end.
+    The file is replaced in one step, so a crash never leaves half a file."""
+    lines = path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []
+    remaining = dict(updates)
+    for value in remaining.values():
+        if "\n" in value or "\r" in value:
+            raise ValueError("Settings can't contain line breaks.")
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in remaining:
+            lines[i] = f"{key}={remaining.pop(key)}"
+    if remaining:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines += [f"{key}={value}" for key, value in remaining.items()]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(temp, path)
 
 
 def load_settings(env_file: str | os.PathLike | None = None, *, search_cwd: bool = True, **overrides) -> Settings:
@@ -166,6 +225,10 @@ def load_settings(env_file: str | os.PathLike | None = None, *, search_cwd: bool
     settings.data_dir = Path(settings.data_dir)
     for sub in ("data", "files", "backups", "logs"):
         (settings.data_dir / sub).mkdir(parents=True, exist_ok=True)
+    try:
+        settings.backups_path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # a missing BACKUP_DIR drive shows up as a failed backup on the admin page, not a failed start
 
     if not settings.session_secret:
         secret_file = settings.data_dir / "data" / "session.secret"

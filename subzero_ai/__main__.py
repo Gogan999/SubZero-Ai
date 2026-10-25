@@ -3,6 +3,11 @@
     python -m subzero_ai               start the app, using config.env
     python -m subzero_ai --test-mode   start with sample sign-ins (and a pretend Claude if there's no API key)
     python -m subzero_ai check         check config.env, Slack, and the Claude API key
+    python -m subzero_ai backup [LABEL] back up the database, attached files, and prompts now
+    python -m subzero_ai backups       list the backups
+    python -m subzero_ai restore NAME  put a backup back (stop the app first; "latest" picks the newest)
+    python -m subzero_ai recovery-code make a new recovery code for signing in on the mini PC
+    python -m subzero_ai reset-setup   open the setup page again (it only answers on the mini PC)
 """
 
 from __future__ import annotations
@@ -13,18 +18,25 @@ import logging
 import os
 import sys
 import threading
+import urllib.request
 import webbrowser
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from . import __version__
-from .config import load_settings
+from .config import Settings, load_settings
+
+# Exit code that asks for a restart: the Windows service starts the app again, and run.ps1 loops on it.
+RESTART_EXIT_CODE = 3
+COMMANDS = ["run", "check", "backup", "backups", "restore", "recovery-code", "reset-setup"]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m subzero_ai", description="SubZero AI: mentor-approved Claude.")
-    parser.add_argument("command", nargs="?", choices=["run", "check"], default="run",
-                        help="run (default) starts the app; check tests the settings")
+    parser.add_argument("command", nargs="?", choices=COMMANDS, default="run",
+                        help="run (default) starts the app; see the list above for the others")
+    parser.add_argument("name", nargs="?",
+                        help="for restore: the backup's file name or path, or latest; for backup: a label")
     parser.add_argument("--config", help="path to config.env")
     parser.add_argument("--test-mode", action="store_true",
                         help="sample sign-ins on this PC, data in ./test-data, and a pretend Claude without an API key")
@@ -67,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         from .checks import print_report, run_checks
         return print_report(asyncio.run(run_checks(settings)))
+    if args.command != "run":
+        return run_tool(args.command, args.name, settings)
 
     import uvicorn
 
@@ -84,7 +98,70 @@ def main(argv: list[str] | None = None) -> int:
         # Open live-update connections would otherwise hold up Ctrl+C and service restarts.
         timeout_graceful_shutdown=3,
     )
-    uvicorn.Server(config).run()
+    server = uvicorn.Server(config)
+    restart = threading.Event()
+
+    def request_restart() -> None:
+        restart.set()
+        server.should_exit = True
+
+    app.state.request_restart = request_restart
+    server.run()
+    if restart.is_set():
+        logging.getLogger("subzero").info("Restarting to load the new settings")
+        return RESTART_EXIT_CODE
+    return 0
+
+
+def app_is_running(settings: Settings) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{settings.port}/healthz", timeout=2):
+            return True
+    except Exception:
+        return False
+
+
+def run_tool(command: str, name: str | None, settings: Settings) -> int:
+    """The maintenance commands. They print plain sentences, since mentors run them from a .cmd file."""
+    from . import backup, setup_flow
+    from .db import Database
+
+    try:
+        if command == "backup":
+            Database(settings.db_path)  # make sure the database exists and is up to date
+            path = backup.make_backup(settings, label=name or "manual")
+            print(f"Backed up to {path}")
+        elif command == "backups":
+            found = backup.list_backups(settings)
+            if not found:
+                print(f"There are no backups in {settings.backups_path} yet.")
+            for info in found:
+                print(f"  {info.name}   {info.created:%Y-%m-%d %H:%M}   {backup.size_text(info.size)}")
+        elif command == "restore":
+            if not name:
+                print("Say which backup to restore: a file name from 'backups', or latest.")
+                return 2
+            if app_is_running(settings):
+                print("SubZero AI is running. Stop it first (restore.cmd does this for you), then try again.")
+                return 1
+            path = backup.find_backup(settings, name)
+            result = backup.restore_backup(settings, path)
+            print(f"Restored {path.name} (made {result['manifest'].get('created_at', 'at an unknown time')}).")
+            if result["safety_backup"]:
+                print(f"The data from before the restore was saved as {result['safety_backup'].name}.")
+        elif command == "recovery-code":
+            code = setup_flow.new_recovery_code(Database(settings.db_path))
+            print("New recovery code (the old one no longer works). Keep it somewhere safe:")
+            print("")
+            print(f"    {code}")
+            print("")
+            print(f"Use it at http://localhost:{settings.port}/auth/recovery on this PC.")
+        elif command == "reset-setup":
+            setup_flow.reopen_setup(Database(settings.db_path))
+            print(f"The setup page is open again at http://localhost:{settings.port}/setup on this PC.")
+    except backup.BackupError as exc:
+        print(str(exc))
+        return 1
     return 0
 
 

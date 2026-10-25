@@ -6,7 +6,7 @@ change to a template (`subzero_ai/templates/`), the stylesheet
 must follow it. If a change needs something this file does not allow, update
 this file in the same pull request and say why in the PR description.
 
-The standards describe the site as it is today (version 0.3.0). Places where
+The standards describe the site as it is today (version 0.4.0). Places where
 the current code falls short are listed under [Known gaps](#known-gaps) so they
 can be fixed in small, separate PRs. New work must meet the standard even where
 old code does not yet.
@@ -57,6 +57,7 @@ token to both the light block and the dark block.
 | `--brand-hover` | Hover for brand items | `#134a70` | `#79b6e3` |
 | `--brand-ink` | Text on a `--brand` fill | `#ffffff` | `#071520` |
 | `--focus` | Keyboard focus ring | `#0b7fd1` | `#7cc4ff` |
+| `--field-edge` | Border of text fields, selects and textareas (3:1 on `--paper` and `--sheet`) | `#7a8a98` | `#62788a` |
 
 ### Status tokens
 
@@ -74,6 +75,9 @@ Rules:
 - Status colors mean status. Do not use green, amber, red or violet for
   decoration or for unrelated meaning.
 - Red (`--rejected`) is also the color for errors and destructive buttons.
+- On the admin Settings and setup pages, the approved pair also means "working" or
+  "done" and the rejected pair "not working" or "failed" (`.pill.ok`, `.pill.bad`),
+  always with those words.
 - Every use of a status color must also carry a word ("Waiting for a mentor",
   "Not approved by Sam"). Color is never the only signal.
 - Text must meet WCAG AA contrast: 4.5:1 for normal text, 3:1 for large text
@@ -231,6 +235,24 @@ sandboxed; never relax the sandbox for styling reasons.
 - Inline warnings (long chat) use the pending pair; private-chat notes use the
   held pair.
 
+### Settings and setup forms
+
+Admin pages built from forms (Settings, setup, recovery sign-in) use these:
+
+- `.panel`: a `--sheet` card (`--radius`, 1px `--rule`) for each section, with
+  an `h2` and an `id` so the `.settings-nav` links at the top can jump to it.
+- `.field`: label, control, `.field-hint` and `.field-error`, stacked. Controls
+  use the `--field-edge` border. `.field.check` puts a checkbox beside its label.
+- `.form-actions`: the row of buttons under a form. Each panel's form has one
+  `.button.primary` Save button.
+- `.flash` (`role="status"`) says what a save did, after the page reloads.
+- `.health`: a list of label, status pill (`.pill.ok`, `.pill.bad`,
+  `.pill.unknown`, `.pill.plain`) and detail. On phones the detail wraps under the
+  label.
+- `.recovery-code` shows a one-time code in large monospace type.
+- Secrets (API keys, tokens) use `type="password"` fields that start empty and
+  are never filled back in. A saved one shows "Saved. Leave blank to keep it."
+
 ### Empty states
 
 Every list has an empty state that says what's missing and what to do next
@@ -297,7 +319,8 @@ Target: WCAG 2.2 level AA.
 - **Above 900px:** sidebar and thread side by side.
 - **900px and below:** sidebar hides behind an "All chats" toggle and opens as a
   full-screen panel under the top bar; user name and app name hide from the
-  top bar (the brand mark stays).
+  top bar (the brand mark stays). The nav links scroll sideways inside the
+  top bar if they don't fit (admins have four), so the page itself never does.
 - **520px and below:** panels like sign-in lose their outer margin.
 - Grid and flex children that hold text use `minmax(0, 1fr)` or `min-width: 0`
   so long content can't push the layout wider than the screen.
@@ -340,11 +363,12 @@ looks, and tick each item:
 These are places where the current code doesn't yet meet the standards above.
 Each should be fixed in its own small PR.
 
-1. **Field borders are too faint.** Inputs, selects and the composer use
-   `--rule`, which is about 1.4:1 against the background in both themes. WCAG
-   1.4.11 asks for 3:1 for the border that shows where a field is. Add a
-   `--field-edge` token that reaches 3:1 on both `--paper` and `--sheet` in
-   each theme (roughly `#7a8a98` light, `#62788a` dark) for form controls and keep `--rule` for dividers.
+1. **Field borders are too faint.** The sidebar search, subteam selects,
+   review textareas and the composer use `--rule`, which is about 1.4:1
+   against the background in both themes. WCAG 1.4.11 asks for 3:1 for the
+   border that shows where a field is. The `--field-edge` token now exists and
+   the Settings and setup forms use it; switch these older fields to it too and
+   keep `--rule` for dividers.
 2. **No manual theme switch.** claude.ai lets people pick light, dark or
    system. Add a `data-theme` attribute on `<html>` with the dark tokens also
    applied under `:root[data-theme="dark"]`, and a small switch in the top bar,

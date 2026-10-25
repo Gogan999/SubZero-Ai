@@ -31,7 +31,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from . import __version__
+from . import __version__, saved_settings, setup_flow
 from .approvals import ApprovalService, Outcome
 from .attachments import ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, Attachments, Prepared, prepare, size_label
 from .auth import LoginError, SlackLogin, profile_from_claims
@@ -39,9 +39,11 @@ from .claude import ClaudeClient, FakeClaude
 from .config import Settings, load_settings
 from .db import Database
 from .generation import ReplyRunner
+from .health import Health
 from .live import Broker, Tasks
+from .maintenance import Nightly, check_for_update
 from .render import EXPLAINER_CSP, explainer_download, explainers, markdown_html, plain_html, pygments_css
-from .roles import DEV_USERS, Directory, is_excluded_account
+from .roles import DEV_USERS, RECOVERY_USER, Directory, is_excluded_account
 from .slack_api import FakeSlack, SlackWebApi
 from .slack_handlers import SlackInteractions
 from .socket_mode import SocketModeClient, WebsocketsTransport
@@ -62,8 +64,6 @@ from .store import (
 
 log = logging.getLogger("subzero.web")
 HERE = Path(__file__).parent
-
-SUBTEAMS = ["Programming", "Fab and design", "Business and outreach"]
 
 MODEL_LABELS = {
     "claude-sonnet-5-5": "Sonnet 5.5",
@@ -86,7 +86,7 @@ def short_text(text: str, limit: int = 60) -> str:
     return cut.rstrip(" ,.;:-") + "…"
 
 
-SAFE_NEXT = re.compile(r"/(?:chats|queue|audit|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:chats|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -108,10 +108,19 @@ class Services:
     interactions: SlackInteractions
     login: SlackLogin
     attachments: Attachments
+    health: Health
+    nightly: Nightly
+    # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
+    slack_factory: Callable[[str], Any] = SlackWebApi
+    claude_factory: Callable[[str], Any] = ClaudeClient
 
 
 def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     db = Database(settings.db_path)
+    saved_settings.load_into(settings, db)
+    if not setup_flow.setup_complete(db) and setup_flow.config_is_complete(settings):
+        # Set up by hand in config.env (versions before 0.4 did this): lock the setup page.
+        setup_flow.mark_setup_complete(db, actor="config.env was already complete")
     store = Store(db, timezone_name=settings.timezone, show_pending_to_team=settings.show_pending_to_team,
                   show_rejected_to_team=settings.show_rejected_to_team)
     if slack is None and settings.slack_enabled:
@@ -126,11 +135,13 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     approvals = ApprovalService(settings=settings, db=db, store=store, slack=slack, broker=broker, tasks=tasks,
                                 runner=runner, attachments=attachments)
     runner.on_alert = approvals.mentor_alert
+    health = Health(settings, slack)
+    runner.on_result = lambda ok, error: health.record("claude", ok, error)
     directory = Directory(settings, slack)
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
     return Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
-                    SlackLogin(settings), attachments)
+                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz))
 
 
 # --------------------------------------------------------------------------- helpers
@@ -166,6 +177,8 @@ async def current_viewer(request: Request) -> Viewer | None:
     if row is None or not row["active"]:
         request.session.clear()
         return None
+    if row["slack_user_id"] == RECOVERY_USER["slack_user_id"] and not is_local_request(request):
+        return None  # the recovery sign-in only works on the mini PC itself
     role = await s.directory.role_for(row["slack_user_id"])
     if role != row["role"]:
         s.store.set_user_role(row["id"], role)
@@ -173,14 +186,17 @@ async def current_viewer(request: Request) -> Viewer | None:
                   avatar_url=row["avatar_url"])
 
 
-def dev_login_allowed(request: Request) -> bool:
-    if not services(request).settings.dev_login:
-        return False
+def is_local_request(request: Request) -> bool:
+    """True only for a browser on the mini PC itself, never for visits through the Cloudflare Tunnel."""
     if request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for"):
         return False
     host = request.url.hostname or ""
     client = request.client.host if request.client else ""
     return host in {"localhost", "127.0.0.1", "::1", "testserver"} and client in {"127.0.0.1", "::1", "testclient"}
+
+
+def dev_login_allowed(request: Request) -> bool:
+    return services(request).settings.dev_login and is_local_request(request)
 
 
 def upload_context() -> dict[str, Any]:
@@ -269,10 +285,17 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         "dev_mode": s.settings.dev_login,
         "version": __version__,
         "pending_count": len(s.store.pending_messages()) if viewer and viewer.is_mentor else 0,
+        "setting_alert": viewer is not None and viewer.is_admin and any(
+            row.get("alert") for row in _health_alerts(s)),
         "path": request.url.path,
     }
     base.update(context)
     return templates.TemplateResponse(request, name, base, status_code=status_code)
+
+
+def _health_alerts(s: Services) -> list[dict[str, str]]:
+    from .web_admin import health_rows
+    return health_rows(s)
 
 
 def error_page(request: Request, viewer: Viewer | None, code: int, title: str, detail: str) -> HTMLResponse:
@@ -360,7 +383,7 @@ def sidebar_context(s: Services, viewer: Viewer, request: Request | None = None)
     params = request.query_params if request is not None else {}
     scope = "mine" if params.get("scope") == "mine" else "team"
     query = (params.get("q") or "").strip()[:100]
-    subteam = params.get("subteam") if params.get("subteam") in SUBTEAMS else None
+    subteam = params.get("subteam") if params.get("subteam") in s.settings.subteams else None
     owner = None
     if (params.get("owner") or "").isdigit():
         row = s.store.user(int(params["owner"]))
@@ -368,7 +391,7 @@ def sidebar_context(s: Services, viewer: Viewer, request: Request | None = None)
             owner = {"id": row["id"], "name": row["name"]}
     return {
         "items": conversation_list(s, viewer, scope, query, subteam, owner["id"] if owner else None),
-        "scope": scope, "query": query, "subteams": SUBTEAMS, "subteam_filter": subteam, "owner_filter": owner,
+        "scope": scope, "query": query, "subteams": s.settings.subteams, "subteam_filter": subteam, "owner_filter": owner,
     }
 
 
@@ -385,7 +408,8 @@ async def login_page(request: Request) -> Response:
     error = request.session.pop("login_error", None)
     s = services(request)
     return render(request, "login.html", None, error=error, slack_ready=s.settings.slack_login_enabled,
-                  dev_allowed=dev_login_allowed(request))
+                  dev_allowed=dev_login_allowed(request), local=is_local_request(request),
+                  setup_open=not setup_flow.setup_complete(s.db))
 
 
 async def ensure_team_id(s: Services) -> bool:
@@ -569,7 +593,7 @@ async def set_model(request: Request, viewer: Viewer) -> Response:
 async def new_chat(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
-    subteam = form.get("subteam") if form.get("subteam") in SUBTEAMS else None
+    subteam = form.get("subteam") if form.get("subteam") in s.settings.subteams else None
     try:
         files = await read_uploads(form, s.settings)
     except AttachmentError as exc:
@@ -724,9 +748,17 @@ async def about_page(request: Request) -> Response:
 
 
 async def health(request: Request) -> Response:
+    """For update.ps1 and the Windows service checks: the app is up, and what it knows about Slack, Claude,
+    and backups. No secrets or names."""
     s = services(request)
-    return JSONResponse({"ok": True, "version": __version__, "slack": bool(s.slack),
-                         "socket_mode": s.settings.socket_mode_enabled})
+    snap = s.health.snapshot()
+    client = getattr(request.app.state, "socket_client", None)
+    return JSONResponse({
+        "ok": True, "version": __version__, "setup_complete": setup_flow.setup_complete(s.db),
+        "slack": snap["slack"]["state"], "socket_mode": bool(client and client.connected.is_set()),
+        "claude": snap["claude"]["state"], "last_backup_at": s.db.get_kv("last_backup_at"),
+        "last_backup_ok": s.db.get_kv("last_backup_ok") != "0" if s.db.get_kv("last_backup_at") else None,
+    })
 
 
 async def code_css(request: Request) -> Response:
@@ -876,8 +908,11 @@ async def _every(seconds: float, job: Callable[[], Awaitable[Any]], stop: asynci
 def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                socket_connect: Callable[[str], Awaitable[Any]] | None = None,
                background: bool = True) -> Starlette:
+    from .web_admin import admin_routes, apply_live
+
     settings = settings or load_settings()
     s = build_services(settings, slack=slack, claude=claude)
+    apply_live(s)
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
@@ -891,12 +926,17 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         if background:
             loops.append(asyncio.create_task(_every(60, s.approvals.send_reminders, stop)))
             loops.append(asyncio.create_task(_every(86400, s.approvals.check_accounts, stop, first_delay=600)))
+            loops.append(asyncio.create_task(_every(60, s.health.check, stop, first_delay=30)))
+            loops.append(asyncio.create_task(_every(60, s.nightly.tick, stop, first_delay=20)))
+            loops.append(asyncio.create_task(_every(86400, lambda: check_for_update(settings, s.db), stop,
+                                                    first_delay=120)))
             if settings.socket_mode_enabled and isinstance(s.slack, SlackWebApi | FakeSlack):
                 client = SocketModeClient(
                     open_url=lambda: s.slack.open_socket_url(settings.slack_app_token),
                     connect=socket_connect or WebsocketsTransport.connect,
                     dispatch=s.interactions.dispatch)
                 app.state.socket_client = client
+                s.health.socket_client = client
                 loops.append(asyncio.create_task(client.run_forever(stop)))
         log.info("SubZero AI %s is running at %s", __version__, settings.public_url)
         try:
@@ -933,6 +973,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/queue/items", queue_items),
         Route("/queue/events", queue_events),
         Route("/audit", audit_page),
+        *admin_routes,
         Route("/about", about_page),
         Route("/healthz", health),
         Route("/assets/code.css", code_css),
@@ -946,4 +987,5 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
     ]
     app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
     app.state.services = s
+    app.state.request_restart = None  # set by __main__: stops the app so the Windows service starts it again
     return app

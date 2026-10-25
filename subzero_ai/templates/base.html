@@ -27,6 +27,8 @@
         {% endif %}
         {% if viewer.is_admin %}
         <a href="/audit" {% if path.startswith('/audit') %}aria-current="page"{% endif %}>Audit log</a>
+        <a href="/settings" {% if path.startswith('/settings') %}aria-current="page"{% endif %}>Settings
+          {% if setting_alert %}<span class="count alert" aria-label="needs attention">!</span>{% endif %}</a>
         {% endif %}
       </nav>
       <div class="me">
