@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Chats · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<div class="layout">
+  <button class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="false" data-sidebar-toggle>All chats</button>
+  {% include "_sidebar.html" %}
+  <section class="thread-col start">
+    <div class="start-panel">
+      <h1>What are you working on?</h1>
+      <p class="lede">Ask about robot code, a mechanism, the physics behind a design, or which material to use.
+        {% if not viewer.is_mentor %}A mentor reviews your message before Claude sees it.{% endif %}</p>
+      <form class="composer big" data-new-chat>
+        <label class="visually-hidden" for="new-text">Message</label>
+        <textarea id="new-text" name="text" rows="5" required maxlength="20000"
+          placeholder="For example: our arm drifts down when the robot is disabled. Here's the subsystem code…"></textarea>
+        {% include "_composer_tools.html" %}
+        <div class="composer-row">
+          <label class="subteam">Subteam
+            <select name="subteam">
+              <option value="">Choose one</option>
+              {% for st in subteams %}<option>{{ st }}</option>{% endfor %}
+            </select>
+          </label>
+          <button class="button primary" type="submit">{{ 'Send for review' if not viewer.is_mentor else 'Send' }}</button>
+        </div>
+        <p class="form-error" role="alert" hidden></p>
+        <p class="composer-note">Claude is an AI and can make mistakes. Check important answers with a mentor.</p>
+      </form>
+    </div>
+  </section>
+</div>
+{% endblock %}

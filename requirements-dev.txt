@@ -1,0 +1,3 @@
+# For running the tests: python -m unittest discover -s tests -t .
+-r requirements.txt
+httpx>=0.27    # used by Starlette's test client

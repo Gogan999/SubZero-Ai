@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Test sign-in · {{ settings.app_name }}{% endblock %}
+{% block body_class %}signin{% endblock %}
+{% block main %}
+<section class="signin-panel">
+  <h1>Sign in as a sample person</h1>
+  <p class="lede">Test mode only works on this PC. Open a second browser (or a private window) to be a student and a mentor at the same time.</p>
+  <form method="post" action="/auth/dev" class="dev-users">
+    {% for u in users %}
+    <button class="button block{% if u.role != 'student' %} primary{% endif %}" type="submit" name="user" value="{{ u.slack_user_id }}">
+      {{ u.name }}
+    </button>
+    {% endfor %}
+  </form>
+</section>
+{% endblock %}

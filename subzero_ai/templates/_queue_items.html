@@ -1,0 +1,20 @@
+<ol class="queue">
+  {% for m in items %}
+  <li class="queue-item" id="q{{ m.id }}">
+    <div class="queue-head">
+      {% if m.avatar %}<img class="avatar" src="{{ m.avatar }}" alt="" width="28" height="28">{% else %}<span class="avatar initial" aria-hidden="true">{{ m.student[0] }}</span>{% endif %}
+      <div>
+        <p class="queue-who"><strong>{{ m.student }}</strong>{% if m.subteam %}, {{ m.subteam }}{% endif %}</p>
+        <p class="queue-where"><a href="/c/{{ m.conversation_id }}">{{ m.title }}</a>, waiting {{ m.waited }}</p>
+      </div>
+    </div>
+    {% if m.previous %}<p class="queue-context">Replying to Claude: {{ m.previous }}</p>{% endif %}
+    <div class="msg-body plain">{{ m.html|safe }}</div>
+    {% if m.files %}{% include "_files.html" %}{% endif %}
+    {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
+    {% include "_review_controls.html" %}
+  </li>
+  {% else %}
+  <li class="empty-state">Nothing is waiting. New messages show up here and in #claude-approvals.</li>
+  {% endfor %}
+</ol>

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Sign in · {{ settings.app_name }}{% endblock %}
+{% block body_class %}signin{% endblock %}
+{% block main %}
+<section class="signin-panel">
+  <p class="signin-team">For the robotics team</p>
+  <h1>{{ settings.app_name }}</h1>
+  <p class="lede">Ask Claude about code, mechanisms, physics, and materials. A mentor reviews each student message before Claude sees it.</p>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if slack_ready %}
+  <a class="button primary slack-signin" href="/auth/login">Sign in with Slack</a>
+  <p class="fine">Use your account in the team's Slack workspace.</p>
+  {% else %}
+  <p class="fine">Slack sign-in isn't set up yet. An admin needs to add the Slack app details to config.env.</p>
+  {% endif %}
+  {% if dev_allowed %}
+  <p class="fine"><a href="/auth/dev">Sign in as a sample person (test mode)</a></p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,39 @@
+<aside class="sidebar" id="sidebar" aria-label="Chats">
+  <div class="sidebar-head">
+    <a class="button primary block" href="/chats">New chat</a>
+    <form class="search" method="get" action="/chats" role="search">
+      <input type="hidden" name="scope" value="{{ scope }}">
+      {% if owner_filter %}<input type="hidden" name="owner" value="{{ owner_filter.id }}">{% endif %}
+      <label class="visually-hidden" for="q">Search chats</label>
+      <input id="q" name="q" type="search" placeholder="Search chats" value="{{ query }}">
+      <label class="visually-hidden" for="subteam-filter">Subteam</label>
+      <select id="subteam-filter" name="subteam" data-autosubmit>
+        <option value="">All subteams</option>
+        {% for st in subteams %}<option {% if st == subteam_filter %}selected{% endif %}>{{ st }}</option>{% endfor %}
+      </select>
+    </form>
+    <div class="tabs" role="tablist">
+      <a role="tab" href="/chats?scope=team" aria-selected="{{ 'true' if scope != 'mine' else 'false' }}">Team</a>
+      <a role="tab" href="/chats?scope=mine" aria-selected="{{ 'true' if scope == 'mine' else 'false' }}">Mine</a>
+    </div>
+    {% if owner_filter %}
+    <p class="filter-note">Chats started by {{ owner_filter.name }}. <a href="/chats?scope={{ scope }}">Show everyone's</a></p>
+    {% endif %}
+  </div>
+  <ol class="chat-list">
+    {% for item in items %}
+    <li>
+      <a href="/c/{{ item.id }}" {% if current_id == item.id %}aria-current="page"{% endif %}>
+        <span class="chat-title">{{ item.title }}</span>
+        <span class="chat-meta">
+          {{ item.owner }}{% if item.subteam %}, {{ item.subteam }}{% endif %}
+          {% if item.private %}<span class="pill held">Private</span>{% endif %}
+          {% if item.pending %}<span class="pill pending">{{ item.pending }} waiting</span>{% endif %}
+        </span>
+      </a>
+    </li>
+    {% else %}
+    <li class="empty">{% if query %}No chats match “{{ query }}”.{% elif subteam_filter or owner_filter %}No chats match these filters.{% else %}No chats yet. Start one with New chat.{% endif %}</li>
+    {% endfor %}
+  </ol>
+</aside>

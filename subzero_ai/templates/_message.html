@@ -1,0 +1,40 @@
+{% if m.role == 'assistant' %}
+<li class="msg claude" id="m{{ m.id }}" data-message="{{ m.id }}" data-status="{{ m.status }}">
+  <div class="msg-head"><span class="who">Claude</span>{% if m.status == 'streaming' %}<span class="typing">Replying…</span>{% endif %}</div>
+  {% if m.status == 'error' %}
+  <div class="msg-error" role="alert">
+    <p>Claude couldn't reply: {{ m.error }}</p>
+    {% if m.can_retry %}<button class="button small" type="button" data-action="/m/{{ m.reply_to }}/retry">Try again</button>{% endif %}
+  </div>
+  {% elif m.status == 'streaming' %}
+  <div class="msg-body streaming plain" data-stream data-seq="{{ m.seq or 0 }}">{{ m.html|safe }}</div>
+  {% else %}
+  <div class="msg-body prose">{{ m.html|safe }}</div>
+  {% endif %}
+</li>
+{% else %}
+<li class="msg person{% if m.author_is_mentor %} by-mentor{% endif %}" id="m{{ m.id }}" data-message="{{ m.id }}" data-status="{{ m.status }}">
+  <div class="msg-head">
+    {% if m.author_avatar %}<img class="avatar" src="{{ m.author_avatar }}" alt="" width="24" height="24">{% else %}<span class="avatar initial" aria-hidden="true">{{ (m.author_name or '?')[0] }}</span>{% endif %}
+    <span class="who">{{ m.author_name }}</span>
+    {% if m.author_is_mentor %}<span class="role">Mentor</span>{% endif %}
+    <time>{{ m.time }}</time>
+  </div>
+  <div class="msg-body plain">{{ m.html|safe }}</div>
+  {% if m.files %}{% include "_files.html" %}{% endif %}
+  {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
+  {% if m.original %}
+  <details class="original"><summary>Show what was originally sent</summary><div class="plain">{{ m.original }}</div></details>
+  {% endif %}
+  {% if m.tag %}
+  <p class="tag {{ m.tag_kind }}">{{ m.tag }}</p>
+  {% if m.note and m.status == 'rejected' %}<p class="tag-reason">Reason: {{ m.note }}</p>{% endif %}
+  {% endif %}
+  {% if m.can_withdraw %}
+  <div class="actions"><button class="button small quiet" type="button" data-action="/m/{{ m.id }}/withdraw" data-confirm="Withdraw this message? Mentors won't review it.">Withdraw</button></div>
+  {% endif %}
+  {% if m.can_review %}
+  {% include "_review_controls.html" %}
+  {% endif %}
+</li>
+{% endif %}
