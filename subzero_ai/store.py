@@ -267,7 +267,8 @@ class Store:
     def window_open(self, conversation_id: int, minutes: int) -> bool:
         """Whether a student's next message in this chat can skip review: the latest message they sent was
         approved by a mentor, or itself sent in the window, less than this many minutes ago. A rejected,
-        privately handled, or flagged message closes the window (even once withdrawn), and so does a MENTOR ALERT (which makes the
+        privately handled, flagged, or withdrawn message closes the window (so a student can't withdraw a
+        flagged message and reword it until the screener passes it), and so does a MENTOR ALERT (which makes the
         chat private). The first message of every chat is always reviewed."""
         if minutes <= 0:
             return False
@@ -275,10 +276,8 @@ class Store:
         if conv is None or conv["visibility"] != "team":
             return False
         last = self.db.one(
-            # A withdrawn message is skipped, unless the screener had flagged it: rewording a flagged message
-            # until it passes must not get around review.
             "SELECT status, created_at, reviewed_at FROM messages WHERE conversation_id = ? AND role = 'user' "
-            "AND NOT (status = 'withdrawn' AND screen_note IS NULL) ORDER BY id DESC LIMIT 1", (conversation_id,))
+            "ORDER BY id DESC LIMIT 1", (conversation_id,))
         if last is None:
             return False
         if last["status"] in (APPROVED, EDITED):

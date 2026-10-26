@@ -52,6 +52,7 @@ class Screener:
 
     async def check(self, text: str) -> Verdict:
         body = text if len(text) <= MAX_SCREEN_CHARS else text[:MAX_SCREEN_CHARS] + "\n[message cut off here]"
+        body = body.replace("<", "&lt;")  # so the message can't close the <message> tag early
         try:
             answer = await asyncio.wait_for(self.claude.complete(
                 model=self.settings.model_screener, system=SCREEN_SYSTEM,
