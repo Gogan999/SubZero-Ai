@@ -87,6 +87,16 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual(bad.status, FAIL)
         self.assertIn("Copy it again", bad.detail)
 
+    def test_missing_scope_names_the_scope(self):
+        class NoScopeSlack(FakeSlack):
+            async def auth_test(self):
+                raise SlackError("auth.test", "missing_scope", "groups:read")
+
+        results = asyncio.run(run_checks(self.settings(), slack=NoScopeSlack(), claude=GoodClaude()))
+        bad = [r for r in results if r.title == "Slack bot token didn't work"][0]
+        self.assertIn("groups:read", bad.detail)
+        self.assertIn("reinstall", bad.detail)
+
     def test_test_mode(self):
         settings = self.settings(fake_claude=True, dev_login=True, slack_bot_token="", public_url="http://localhost:8787")
         results = asyncio.run(run_checks(settings))

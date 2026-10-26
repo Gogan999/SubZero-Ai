@@ -226,6 +226,10 @@ async def _channel_choices(s: Services) -> tuple[list[dict[str, str]] | None, st
     try:
         return await s.slack_factory(s.settings.slack_bot_token).private_channels(), ""
     except Exception as exc:
+        if getattr(exc, "error", "") == "missing_scope":
+            return None, ("Couldn't list the private channels: the Slack app is missing the "
+                          f"{getattr(exc, 'needed', '') or 'groups:read'} permission. Add it under OAuth & "
+                          "Permissions, reinstall the app, and paste the new bot token.")
         return None, f"Couldn't list the private channels ({getattr(exc, 'error', '') or exc})."
 
 
