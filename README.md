@@ -51,7 +51,7 @@ Expect about an hour. No Docker, no Python install, and no router changes.
 
 ### 1. Cloudflare Tunnel
 
-In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and create a tunnel named **subzero-ai**. Choose Windows and copy the long token from the install command it shows (you paste it into the installer). Add a public hostname (Cloudflare may call it a published application route): **ai.yourdomain.org**, type **HTTP**, URL **127.0.0.1:8787** (not `localhost`, which Windows may send to the IPv6 address the app doesn't listen on). The free Zero Trust plan asks for a payment method but doesn't charge for the plan.
+In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and create a tunnel named **subzero-ai**. Choose Windows and copy the long token from the install command it shows (you paste it into the installer). Add a public hostname (Cloudflare may call it a published application route): **ai.yourdomain.org**, type **HTTP** (not HTTPS, which gives a 502 error), URL **127.0.0.1:8787** (not `localhost`, which Windows may send to the IPv6 address the app doesn't listen on). The free Zero Trust plan asks for a payment method but doesn't charge for the plan.
 
 ### 2. Run the installer
 
