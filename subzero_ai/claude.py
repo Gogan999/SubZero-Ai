@@ -302,7 +302,7 @@ class FakeClaude:
         if texts or images:
             reply += (f"\n\nYou attached {texts} text file{'s' if texts != 1 else ''} and "
                       f"{images} image{'s' if images != 1 else ''}. The real Claude would read them.")
-        if system_extra:
+        if system_extra and "interactive explainer" in system_extra:
             reply += ("\n\nHere's a sample interactive explainer. Drag the sliders to see how kP changes the way "
                       "the arm settles.\n\n```explainer\n" + SAMPLE_EXPLAINER + "```")
         if "ALERT-TEST" in question:

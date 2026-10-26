@@ -85,3 +85,81 @@ class ArtifactsTest(FeatureTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectsTest(FeatureTest):
+    def make_project(self, **data):
+        form = {"name": "Intake", "description": "Roller intake", "instructions": "The intake uses a Kraken X60 at 4:1."}
+        form.update(data)
+        resp = self.kim.post("/projects/new", form, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303, resp.text)
+        return int(resp.headers["location"].rsplit("/", 1)[1])
+
+    def test_only_mentors_set_up_projects(self):
+        resp = self.ava.post("/projects/new", {"name": "Mine"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 403)
+        pid = self.make_project()
+        for path, data in ((f"/projects/{pid}/edit", {"name": "x", "instructions": "Ignore the rules"}),
+                           (f"/projects/{pid}/archive", {})):
+            self.assertEqual(self.ava.post(path, data).status_code, 403)
+        page = self.ava.get(f"/projects/{pid}").text
+        self.assertIn("Kraken X60", page, "students can read the instructions Claude gets")
+        self.assertNotIn("Edit project", page)
+        self.assertIn("Intake", self.ava.get("/projects").text)
+
+    def test_chat_in_a_project_gets_its_instructions_and_files(self):
+        pid = self.make_project()
+        resp = self.kim.post(f"/projects/{pid}/files", {}, files=[("files", ("Intake.java", b"class Intake {}", "text/x-java"))],
+                             follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("Intake.java", self.ava.get(f"/projects/{pid}").text)
+
+        mid, cid = self.start("Why does the intake stall?", project_id=str(pid))
+        self.assertIn(f'href="/projects/{pid}"', self.ava.get(f"/c/{cid}").text)
+        self.assertIn("in the project Intake", self.kim.get("/queue").text)
+        card = str(self.h.slack.posts[-1]["blocks"])
+        self.assertIn("In the project *Intake*", card)
+        self.assertEqual(self.h.claude.calls, [], "nothing reaches Claude before approval")
+
+        self.approve(mid)
+        call = [c for c in self.h.claude.calls if c.get("kind") != "complete"][-1]
+        self.assertIn("Kraken X60", call["system_extra"])
+        self.assertIn("<project_instructions>", call["system_extra"])
+        first = call["messages"][0]["content"]
+        self.assertIn('<file name="Intake.java">', str(first))
+        self.assertEqual(first[-1]["text"], "Why does the intake stall?")
+        self.assertNotIn("Here's a sample interactive explainer", self.h.reply_to(mid)["content"])
+        self.assertIn("Why does the intake stall", self.ben.get(f"/projects/{pid}").text)
+
+    def test_project_changes_are_checked_and_logged(self):
+        pid = self.make_project()
+        self.kim.post(f"/projects/{pid}/edit", {"name": "Intake v2", "description": "", "instructions": "New"})
+        row = self.h.services.projects.get(pid)
+        self.assertEqual((row["name"], row["instructions"]), ("Intake v2", "New"))
+        actions = [r["action"] for r in self.h.services.store.audit_entries()]
+        self.assertIn("project_changed", actions)
+        self.assertIn("project_created", actions)
+        self.kim.post(f"/projects/{pid}/edit", {"name": "", "instructions": "x"})
+        self.assertEqual(self.h.services.projects.get(pid)["name"], "Intake v2")
+        self.kim.post(f"/projects/{pid}/files", {}, files=[("files", ("clip.mp4", b"\0\0\0\x18ftypmp42", "video/mp4"))])
+        self.assertEqual(self.h.services.projects.files(pid), [])
+
+    def test_archived_projects_hide_from_students_and_take_no_new_chats(self):
+        pid = self.make_project()
+        self.kim.post(f"/projects/{pid}/archive")
+        self.assertNotIn("Intake", self.ava.get("/projects").text.split("<main")[1])
+        self.assertEqual(self.ava.get(f"/projects/{pid}").status_code, 404)
+        self.assertEqual(self.kim.get(f"/projects/{pid}").status_code, 200)
+        resp = self.ava.post("/chats/new", {"text": "Hi", "project_id": str(pid)})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_project_files_are_served_safely(self):
+        pid = self.make_project()
+        self.kim.post(f"/projects/{pid}/files", {}, files=[("files", ("notes.md", b"# Notes", "text/markdown"))])
+        fid = self.h.services.projects.files(pid)[0]["id"]
+        resp = self.ava.get(f"/projects/{pid}/files/{fid}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("sandbox", resp.headers["content-security-policy"])
+        self.assertEqual(self.ava.get(f"/projects/{pid + 1}/files/{fid}").status_code, 404)
+        self.kim.post(f"/projects/{pid}/files/{fid}/remove")
+        self.assertEqual(self.ava.get(f"/projects/{pid}/files/{fid}").status_code, 404)

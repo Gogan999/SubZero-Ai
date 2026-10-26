@@ -20,7 +20,6 @@ keeps its status tag.
 
 | Feature | Where the placeholder is | What it should do | Notes for building it |
 |---|---|---|---|
-| Projects | Sidebar, `/projects` | Group chats about one mechanism or subsystem, with shared reference files and project instructions that go into every chat. | New `projects` table; conversations get a `project_id`. Project files reuse the attachment store. Project instructions written by mentors, or reviewed like messages. |
 | Claude Code | Sidebar, `/code` | Let Claude read the team's robot code repository, run builds and tests, and propose changes as a pull request. | The biggest item. Needs a sandboxed runner, a narrowly scoped GitHub token, and mentor approval for every step that writes. Probably mentors only at first. |
 | Web search | Composer tools menu | Let Claude look up datasheets, game rules and part specs. | API web search tool. Costs extra per search: add a daily cap and a Settings switch. Show the searches on the mentor's review card. |
 | Extended thinking | Composer tools menu | Let Claude think longer on hard problems. | API `thinking` setting. Costs more, so maybe mentors turn it on per chat, like the model switch. |
@@ -69,6 +68,11 @@ Not on screen yet. Add a placeholder only when work on one starts.
 
 ## Done
 
+- Projects (`/projects`): mentors make a project per mechanism or subsystem with a description, instructions
+  for Claude and up to 20 reference files (code, text, PNG/JPG). Everyone can read them and start chats in the
+  project; Claude gets the instructions after the safety rules and the files before the first message. Only
+  mentors change a project, every change is in the audit log, and the review card names the project. Mentors
+  can archive a project; its chats keep working.
 - Artifacts (`/artifacts`): a gallery of every interactive explainer from chats the viewer can see, with
   search and Team / From my chats tabs, and a page per explainer with Full screen, Download and View code.
   An explainer is exactly as visible as the reply it's in, so private chats stay private.

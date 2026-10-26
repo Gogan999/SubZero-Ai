@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}{{ project.name }} · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page project-page">
+  <p class="crumbs"><a href="/projects">Projects</a></p>
+  <div class="project-layout">
+    <div class="project-main">
+      <h1>{{ project.name }}</h1>
+      {% if project.description %}<p class="lede">{{ project.description }}</p>{% endif %}
+      {% if project.archived %}<p class="private-note">Archived: students don't see this project. Its chats still work.</p>{% endif %}
+      {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+      {% if not project.archived %}
+      <form class="composer big" data-new-chat>
+        <input type="hidden" name="project_id" value="{{ project.id }}">
+        <div class="composer-box">
+          <label class="visually-hidden" for="new-text">Message</label>
+          <textarea id="new-text" name="text" rows="3" required maxlength="20000"
+            placeholder="Start a chat in {{ project.name }}"></textarea>
+          <ul class="chosen-files" data-chosen hidden></ul>
+          <div class="composer-bar">
+            {% include "_composer_tools.html" %}
+            <div class="composer-send">
+              <span class="model-chip" title="New chats use this model. Mentors can move a chat to a bigger one.">{{ model_name }}</span>
+              <button class="button primary" type="submit">{{ 'Send for review' if not viewer.is_mentor else 'Send' }}</button>
+            </div>
+          </div>
+        </div>
+        <p class="form-error" role="alert" hidden></p>
+        <p class="composer-note">Claude reads this project's instructions and files in every chat here.{% if not viewer.is_mentor %} A mentor reviews your message before Claude sees it.{% endif %}</p>
+      </form>
+      {% endif %}
+      <h2>Chats in this project</h2>
+      <ol class="chat-rows">
+        {% for item in chats %}
+        <li>
+          <a href="/c/{{ item.id }}">
+            <span class="chat-title">{{ item.title }}</span>
+            <span class="chat-meta">
+              {{ item.owner }}{% if item.updated %} · <time>{{ item.updated }}</time>{% endif %}
+              {% if item.private %}<span class="pill held">Private</span>{% endif %}
+              {% if item.pending %}<span class="pill pending">{{ item.pending }} waiting</span>{% endif %}
+            </span>
+          </a>
+        </li>
+        {% else %}
+        <li class="empty-state">No chats here yet. Ask the first question above.</li>
+        {% endfor %}
+      </ol>
+    </div>
+    <aside class="project-side" aria-labelledby="knowledge-title">
+      <h2 id="knowledge-title">Project knowledge</h2>
+      <h3>Instructions</h3>
+      {% if project.instructions %}<div class="plain project-instructions">{{ project.instructions }}</div>{% else %}<p class="fine">No instructions yet.{% if viewer.is_mentor %} Add some with Edit project below.{% endif %}</p>{% endif %}
+      <h3>Files</h3>
+      {% if files %}
+      <ul class="simple-list project-files">
+        {% for f in files %}
+        <li>
+          <a class="file-name" href="{{ f.url }}" target="_blank" rel="noopener">{{ f.name }}</a>
+          <span class="file-size">{{ f.size }}</span>
+          {% if viewer.is_mentor %}
+          <form method="post" action="/projects/{{ project.id }}/files/{{ f.id }}/remove">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="button small quiet" type="submit" data-confirm="Remove {{ f.name }} from the project? Claude stops reading it in new replies.">Remove<span class="visually-hidden"> {{ f.name }}</span></button>
+          </form>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="fine">No files yet.{% if viewer.is_mentor %} Add wiring maps, specs or code Claude should know about.{% endif %}</p>
+      {% endif %}
+      {% if viewer.is_mentor %}
+      <form class="project-upload" method="post" action="/projects/{{ project.id }}/files" enctype="multipart/form-data">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="field">
+          <label for="project-files">Add files</label>
+          <input id="project-files" name="files" type="file" multiple accept=".java,.py,.cpp,.h,.json,.gradle,.yaml,.yml,.txt,.md,.csv,.png,.jpg,.jpeg" aria-describedby="project-files-hint">
+          <p class="field-hint" id="project-files-hint">Code, text, or PNG and JPG images, up to {{ max_project_files }} files. Claude reads all of them in every reply, so add only what matters.</p>
+        </div>
+        <button class="button small" type="submit">Upload</button>
+      </form>
+      <details class="project-edit">
+        <summary>Edit project</summary>
+        <form method="post" action="/projects/{{ project.id }}/edit">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <div class="fields">{% with prefix='edit', p=project %}{% include "_project_fields.html" %}{% endwith %}</div>
+          <div class="form-actions"><button class="button primary" type="submit">Save project</button></div>
+        </form>
+        <form method="post" action="/projects/{{ project.id }}/archive">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          {% if project.archived %}
+          <button class="button small" type="submit">Restore project</button>
+          {% else %}
+          <button class="button small reject" type="submit" data-confirm="Archive {{ project.name }}? Students won't see it on the Projects page. Its chats keep working.">Archive project</button>
+          {% endif %}
+        </form>
+      </details>
+      {% endif %}
+    </aside>
+  </div>
+</section>
+{% endblock %}

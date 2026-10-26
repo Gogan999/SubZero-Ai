@@ -94,18 +94,20 @@ class Store:
 
     # ---------------------------------------------------------- conversations
     def create_conversation(self, conn: sqlite3.Connection, *, owner_id: int, model: str,
-                            subteam: str | None = None) -> int:
+                            subteam: str | None = None, project_id: int | None = None) -> int:
         now = utcnow()
         cur = conn.execute(
-            "INSERT INTO conversations (owner_id, subteam, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (owner_id, subteam, model, now, now),
+            "INSERT INTO conversations (owner_id, subteam, model, project_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (owner_id, subteam, model, project_id, now, now),
         )
         return cur.lastrowid
 
     def conversation(self, conversation_id: int) -> sqlite3.Row | None:
         return self.db.one(
-            "SELECT c.*, u.name AS owner_name, u.slack_user_id AS owner_slack_id, u.avatar_url AS owner_avatar "
-            "FROM conversations c JOIN users u ON u.id = c.owner_id WHERE c.id = ?",
+            "SELECT c.*, u.name AS owner_name, u.slack_user_id AS owner_slack_id, u.avatar_url AS owner_avatar, "
+            "p.name AS project_name FROM conversations c JOIN users u ON u.id = c.owner_id "
+            "LEFT JOIN projects p ON p.id = c.project_id WHERE c.id = ?",
             (conversation_id,),
         )
 
@@ -139,9 +141,12 @@ class Store:
 
     def list_conversations(self, viewer: Viewer, *, scope: str = "team", query: str = "",
                            subteam: str | None = None, owner_id: int | None = None,
-                           limit: int = 200) -> list[sqlite3.Row]:
+                           project_id: int | None = None, limit: int = 200) -> list[sqlite3.Row]:
         params: list = []
         where = []
+        if project_id is not None:
+            where.append("c.project_id = ?")
+            params.append(project_id)
         if subteam:
             where.append("c.subteam = ?")
             params.append(subteam)
@@ -230,8 +235,9 @@ class Store:
     def pending_messages(self) -> list[sqlite3.Row]:
         return self.db.all(
             "SELECT m.*, a.name AS author_name, a.avatar_url AS author_avatar, a.slack_user_id AS author_slack_id, "
-            "c.title AS conversation_title, c.subteam AS conversation_subteam "
+            "c.title AS conversation_title, c.subteam AS conversation_subteam, p.name AS project_name "
             "FROM messages m JOIN users a ON a.id = m.author_id JOIN conversations c ON c.id = m.conversation_id "
+            "LEFT JOIN projects p ON p.id = c.project_id "
             "WHERE m.status = 'pending' ORDER BY m.id"
         )
 

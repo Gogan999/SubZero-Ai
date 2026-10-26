@@ -93,7 +93,7 @@ class ApprovalService:
     # ---------------------------------------------------------------- submit
     async def submit(self, viewer: Viewer, text: str, conversation_id: int | None = None,
                      subteam: str | None = None, files: list[Prepared] | tuple = (),
-                     explainer: bool = False) -> Outcome:
+                     explainer: bool = False, project_id: int | None = None) -> Outcome:
         text = clean_text(text)
         # There's no explainer switch any more: asking for one in words is how a student requests it
         explainer = explainer or asks_for_explainer(text)
@@ -133,7 +133,8 @@ class ApprovalService:
         with self.db.transaction() as conn:
             if conversation_id is None:
                 conversation_id = self.store.create_conversation(
-                    conn, owner_id=viewer.id, model=self.settings.model_default, subteam=subteam)
+                    conn, owner_id=viewer.id, model=self.settings.model_default, subteam=subteam,
+                    project_id=project_id)
                 self.db.audit("conversation_started", actor_id=viewer.id, target_type="conversation",
                               target_id=conversation_id, conn=conn)
             message_id = self.store.add_message(conn, conversation_id=conversation_id, author_id=viewer.id,
@@ -168,7 +169,7 @@ class ApprovalService:
             text=msg["content"], link=self.link(conv["id"]),
             previous_reply=previous["content"] if previous else None,
             files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id) if f["kind"] != "frame"],
-            explainer=bool(msg["wants_explainer"]))
+            explainer=bool(msg["wants_explainer"]), project=conv["project_name"])
         try:
             posted = await self.slack.post_message(self.settings.slack_approvals_channel,
                                                    slack_cards.card_fallback_text(msg["author_name"]), blocks)

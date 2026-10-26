@@ -6,7 +6,7 @@
   <header class="thread-head">
     <div class="thread-title">
       <h1 data-title>{{ title }}</h1>
-      <p class="thread-meta">Started by <a href="/recents?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}</p>
+      <p class="thread-meta">Started by <a href="/recents?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}{% if conv.project_name %} · in <a href="/projects/{{ conv.project_id }}">{{ conv.project_name }}</a>{% endif %}</p>
     </div>
     <div class="thread-actions">
       {% if viewer.is_mentor and not can_send %}

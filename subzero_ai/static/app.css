@@ -217,6 +217,26 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .artifact-view { margin-top: 1rem; }
 .artifact-view .explainer iframe { height: min(78vh, 760px); }
 
+.card-text { margin: 0; color: var(--ink-2); font-size: .9rem; overflow-wrap: anywhere; }
+
+/* A project: its chats and composer, with its instructions and files beside them (under them on phones) */
+.project-layout { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: 1.5rem; align-items: start; }
+.project-main .composer.big { padding-top: .75rem; }
+.project-side { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1rem 1.1rem; min-width: 0; }
+.project-side h2 { margin-top: 0; }
+.project-side h3 { font-size: .95rem; margin: 1rem 0 .4rem; }
+.project-instructions { font-size: .9rem; background: var(--muted-bg); border-radius: 6px; padding: .5rem .65rem; max-height: 16rem; overflow-y: auto; }
+.project-files li { align-items: center; }
+.project-files form { margin-left: auto; }
+.project-upload { display: grid; gap: .5rem; justify-items: start; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+.project-upload input[type="file"] { max-width: 100%; font-size: .88rem; }
+.project-edit { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--rule); }
+.project-edit summary { cursor: pointer; font-weight: 600; color: var(--brand); }
+.project-edit form + form { margin-top: 1rem; }
+@media (max-width: 900px) {
+  .project-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Coming soon pages */
 .soon-banner { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; color: var(--ink-2); font-size: .9rem; }
 .prose-list { padding-left: 1.4rem; margin: 0 0 1rem; }

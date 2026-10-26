@@ -57,6 +57,7 @@ from .generation import ReplyRunner
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
+from .projects import MAX_PROJECT_FILES, ProjectError, Projects
 from .render import (
     EXPLAINER_CSP,
     EXPLAINER_MAX_BYTES,
@@ -103,17 +104,6 @@ RECENTS = 25
 # claude.ai features with a place in the sidebar but not built yet. Each gets a "Coming soon" page that says
 # what it will do, so students aren't left guessing. docs/FEATURES_TODO.md tracks them.
 COMING_SOON = {
-    "projects": {
-        "title": "Projects",
-        "summary": "Group related chats with shared files and instructions, like one project per robot mechanism.",
-        "points": [
-            "Keep every chat about one subsystem, such as the intake or the climber, in one place.",
-            "Add reference files once (wiring maps, CAD exports, code) and have Claude use them in every chat.",
-            "Give a project its own instructions, such as which motor controllers and library versions the team uses.",
-            "Mentors still review every student message inside a project.",
-        ],
-        "meanwhile": "Put the subsystem's name in your first message, so the team can find the chat with search on the Chats page.",
-    },
     "code": {
         "title": "Claude Code",
         "summary": "Let Claude work in the team's robot code repository: read it, run tests and suggest changes.",
@@ -141,7 +131,7 @@ def short_text(text: str, limit: int = 60) -> str:
     return cut.rstrip(" ,.;:-") + "…"
 
 
-SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|queue|audit|settings|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|projects(?:/\d+)?|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -165,6 +155,7 @@ class Services:
     attachments: Attachments
     health: Health
     nightly: Nightly
+    projects: Projects
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
@@ -185,8 +176,9 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
             settings.anthropic_api_key, base_url=settings.anthropic_base_url)
     broker, tasks = Broker(), Tasks()
     attachments = Attachments(db, settings.data_dir / "files")
+    projects = Projects(db, settings.data_dir / "files")
     runner = ReplyRunner(settings=settings, db=db, store=store, claude=claude, broker=broker, tasks=tasks,
-                         attachments=attachments)
+                         attachments=attachments, projects=projects)
     approvals = ApprovalService(settings=settings, db=db, store=store, slack=slack, broker=broker, tasks=tasks,
                                 runner=runner, attachments=attachments)
     runner.on_alert = approvals.mentor_alert
@@ -196,7 +188,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
     return Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
-                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz))
+                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -460,9 +452,9 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
 
 
 def conversation_list(s: Services, viewer: Viewer, scope: str, query: str, subteam: str | None = None,
-                      owner_id: int | None = None, limit: int = 200):
+                      owner_id: int | None = None, limit: int = 200, project_id: int | None = None):
     rows = s.store.list_conversations(viewer, scope=scope, query=query, subteam=subteam, owner_id=owner_id,
-                                      limit=limit)
+                                      project_id=project_id, limit=limit)
     items = []
     for c in rows:
         own = c["owner_id"] == viewer.id
@@ -703,6 +695,112 @@ async def artifact_page(request: Request, viewer: Viewer) -> Response:
                   chat_url=f"/c/{conv['id']}#m{msg['id']}", time=fmt_time(s.store, msg["created_at"]))
 
 
+# --------------------------------------------------------------------------- projects
+def project_views(s: Services, archived: bool = False) -> list[dict[str, Any]]:
+    return [{"id": p["id"], "name": p["name"], "description": p["description"], "chats": p["chat_count"],
+             "files": p["file_count"], "has_instructions": bool(p["instructions"]),
+             "updated": fmt_time(s.store, p["updated_at"])} for p in s.projects.list(archived=archived)]
+
+
+@page()
+async def projects_page(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    archived = viewer.is_mentor and request.query_params.get("archived") == "1"
+    return render(request, "projects.html", viewer, items=project_views(s, archived), archived=archived,
+                  flash=request.session.pop("flash", None), error=request.session.pop("project_error", None))
+
+
+@page(require="mentor")
+async def project_create(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    form = await request.form()
+    try:
+        project_id = s.projects.create(viewer.id, str(form.get("name", "")), str(form.get("description", "")),
+                                       str(form.get("instructions", "")))
+    except ProjectError as exc:
+        request.session["project_error"] = str(exc)
+        return RedirectResponse("/projects#new-project", status_code=303)
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+def _project_for(request: Request, viewer: Viewer):
+    """The project in the URL, if this viewer may see it (archived ones are for mentors only)."""
+    project = services(request).projects.get(request.path_params["pid"])
+    if project is None or (project["archived"] and not viewer.is_mentor):
+        return None
+    return project
+
+
+@page()
+async def project_page(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    project = _project_for(request, viewer)
+    if project is None:
+        return error_page(request, viewer, 404, "Project not found", "This project doesn't exist, or it was archived.")
+    files = [{"id": f["id"], "name": f["name"], "kind": f["kind"], "size": size_label(f["size"]),
+              "url": f"/projects/{project['id']}/files/{f['id']}"} for f in s.projects.files(project["id"])]
+    return render(request, "project.html", viewer, project=project, files=files, max_project_files=MAX_PROJECT_FILES,
+                  chats=conversation_list(s, viewer, "team", "", project_id=project["id"]),
+                  flash=request.session.pop("flash", None), error=request.session.pop("project_error", None),
+                  model_name=model_label(s.settings.model_default), **upload_context())
+
+
+def _project_action(kind: str):
+    @page(require="mentor")
+    async def action(request: Request, viewer: Viewer) -> Response:
+        s = services(request)
+        project = s.projects.get(request.path_params["pid"])
+        if project is None:
+            return error_page(request, viewer, 404, "Project not found", "This project doesn't exist.")
+        form = await request.form()
+        try:
+            if kind == "edit":
+                changed = s.projects.update(project["id"], viewer.id, str(form.get("name", "")),
+                                            str(form.get("description", "")), str(form.get("instructions", "")))
+                request.session["flash"] = "Saved the project." if changed else "Nothing changed."
+            elif kind == "files":
+                items = await read_uploads(form, s.settings)
+                if not items:
+                    raise ProjectError("Choose a file to add.")
+                s.projects.add_files(project["id"], viewer.id, items)
+                request.session["flash"] = f"Added {len(items)} file{'s' if len(items) != 1 else ''}."
+            elif kind == "remove":
+                s.projects.remove_file(project["id"], request.path_params["fid"], viewer.id)
+                request.session["flash"] = "Removed the file."
+            elif kind == "archive":
+                archive = not project["archived"]
+                s.projects.set_archived(project["id"], viewer.id, archive)
+                request.session["flash"] = ("Archived the project. Its chats keep working, and you can restore it "
+                                            "from Archived projects." if archive else "Restored the project.")
+                if archive:
+                    return RedirectResponse("/projects", status_code=303)
+        except (ProjectError, AttachmentError) as exc:
+            request.session["project_error"] = str(exc)
+        return RedirectResponse(f"/projects/{project['id']}", status_code=303)
+
+    action.__name__ = f"project_{kind}"
+    return action
+
+
+@page()
+async def project_file(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    project = _project_for(request, viewer)
+    row = s.projects.file(project["id"], request.path_params["fid"]) if project is not None else None
+    if row is None:
+        return PlainTextResponse("Not found", status_code=404)
+    try:
+        path = s.projects.path(row)
+    except OSError:
+        return PlainTextResponse("This file is missing from the server.", status_code=404)
+    media_type = row["media_type"] if row["kind"] != "text" else "text/plain; charset=utf-8"
+    ascii_name = row["name"].encode("ascii", "replace").decode().replace('"', "'").replace("?", "_")
+    disposition = "attachment" if request.query_params.get("download") else "inline"
+    headers = {"Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+               "Content-Disposition": f'{disposition}; filename="{ascii_name}"', "Cache-Control": "private, max-age=3600"}
+    return FileResponse(path, media_type=media_type, headers=headers)
+
+
 @page()
 async def conversation_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
@@ -772,12 +870,20 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
     subteam = form.get("subteam") if form.get("subteam") in s.settings.subteams else None
+    project_id = None
+    if str(form.get("project_id") or "").isdigit():
+        project = s.projects.active(int(form["project_id"]))
+        if project is None:
+            await form.close()
+            return JSONResponse({"ok": False, "error": "That project was archived. Start the chat from New chat "
+                                                      "instead.", "code": "invalid"}, status_code=400)
+        project_id = project["id"]
     try:
         files = await read_uploads(form, s.settings)
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam, files=files,
-                                       explainer=form.get("explainer") == "1")
+                                       explainer=form.get("explainer") == "1", project_id=project_id)
     if not outcome.ok:
         return json_error(outcome)
     return JSONResponse({"ok": True, "url": f"/c/{outcome.conversation_id}", "message_id": outcome.message_id})
@@ -847,7 +953,8 @@ def _queue_items(s: Services) -> list[dict[str, Any]]:
         items.append({
             "id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
             "avatar": m["author_avatar"], "title": m["conversation_title"] or "New chat",
-            "subteam": m["conversation_subteam"], "html": plain_html(m["content"]), "raw": m["content"],
+            "subteam": m["conversation_subteam"], "project": m["project_name"],
+            "html": plain_html(m["content"]), "raw": m["content"],
             "waited": waited(m["created_at"]), "files": file_views(s, m["id"]),
             "explainer": bool(m["wants_explainer"]),
             "previous": (prev["content"][:200] + ("…" if len(prev["content"]) > 200 else "")) if prev else None,
@@ -912,6 +1019,8 @@ async def audit_page(request: Request, viewer: Viewer) -> Response:
         link = None
         if row["target_type"] == "conversation":
             link = f"/c/{row['target_id']}"
+        elif row["target_type"] == "project":
+            link = f"/projects/{row['target_id']}"
         elif row["target_type"] == "message" and details.get("conversation"):
             link = f"/c/{details['conversation']}#m{row['target_id']}"
         entries.append({"time": fmt_time(s.store, row["created_at"]), "actor": row["actor_name"] or "System",
@@ -1141,6 +1250,14 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/chats", chats),
         Route("/chats/new", new_chat, methods=["POST"]),
         Route("/recents", recents_page),
+        Route("/projects", projects_page),
+        Route("/projects/new", project_create, methods=["POST"]),
+        Route("/projects/{pid:int}", project_page),
+        Route("/projects/{pid:int}/edit", _project_action("edit"), methods=["POST"]),
+        Route("/projects/{pid:int}/files", _project_action("files"), methods=["POST"]),
+        Route("/projects/{pid:int}/files/{fid:int}", project_file),
+        Route("/projects/{pid:int}/files/{fid:int}/remove", _project_action("remove"), methods=["POST"]),
+        Route("/projects/{pid:int}/archive", _project_action("archive"), methods=["POST"]),
         Route("/artifacts", artifacts_page),
         Route("/artifacts/{mid:int}/{n:int}", artifact_page),
         *[Route(f"/{key}", coming_soon(key)) for key in COMING_SOON],

@@ -127,6 +127,35 @@ MIGRATIONS: list[str] = [
     ALTER TABLE attachments_new RENAME TO attachments;
     CREATE INDEX idx_attachments_message ON attachments(message_id, id);
     """,
+    # Version 5: projects, which group chats and give them shared instructions and reference files
+    """
+    CREATE TABLE projects (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        instructions TEXT NOT NULL DEFAULT '',
+        created_by INTEGER REFERENCES users(id),
+        archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE project_files (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'image')),
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        added_by INTEGER REFERENCES users(id),
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_project_files ON project_files(project_id, id);
+
+    ALTER TABLE conversations ADD COLUMN project_id INTEGER REFERENCES projects(id);
+    CREATE INDEX idx_conversations_project ON conversations(project_id, updated_at DESC);
+    """,
 ]
 
 

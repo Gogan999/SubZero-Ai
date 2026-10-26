@@ -52,12 +52,16 @@ def files_line(files: list[tuple[str, int]], link: str) -> str:
 
 def approval_card(*, message_id: int, student_name: str, subteam: str | None, title: str | None,
                   text: str, link: str, previous_reply: str | None = None,
-                  files: list[tuple[str, int]] | None = None, explainer: bool = False) -> list[dict]:
+                  files: list[tuple[str, int]] | None = None, explainer: bool = False,
+                  project: str | None = None) -> list[dict]:
     blocks: list[dict] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": card_header(student_name, subteam, title, link)}},
         {"type": "section", "text": {"type": "mrkdwn", "text": card_body(text, link)}},
     ]
     extras = []
+    if project:
+        extras.append({"type": "mrkdwn", "text": "In the project *" + _mrkdwn_escape(project) + "*, so Claude also "
+                                                 "reads its instructions and files"})
     if files:
         extras.append({"type": "mrkdwn", "text": files_line(files, link)})
     if explainer:

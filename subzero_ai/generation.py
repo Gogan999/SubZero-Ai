@@ -11,6 +11,7 @@ from .attachments import Attachments
 from .config import Settings
 from .db import Database, utcnow
 from .live import Broker, Tasks
+from .projects import Projects
 from .store import COMPLETE, ERROR, SENT_TO_CLAUDE, STREAMING, Store
 
 log = logging.getLogger("subzero.generation")
@@ -76,6 +77,15 @@ def build_context(rows, up_to_id: int, files: dict[int, list[dict]] | None = Non
     return out
 
 
+def with_project_files(context: list[dict], blocks: list[dict]) -> list[dict]:
+    """Put a project's reference files in front of the chat's first message."""
+    if not blocks or not context:
+        return context
+    first = context[0]["content"]
+    first_blocks = [{"type": "text", "text": first}] if isinstance(first, str) else list(first)
+    return [{"role": "user", "content": blocks + first_blocks}, *context[1:]]
+
+
 def _join(first: str | list[dict], second: str | list[dict]) -> str | list[dict]:
     if isinstance(first, str) and isinstance(second, str):
         return first + "\n\n" + second
@@ -103,8 +113,9 @@ def detect_alert(head: str, final: bool) -> tuple[bool, bool, str]:
 
 class ReplyRunner:
     def __init__(self, *, settings: Settings, db: Database, store: Store, claude, broker: Broker, tasks: Tasks,
-                 attachments: Attachments):
+                 attachments: Attachments, projects: Projects | None = None):
         self.settings = settings
+        self.projects = projects
         self.attachments = attachments
         self.db = db
         self.store = store
@@ -137,6 +148,11 @@ class ReplyRunner:
         files = {mid: self.attachments.claude_blocks(rows)
                  for mid, rows in self.attachments.for_conversation(conversation_id).items()}
         context = build_context(self.store.messages(conversation_id), user_message_id, files)
+        project = self.projects.get(conv["project_id"]) if self.projects and conv["project_id"] else None
+        extras: list[str] = []
+        if project is not None:
+            extras.append(self.projects.system_text(project))
+            context = with_project_files(context, self.projects.claude_blocks(project["id"]))
         asked = self.store.message(user_message_id)
         wants_explainer = bool(asked and asked["wants_explainer"])
         # Explainers and questions with files attached (usually code reviews) get more effort, and explainers
@@ -147,6 +163,8 @@ class ReplyRunner:
             max_tokens, effort = self.settings.max_tokens_chat, self.settings.effort_high
         else:
             max_tokens, effort = self.settings.max_tokens_chat, self.settings.effort_default
+        if wants_explainer:
+            extras.append(EXPLAINER_REQUEST)
         parts: list[str] = []
         self._live[reply_id] = parts
         head = ""
@@ -164,7 +182,7 @@ class ReplyRunner:
         try:
             async for event in self.claude.stream(
                 model=conv["model"], system=load_system_prompt(self.settings), messages=context,
-                max_tokens=max_tokens, effort=effort, system_extra=EXPLAINER_REQUEST if wants_explainer else None,
+                max_tokens=max_tokens, effort=effort, system_extra="\n\n".join(extras) or None,
             ):
                 if event.kind == "text":
                     if decided:

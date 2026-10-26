@@ -174,7 +174,7 @@ here in the same PR.
 - Brand (hidden on phones, where the mobile bar shows it).
 - `.side-new`: New chat, with a 28px brand-filled circle around the plus icon.
   This is the sidebar's one brand-filled element.
-- `.side-nav`: Chats (`/recents`), Projects, Artifacts, Code. Each row is
+- `.side-nav`: Chats (`/recents`), Projects (`/projects`), Artifacts (`/artifacts`), Code. Each row is
   icon + label, with a `.soon` pill or `.count` pushed right. The current page
   gets `aria-current="page"` and a `--frost` fill.
 - Mentor tools (mentors only, with an `.side-label` heading): Review with the
@@ -291,6 +291,15 @@ card (the focus ring goes around the card); the chat link sits above it so it
 stays clickable. Each artifact gets its own page (`artifact.html`) showing the
 same `.explainer` frame as the chat, taller, under a `.crumbs` link back to the
 gallery.
+
+### Projects
+
+The Projects page reuses the artifact cards (with a `.card-text` description
+line). A project page is `.project-layout`: the project's composer
+(`.composer.big`) and its chat list on the left, and the `.project-side`
+"Project knowledge" card on the right (below on phones under 900px) with the
+instructions, files and, for mentors, the upload form and an "Edit project"
+disclosure. Archiving uses `.button.reject` with `data-confirm`.
 
 ### Composer
 

@@ -12,7 +12,7 @@
       <a class="side-new" href="/chats" {% if path == '/chats' %}aria-current="page"{% endif %}><span class="side-new-mark">{{ icon('plus') }}</span> New chat</a>
       <ul class="side-nav">
         <li><a href="/recents" {% if path.startswith('/recents') %}aria-current="page"{% endif %}>{{ icon('chats') }} Chats</a></li>
-        <li><a href="/projects" {% if path.startswith('/projects') %}aria-current="page"{% endif %}>{{ icon('projects') }} Projects <span class="soon">Soon</span></a></li>
+        <li><a href="/projects" {% if path.startswith('/projects') %}aria-current="page"{% endif %}>{{ icon('projects') }} Projects</a></li>
         <li><a href="/artifacts" {% if path.startswith('/artifacts') %}aria-current="page"{% endif %}>{{ icon('artifacts') }} Artifacts</a></li>
         <li><a href="/code" {% if path.startswith('/code') %}aria-current="page"{% endif %}>{{ icon('code') }} Code <span class="soon">Soon</span></a></li>
       </ul>
