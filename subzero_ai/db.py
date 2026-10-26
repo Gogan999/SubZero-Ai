@@ -162,6 +162,12 @@ MIGRATIONS: list[str] = [
     ALTER TABLE users ADD COLUMN notify_dm INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE users ADD COLUMN default_subteam TEXT;
     """,
+    # Version 7: composer tools (response style, extended thinking, web search, research) and what they found
+    """
+    ALTER TABLE messages ADD COLUMN options TEXT;
+    ALTER TABLE messages ADD COLUMN web_searches INTEGER;
+    ALTER TABLE messages ADD COLUMN sources TEXT;
+    """,
 ]
 
 

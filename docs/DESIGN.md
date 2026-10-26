@@ -184,6 +184,15 @@ here in the same PR.
   then a link to the full Chats page. Pills show Private and "n waiting".
 - The account button (`.account`) pinned to the bottom: avatar, name, role.
 
+### Composer tools menu
+
+The tools menu holds `.menu-group` fieldsets: Tools (Web search, Research,
+Extended thinking as checkboxes, each a `.menu-item.toggle` with a
+`.menu-hint` line) and Response style (radios). Tools that are on show as
+`.tool-chip`s beside the button. A reply that searched the web ends with a
+`.sources` disclosure listing the pages, opened in a new tab with
+`rel="noopener noreferrer nofollow"`.
+
 ### Appearance switch
 
 In the account menu, `.theme-switch` holds a `.segmented` group of three
@@ -315,8 +324,8 @@ disclosure. Archiving uses `.button.reject` with `data-confirm`.
 - One `.composer-box` (14px radius, `--field-edge` border, `--sheet` fill)
   holds the borderless textarea, the chosen files as removable chips, and the
   `.composer-bar`. The focus ring goes around the whole box.
-- The bar: on the left, the attach button (plus icon) and the tools menu
-  (placeholders for web search, extended thinking and so on); on the right,
+- The bar: on the left, the attach button (plus icon), the tools menu and
+  `.tool-chip`s naming the tools that are on; on the right,
   the model (a picker for mentors, the model's name for students) and the
   Send button. Students' Send button says "Send for review". There is no
   explainer switch: Claude makes an interactive explainer when asked in words

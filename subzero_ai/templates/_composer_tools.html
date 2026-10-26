@@ -1,4 +1,5 @@
 {% from "_icons.html" import icon %}
+{% set research_ok = viewer.is_mentor or settings.research_for_students %}
 <div class="composer-tools">
   <label class="tool-button attach" title="Attach files: code, text, PNG/JPG screenshots, or videos">
     <input class="visually-hidden" type="file" name="files" multiple accept="{{ accept }}" data-files
@@ -7,16 +8,29 @@
     {{ icon('plus') }}<span class="visually-hidden">Attach files</span>
   </label>
   <details class="tools-menu" data-menu>
-    <summary class="tool-button" aria-label="More tools" title="More tools">{{ icon('tools') }}</summary>
+    <summary class="tool-button" aria-label="Tools" title="Tools">{{ icon('tools') }}</summary>
     <div class="menu">
-      <p class="menu-note">These claude.ai tools aren't available here yet.</p>
+      <fieldset class="menu-group">
+        <legend>Tools</legend>
+        {% if settings.web_search_enabled %}
+        <label class="menu-item toggle"><input type="checkbox" name="search" value="1" data-tool="Web search"> {{ icon('globe') }} <span>Web search<span class="menu-hint">Look up datasheets, rules and specs</span></span></label>
+        {% if research_ok %}
+        <label class="menu-item toggle"><input type="checkbox" name="research" value="1" data-tool="Research"> {{ icon('research') }} <span>Research<span class="menu-hint">A report built from many searches</span></span></label>
+        {% endif %}
+        {% endif %}
+        <label class="menu-item toggle"><input type="checkbox" name="think" value="1" data-tool="Extended thinking"> {{ icon('think') }} <span>Extended thinking<span class="menu-hint">Think longer on hard problems</span></span></label>
+      </fieldset>
+      <fieldset class="menu-group">
+        <legend>{{ icon('style') }} Response style</legend>
+        <label class="menu-item toggle"><input type="radio" name="style" value="" checked data-tool=""> <span>Normal</span></label>
+        {% for value, label in styles %}
+        <label class="menu-item toggle"><input type="radio" name="style" value="{{ value }}" data-tool="{{ label }}"> <span>{{ label }}</span></label>
+        {% endfor %}
+      </fieldset>
       <ul>
-        <li><span class="menu-item" aria-disabled="true">{{ icon('globe') }} Web search <span class="soon">Soon</span></span></li>
-        <li><span class="menu-item" aria-disabled="true">{{ icon('think') }} Extended thinking <span class="soon">Soon</span></span></li>
-        <li><span class="menu-item" aria-disabled="true">{{ icon('research') }} Research <span class="soon">Soon</span></span></li>
-        <li><span class="menu-item" aria-disabled="true">{{ icon('style') }} Response styles <span class="soon">Soon</span></span></li>
         <li><span class="menu-item" aria-disabled="true">{{ icon('plug') }} Connectors (GitHub, Drive) <span class="soon">Soon</span></span></li>
       </ul>
     </div>
   </details>
+  <ul class="tool-chips" data-tool-chips aria-label="Tools on for this message" hidden></ul>
 </div>

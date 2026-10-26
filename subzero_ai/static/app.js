@@ -422,6 +422,33 @@
     addFiles(form, Array.from(event.dataTransfer.files));
   });
 
+  // Composer tools: the ones switched on show as chips next to the tools button, so it's clear what's on
+  function updateToolChips(form) {
+    const chips = form?.querySelector("[data-tool-chips]");
+    if (!chips) return;
+    const on = [...form.querySelectorAll("input[data-tool]:checked")].map((input) => input.dataset.tool).filter(Boolean);
+    chips.replaceChildren(...on.map((label) => {
+      const item = document.createElement("li");
+      item.className = "tool-chip";
+      item.textContent = label;
+      return item;
+    }));
+    chips.hidden = on.length === 0;
+  }
+
+  document.addEventListener("change", (event) => {
+    const input = event.target;
+    if (!input.matches?.("input[data-tool]")) return;
+    const form = input.closest("form");
+    // Research already searches the web, so the two don't need to be on together
+    if (input.checked && input.name === "research") form.querySelector('input[name="search"]')?.click();
+    if (input.checked && input.name === "search") {
+      const research = form.querySelector('input[name="research"]');
+      if (research?.checked) research.checked = false;
+    }
+    updateToolChips(form);
+  });
+
   // Filters and the model picker apply as soon as they change.
   document.addEventListener("change", (event) => {
     if (event.target.matches?.("[data-autosubmit]")) event.target.form?.requestSubmit();
@@ -528,6 +555,11 @@
       const wasNear = nearBottom();
       if (!appendChunk(body, data.seq, data.text)) refreshMessage(data.id);
       scrollDown(wasNear);
+    });
+    events.addEventListener("searching", (e) => {
+      const data = JSON.parse(e.data);
+      const typing = document.getElementById("m" + data.id)?.querySelector(".typing");
+      if (typing) typing.textContent = `Searching the web for “${data.query}”…`;
     });
     events.addEventListener("title", (e) => {
       const title = JSON.parse(e.data).title;

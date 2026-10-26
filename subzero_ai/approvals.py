@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from . import slack_cards
 from .attachments import MAX_FILES, Attachments, Prepared
 from .config import Settings
 from .db import Database, utcnow
-from .generation import ReplyRunner, asks_for_explainer
+from .generation import ReplyRunner, asks_for_explainer, load_options, options_labels
 from .live import Broker, Tasks
 from .roles import is_builtin_user, is_excluded_account
 from .store import (
@@ -93,7 +94,8 @@ class ApprovalService:
     # ---------------------------------------------------------------- submit
     async def submit(self, viewer: Viewer, text: str, conversation_id: int | None = None,
                      subteam: str | None = None, files: list[Prepared] | tuple = (),
-                     explainer: bool = False, project_id: int | None = None) -> Outcome:
+                     explainer: bool = False, project_id: int | None = None,
+                     options: dict | None = None) -> Outcome:
         text = clean_text(text)
         # There's no explainer switch any more: asking for one in words is how a student requests it
         explainer = explainer or asks_for_explainer(text)
@@ -129,6 +131,12 @@ class ApprovalService:
                 return Outcome(False, "limit", f"You've reached today's limit of {self.settings.limit_approved_per_day} "
                                                "approved messages. It resets at midnight.")
 
+        options = options or {}
+        if (options.get("search") or options.get("research")) and self.runner.searches_left() <= 0:
+            return Outcome(False, "limit", "Web search isn't available right now: the team has used today's "
+                                           "searches, or an admin turned it off. Turn off Web search in the tools "
+                                           "menu and send again.")
+
         status = PENDING if needs_review else AUTO
         with self.db.transaction() as conn:
             if conversation_id is None:
@@ -139,7 +147,8 @@ class ApprovalService:
                               target_id=conversation_id, conn=conn)
             message_id = self.store.add_message(conn, conversation_id=conversation_id, author_id=viewer.id,
                                                 role="user", content=text, status=status,
-                                                wants_explainer=explainer)
+                                                wants_explainer=explainer,
+                                                options=json.dumps(options) if options else None)
             for item in files:
                 self.attachments.save(conn, message_id, item)
             details = {"conversation": conversation_id, "status": status, "chars": len(text)}
@@ -147,6 +156,8 @@ class ApprovalService:
                 details["files"] = [f"{item.name} ({item.size:,} bytes)" for item in files if item.kind != "frame"]
             if explainer:
                 details["explainer"] = True
+            if options:
+                details["tools"] = options_labels(options)
             self.db.audit("message_sent", actor_id=viewer.id, target_type="message", target_id=message_id,
                           details=details, conn=conn)
 
@@ -169,7 +180,8 @@ class ApprovalService:
             text=msg["content"], link=self.link(conv["id"]),
             previous_reply=previous["content"] if previous else None,
             files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id) if f["kind"] != "frame"],
-            explainer=bool(msg["wants_explainer"]), project=conv["project_name"])
+            explainer=bool(msg["wants_explainer"]), project=conv["project_name"],
+            tools=options_labels(load_options(msg["options"])))
         try:
             posted = await self.slack.post_message(self.settings.slack_approvals_channel,
                                                    slack_cards.card_fallback_text(msg["author_name"]), blocks)

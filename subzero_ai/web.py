@@ -53,7 +53,7 @@ from .auth import LoginError, SlackLogin, profile_from_claims
 from .claude import ClaudeClient, FakeClaude
 from .config import Settings, load_settings
 from .db import Database
-from .generation import ReplyRunner
+from .generation import STYLES, ReplyRunner, clean_options, load_options, options_labels
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
@@ -247,9 +247,15 @@ def dev_login_allowed(request: Request) -> bool:
     return services(request).settings.dev_login and is_local_request(request)
 
 
+def tool_options(s: Services, viewer: Viewer, form) -> dict:
+    return clean_options(form, can_research=viewer.is_mentor or s.settings.research_for_students,
+                         search_on=s.settings.web_search_enabled)
+
+
 def upload_context() -> dict[str, Any]:
     return {"accept": ACCEPT, "max_files": MAX_FILES, "max_file_bytes": MAX_FILE_BYTES,
-            "max_message_bytes": MAX_MESSAGE_BYTES, "max_frames": MAX_FRAMES_PER_VIDEO}
+            "max_message_bytes": MAX_MESSAGE_BYTES, "max_frames": MAX_FRAMES_PER_VIDEO,
+            "styles": [(key, label) for key, (label, _) in STYLES.items()]}
 
 
 async def read_uploads(form, settings: Settings) -> list[Prepared]:
@@ -408,7 +414,8 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
         "author_is_mentor": m["author_role"] in ("mentor", "admin"),
         "reviewer_name": m["reviewer_name"], "note": m["review_note"], "error": m["error"],
         "reply_to": m["reply_to"], "can_review": False, "can_withdraw": False, "can_retry": False,
-        "original": None, "tag": None, "tag_kind": None, "files": [], "explainer": False,
+        "original": None, "tag": None, "tag_kind": None, "files": [], "explainer": False, "tools": [],
+        "sources": [], "searches": m["web_searches"] or 0,
     }
     if m["role"] == "assistant":
         if m["status"] == STREAMING:
@@ -418,6 +425,10 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
             view["html"] = markdown_html(m["content"], explainer_base=f"/c/{conv['id']}/x/{m['id']}")
         else:
             view["html"] = plain_html(m["content"])
+        try:
+            view["sources"] = json.loads(m["sources"] or "[]")
+        except ValueError:
+            pass
         view["can_retry"] = (m["status"] == ERROR and m["id"] == last_id
                              and (viewer.is_mentor or conv["owner_id"] == viewer.id))
         return view
@@ -425,6 +436,7 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
     view["raw"] = m["content"]
     view["files"] = file_views(s, m["id"], files)
     view["explainer"] = bool(m["wants_explainer"])
+    view["tools"] = options_labels(load_options(m["options"]))
     status = m["status"]
     reviewer = m["reviewer_name"] or "a mentor"
     if status == PENDING:
@@ -931,7 +943,8 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam, files=files,
-                                       explainer=form.get("explainer") == "1", project_id=project_id)
+                                       explainer=form.get("explainer") == "1", project_id=project_id,
+                                       options=tool_options(s, viewer, form))
     if not outcome.ok:
         return json_error(outcome)
     return JSONResponse({"ok": True, "url": f"/c/{outcome.conversation_id}", "message_id": outcome.message_id})
@@ -946,7 +959,8 @@ async def send_message(request: Request, viewer: Viewer) -> Response:
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), conversation_id=request.path_params["cid"],
-                                       files=files, explainer=form.get("explainer") == "1")
+                                       files=files, explainer=form.get("explainer") == "1",
+                                       options=tool_options(s, viewer, form))
     if not outcome.ok:
         return json_error(outcome)
     return JSONResponse({"ok": True, "message_id": outcome.message_id})
@@ -1004,7 +1018,7 @@ def _queue_items(s: Services) -> list[dict[str, Any]]:
             "subteam": m["conversation_subteam"], "project": m["project_name"],
             "html": plain_html(m["content"]), "raw": m["content"],
             "waited": waited(m["created_at"]), "files": file_views(s, m["id"]),
-            "explainer": bool(m["wants_explainer"]),
+            "explainer": bool(m["wants_explainer"]), "tools": options_labels(load_options(m["options"])),
             "previous": (prev["content"][:200] + ("…" if len(prev["content"]) > 200 else "")) if prev else None,
         })
     return items

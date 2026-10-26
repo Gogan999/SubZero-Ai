@@ -197,12 +197,13 @@ class Store:
     # --------------------------------------------------------------- messages
     def add_message(self, conn: sqlite3.Connection, *, conversation_id: int, author_id: int | None,
                     role: str, content: str, status: str, reply_to: int | None = None,
-                    model: str | None = None, wants_explainer: bool = False) -> int:
+                    model: str | None = None, wants_explainer: bool = False, options: str | None = None) -> int:
         now = utcnow()
         cur = conn.execute(
             "INSERT INTO messages (conversation_id, author_id, role, content, status, reply_to, model, "
-            "wants_explainer, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (conversation_id, author_id, role, content, status, reply_to, model, int(wants_explainer), now, now),
+            "wants_explainer, options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (conversation_id, author_id, role, content, status, reply_to, model, int(wants_explainer), options,
+             now, now),
         )
         self.touch(conn, conversation_id)
         return cur.lastrowid
@@ -280,6 +281,14 @@ class Store:
             "AND reviewed_at >= ?",
             (user_id, since),
         )
+        return row["n"]
+
+    def web_searches_today(self) -> int:
+        """Web searches the whole team's replies have used since local midnight."""
+        local_midnight = datetime.now(self.tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        since = local_midnight.astimezone(timezone.utc).isoformat(timespec="seconds")
+        row = self.db.one("SELECT COALESCE(SUM(web_searches), 0) AS n FROM messages WHERE role = 'assistant' "
+                          "AND created_at >= ?", (since,))
         return row["n"]
 
     def previous_reply(self, conversation_id: int, before_message_id: int) -> sqlite3.Row | None:

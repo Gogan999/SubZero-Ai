@@ -68,6 +68,10 @@ class Settings:
     max_tokens_explainer: int = 16000
     long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
+    # Web search costs extra for each search, so the whole team shares a daily limit
+    web_search_enabled: bool = True
+    web_search_daily_limit: int = 50
+    research_for_students: bool = False  # Research runs many searches, so it starts as mentors only
 
     # Slack
     slack_bot_token: str = ""

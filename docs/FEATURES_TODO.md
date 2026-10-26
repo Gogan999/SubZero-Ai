@@ -21,10 +21,6 @@ keeps its status tag.
 | Feature | Where the placeholder is | What it should do | Notes for building it |
 |---|---|---|---|
 | Claude Code | Sidebar, `/code` | Let Claude read the team's robot code repository, run builds and tests, and propose changes as a pull request. | The biggest item. Needs a sandboxed runner, a narrowly scoped GitHub token, and mentor approval for every step that writes. Probably mentors only at first. |
-| Web search | Composer tools menu | Let Claude look up datasheets, game rules and part specs. | API web search tool. Costs extra per search: add a daily cap and a Settings switch. Show the searches on the mentor's review card. |
-| Extended thinking | Composer tools menu | Let Claude think longer on hard problems. | API `thinking` setting. Costs more, so maybe mentors turn it on per chat, like the model switch. |
-| Research | Composer tools menu | Longer reports built from many searches. | Builds on web search. Likely mentors only because of cost. |
-| Response styles | Composer tools menu | Choose how Claude answers: concise, explanatory, step by step. | One extra system-prompt line per style, chosen per message. |
 | Connectors (GitHub, Drive) | Composer tools menu | Pull files from the team's GitHub or Google Drive into a message instead of attaching them. | OAuth per service. Pulled files show on the review card like attachments. |
 | Share | Chat header | A read-only link to a chat for people outside the team, such as a parent. | Chats are already visible to the team. Needs a revocable link and mentor approval. |
 
@@ -65,6 +61,10 @@ Not on screen yet. Add a placeholder only when work on one starts.
 
 ## Done
 
+- Composer tools menu: Web search, Research (mentors only unless an admin allows students), Extended thinking
+  and Response styles (Normal, Concise, Explanatory, Step by step). They're picked per message, shown on the
+  review card and in the queue, and approved with the message. Web search uses the API's server-side search
+  tool with a team-wide daily limit and an on/off switch in Settings; replies list the pages Claude read.
 - Appearance: Light, Dark or Auto (match the device) in the account menu, saved on the person's profile so it
   follows them to every device and draws without a flash.
 - Profile and preferences (`/profile`): name and picture from Slack, the person's subteam (tags new chats,

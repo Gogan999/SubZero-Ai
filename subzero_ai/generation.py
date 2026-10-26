@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,65 @@ EXPLAINER_WORDS = re.compile(
 
 def asks_for_explainer(text: str) -> bool:
     return bool(EXPLAINER_WORDS.search(text or ""))
+
+
+# The composer's tools. A student picks them per message, so the mentor sees them on the review card and approves
+# them with the message.
+STYLES = {
+    "concise": ("Concise", "Answer concisely: the key point first, in as few words as the question allows. "
+                           "Skip background unless it's needed."),
+    "explanatory": ("Explanatory", "Teach as you answer: explain the idea and the reasoning behind each step, "
+                                   "as a mentor would for a student meeting it for the first time."),
+    "steps": ("Step by step", "Answer as numbered steps the student can follow one at a time, with a short check "
+                              "at the end that tells them it worked."),
+}
+THINKING_EFFORT = "xhigh"  # Extended thinking: Claude thinks longer before answering
+SEARCH_USES = 5  # searches one web search reply may run
+RESEARCH_USES = 20
+RESEARCH_REQUEST = (
+    "The student asked for a Research report. Search the web several times from different angles, then write a "
+    "structured report: a short summary first, then sections with headings, and say which sources each point "
+    "comes from. Prefer official documentation, datasheets and the game manual over forums.")
+SEARCH_UNAVAILABLE = (
+    "The student asked Claude to search the web, but web search is turned off or the team has used today's "
+    "searches. Say so in one sentence, then answer from what you already know.")
+
+
+def clean_options(form, *, can_research: bool, search_on: bool) -> dict:
+    """The tools picked in the composer, from the posted form. Unknown values are dropped."""
+    options: dict = {}
+    style = str(form.get("style") or "")
+    if style in STYLES:
+        options["style"] = style
+    if form.get("think") == "1":
+        options["think"] = True
+    if search_on and form.get("search") == "1":
+        options["search"] = True
+    if search_on and can_research and form.get("research") == "1":
+        options["research"] = True
+    return options
+
+
+def options_labels(options: dict) -> list[str]:
+    """Words for the review card and the message, like ["Web search", "Concise answers"]."""
+    labels = []
+    if options.get("research"):
+        labels.append("Research report (many web searches)")
+    elif options.get("search"):
+        labels.append("Web search")
+    if options.get("think"):
+        labels.append("Extended thinking")
+    if options.get("style") in STYLES:
+        labels.append(f"{STYLES[options['style']][0]} style")
+    return labels
+
+
+def load_options(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 TITLE_SYSTEM = ("Write a title of 3 to 6 words for this robotics team chat. "
                 "Reply with the title only, with no quotes and no ending punctuation.")
@@ -155,6 +215,7 @@ class ReplyRunner:
             context = with_project_files(context, self.projects.claude_blocks(project["id"]))
         asked = self.store.message(user_message_id)
         wants_explainer = bool(asked and asked["wants_explainer"])
+        options = load_options(asked["options"] if asked else None)
         # Explainers and questions with files attached (usually code reviews) get more effort, and explainers
         # get room for a whole web page. Everyday questions stay at the default, which costs less.
         if wants_explainer:
@@ -165,6 +226,21 @@ class ReplyRunner:
             max_tokens, effort = self.settings.max_tokens_chat, self.settings.effort_default
         if wants_explainer:
             extras.append(EXPLAINER_REQUEST)
+        web_searches = 0
+        if options.get("search") or options.get("research"):
+            left = self.searches_left()
+            web_searches = min(RESEARCH_USES if options.get("research") else SEARCH_USES, left)
+            if web_searches <= 0:
+                extras.append(SEARCH_UNAVAILABLE)
+            elif options.get("research"):
+                extras.append(RESEARCH_REQUEST)
+                max_tokens, effort = max(max_tokens, self.settings.max_tokens_explainer), self.settings.effort_high
+        if options.get("think"):
+            effort = THINKING_EFFORT
+            max_tokens = max(max_tokens, self.settings.max_tokens_explainer)
+        if options.get("style") in STYLES:
+            extras.append(STYLES[options["style"]][1])
+        sources: list[dict[str, str]] = []
         parts: list[str] = []
         self._live[reply_id] = parts
         head = ""
@@ -183,6 +259,7 @@ class ReplyRunner:
             async for event in self.claude.stream(
                 model=conv["model"], system=load_system_prompt(self.settings), messages=context,
                 max_tokens=max_tokens, effort=effort, system_extra="\n\n".join(extras) or None,
+                web_searches=web_searches,
             ):
                 if event.kind == "text":
                     if decided:
@@ -194,6 +271,11 @@ class ReplyRunner:
                         if alert:
                             await self._raise_alert(conversation_id, user_message_id)
                         emit(shown)
+                elif event.kind == "search":
+                    self.broker.publish(topic, {"type": "searching", "id": reply_id, "query": event.text[:200]})
+                elif event.kind == "sources" and event.sources:
+                    known = {s["url"] for s in sources}
+                    sources += [s for s in event.sources if s["url"] not in known and s["url"].startswith("https://")]
                 elif event.kind == "usage" and event.usage:
                     usage.update({k: v for k, v in event.usage.items() if v is not None})
                 elif event.kind == "error":
@@ -214,9 +296,11 @@ class ReplyRunner:
             error = "Claude returned an empty reply."
         self.db.execute(
             "UPDATE messages SET content = ?, status = ?, error = ?, input_tokens = ?, output_tokens = ?, "
-            "cache_read_tokens = ?, updated_at = ? WHERE id = ?",
+            "cache_read_tokens = ?, web_searches = ?, sources = ?, updated_at = ? WHERE id = ?",
             (text, status, error or None, usage.get("input_tokens"), usage.get("output_tokens"),
-             usage.get("cache_read_input_tokens"), utcnow(), reply_id),
+             usage.get("cache_read_input_tokens"), usage.get("web_searches") or (1 if sources else None),
+             json.dumps([{"url": s["url"], "title": s["title"][:200]} for s in sources[:20]]) if sources else None,
+             utcnow(), reply_id),
         )
         self._live.pop(reply_id, None)
         self.broker.publish(topic, {"type": "done", "id": reply_id})
@@ -224,6 +308,11 @@ class ReplyRunner:
             self.on_result(status == COMPLETE, error)
         if status == COMPLETE and not conv["title"]:
             await self._make_title(conversation_id)
+
+    def searches_left(self) -> int:
+        if not self.settings.web_search_enabled:
+            return 0
+        return max(0, self.settings.web_search_daily_limit - self.store.web_searches_today())
 
     async def _raise_alert(self, conversation_id: int, user_message_id: int) -> None:
         """Hide the chat from the team before any of the reply is shown, then tell mentors."""

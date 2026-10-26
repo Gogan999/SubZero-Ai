@@ -205,3 +205,77 @@ class ProfileTest(FeatureTest):
         dms = len(self.h.slack.dms)
         self.approve(mid)
         self.assertEqual(len(self.h.slack.dms), dms, "no Slack message once turned off")
+
+
+class ComposerToolsTest(FeatureTest):
+    def call(self):
+        return [c for c in self.h.claude.calls if c.get("kind") != "complete"][-1]
+
+    def test_tools_are_approved_with_the_message(self):
+        mid, cid = self.start("What's the stall current of a Kraken X60?", search="1", think="1", style="concise")
+        self.assertIn("Asked for: Web search, Extended thinking, Concise style", self.kim.get("/queue").text)
+        self.assertIn("Asked for: Web search, Extended thinking, Concise style", str(self.h.slack.posts[-1]["blocks"]))
+        self.assertEqual(self.h.claude.calls, [])
+        self.approve(mid)
+        call = self.call()
+        self.assertEqual(call["web_searches"], 5)
+        self.assertEqual(call["effort"], "xhigh")
+        self.assertIn("Answer concisely", call["system_extra"])
+        reply = self.h.reply_to(mid)
+        self.assertEqual(reply["web_searches"], 1)
+        page = self.ava.get(f"/c/{cid}").text
+        self.assertIn("Searched the web (1 search)", page)
+        self.assertIn('href="https://docs.wpilib.org/en/stable/" target="_blank" rel="noopener noreferrer nofollow"', page)
+
+    def test_plain_messages_use_no_tools(self):
+        mid, _ = self.start("What is a PID loop?")
+        self.approve(mid)
+        call = self.call()
+        self.assertEqual((call["web_searches"], call["effort"], call["system_extra"]), (0, "medium", None))
+
+    def test_research_is_for_mentors_unless_switched_on(self):
+        self.assertNotIn('name="research"', self.ava.get("/chats").text)
+        self.assertIn('name="research"', self.kim.get("/chats").text)
+        mid, _ = self.start("Compare swerve modules", research="1")
+        self.approve(mid)
+        self.assertEqual(self.call()["web_searches"], 0, "a student can't sneak research in")
+        self.h.settings.research_for_students = True
+        mid, _ = self.start("Compare swerve modules again", research="1")
+        self.approve(mid)
+        self.assertEqual(self.call()["web_searches"], 20)
+        self.assertIn("Research report", self.call()["system_extra"])
+
+    def test_daily_search_limit_and_switch(self):
+        self.h.settings.web_search_daily_limit = 1
+        mid, _ = self.start("Search one", search="1")
+        self.approve(mid)
+        resp = self.ava.post("/chats/new", {"text": "Search two", "search": "1"})
+        self.assertEqual(resp.status_code, 429)
+        self.assertIn("today's searches", resp.json()["error"])
+        self.h.settings.web_search_daily_limit = 50
+        self.h.settings.web_search_enabled = False
+        self.assertNotIn('name="search"', self.ava.get("/chats").text)
+        mid, _ = self.start("Search three", search="1")  # dropped, not refused
+        self.approve(mid)
+        self.assertEqual(self.call()["web_searches"], 0)
+
+    def test_stream_parser_reads_searches_and_sources(self):
+        from subzero_ai.claude import ClaudeClient, parse_sse
+        lines = []
+        for event in (
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "server_tool_use", "name": "web_search", "input": {}}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"query": "Kraken'}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ' X60"}'}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "web_search_tool_result", "content": [
+                {"type": "web_search_result", "url": "https://example.com/x60", "title": "X60 specs"}]}},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9, "server_tool_use": {"web_search_requests": 1}}},
+        ):
+            lines += ["data: " + __import__("json").dumps(event), ""]
+        events = list(parse_sse(lines))
+        self.assertEqual([(e.kind, e.text) for e in events][:1], [("search", "Kraken X60")])
+        self.assertEqual(events[1].sources, [{"url": "https://example.com/x60", "title": "X60 specs"}])
+        self.assertEqual(events[2].usage["web_searches"], 1)
+        body = ClaudeClient.request_body(model="m", system="s", messages=[], max_tokens=10, web_searches=5)
+        self.assertEqual(body["tools"], [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5}])
+        self.assertNotIn("tools", ClaudeClient.request_body(model="m", system="s", messages=[], max_tokens=10))

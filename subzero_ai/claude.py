@@ -19,12 +19,17 @@ API_VERSION = "2023-06-01"
 RETRY_STATUSES = {429, 500, 502, 503, 504, 529}
 
 
+# The server-side web search tool. Claude runs the searches on Anthropic's side and cites what it used.
+WEB_SEARCH_TOOL = "web_search_20260209"
+
+
 @dataclass
 class StreamEvent:
-    kind: str  # "text", "usage", "error", or "done"
+    kind: str  # "text", "usage", "search" (a query Claude searched for), "sources", "error", or "done"
     text: str = ""
     usage: dict[str, Any] | None = None
     error: str = ""
+    sources: list[dict[str, str]] | None = None
 
 
 class ClaudeError(Exception):
@@ -35,12 +40,13 @@ def parse_sse(lines: Iterable[str]) -> Iterator[StreamEvent]:
     """Turn the Messages API event stream into StreamEvents. Thinking blocks are skipped."""
     event_name: str | None = None
     data_lines: list[str] = []
+    searches: dict[int, list[str]] = {}  # content block index -> the search query's JSON, as it streams in
     for line in lines:
         if line is None:
             continue
         if line == "":
             if data_lines:
-                yield from _events_from(event_name, "\n".join(data_lines))
+                yield from _events_from(event_name, "\n".join(data_lines), searches)
             event_name, data_lines = None, []
             continue
         if line.startswith(":"):
@@ -50,19 +56,38 @@ def parse_sse(lines: Iterable[str]) -> Iterator[StreamEvent]:
         elif line.startswith("data:"):
             data_lines.append(line[5:].lstrip())
     if data_lines:
-        yield from _events_from(event_name, "\n".join(data_lines))
+        yield from _events_from(event_name, "\n".join(data_lines), searches)
 
 
-def _events_from(event_name: str | None, data: str) -> Iterator[StreamEvent]:
+def _events_from(event_name: str | None, data: str, searches: dict[int, list[str]] | None = None) -> Iterator[StreamEvent]:
+    searches = {} if searches is None else searches
     try:
         obj = json.loads(data)
     except ValueError:
         return
     kind = obj.get("type") or event_name
-    if kind == "content_block_delta":
+    if kind == "content_block_start":
+        block = obj.get("content_block") or {}
+        if block.get("type") == "server_tool_use" and block.get("name") == "web_search":
+            searches[obj.get("index", -1)] = []
+        elif block.get("type") == "web_search_tool_result" and isinstance(block.get("content"), list):
+            found = [{"url": item.get("url", ""), "title": item.get("title") or item.get("url", "")}
+                     for item in block["content"] if item.get("type") == "web_search_result" and item.get("url")]
+            if found:
+                yield StreamEvent("sources", sources=found)
+    elif kind == "content_block_stop" and obj.get("index", -1) in searches:
+        try:
+            query = (json.loads("".join(searches.pop(obj["index"])) or "{}") or {}).get("query", "")
+        except (ValueError, AttributeError):
+            query = ""
+        if query:
+            yield StreamEvent("search", text=str(query))
+    elif kind == "content_block_delta":
         delta = obj.get("delta") or {}
         if delta.get("type") == "text_delta":
             yield StreamEvent("text", text=delta.get("text", ""))
+        elif delta.get("type") == "input_json_delta" and obj.get("index", -1) in searches:
+            searches[obj["index"]].append(delta.get("partial_json", ""))
     elif kind == "message_start":
         usage = (obj.get("message") or {}).get("usage") or {}
         yield StreamEvent("usage", usage={
@@ -75,6 +100,7 @@ def _events_from(event_name: str | None, data: str) -> Iterator[StreamEvent]:
         yield StreamEvent("usage", usage={
             "output_tokens": usage.get("output_tokens"),
             "stop_reason": (obj.get("delta") or {}).get("stop_reason"),
+            "web_searches": (usage.get("server_tool_use") or {}).get("web_search_requests"),
         })
     elif kind == "message_stop":
         yield StreamEvent("done")
@@ -101,7 +127,9 @@ class ClaudeClient:
 
     @staticmethod
     def request_body(*, model: str, system: str, messages: list[dict], max_tokens: int,
-                     effort: str | None = None, stream: bool = False, system_extra: str | None = None) -> dict[str, Any]:
+                     effort: str | None = None, stream: bool = False, system_extra: str | None = None,
+                     web_searches: int = 0) -> dict[str, Any]:
+        """web_searches: let Claude search the web up to this many times for this reply (0 means no search)."""
         body: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -114,6 +142,8 @@ class ClaudeClient:
             body["system"].append({"type": "text", "text": system_extra})
         if effort:
             body["output_config"] = {"effort": effort}
+        if web_searches:
+            body["tools"] = [{"type": WEB_SEARCH_TOOL, "name": "web_search", "max_uses": web_searches}]
         if stream:
             body["stream"] = True
         return body
@@ -144,9 +174,10 @@ class ClaudeClient:
         raise ClaudeError("Claude is busy right now. Try again in a minute.")
 
     async def stream(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
-                     effort: str | None = None, system_extra: str | None = None) -> AsyncIterator[StreamEvent]:
+                     effort: str | None = None, system_extra: str | None = None,
+                     web_searches: int = 0) -> AsyncIterator[StreamEvent]:
         body = self.request_body(model=model, system=system, messages=messages, max_tokens=max_tokens,
-                                 effort=effort, stream=True, system_extra=system_extra)
+                                 effort=effort, stream=True, system_extra=system_extra, web_searches=web_searches)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
         stop = threading.Event()
@@ -290,9 +321,10 @@ class FakeClaude:
         )
 
     async def stream(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
-                     effort: str | None = None, system_extra: str | None = None) -> AsyncIterator[StreamEvent]:
-        self.calls.append({"model": model, "system": system, "messages": messages,
-                           "max_tokens": max_tokens, "effort": effort, "system_extra": system_extra})
+                     effort: str | None = None, system_extra: str | None = None,
+                     web_searches: int = 0) -> AsyncIterator[StreamEvent]:
+        self.calls.append({"model": model, "system": system, "messages": messages, "max_tokens": max_tokens,
+                           "effort": effort, "system_extra": system_extra, "web_searches": web_searches})
         question = _last_user_text(messages)
         if "ERROR-TEST" in question:
             yield StreamEvent("error", error="Simulated failure for testing.")
@@ -310,10 +342,17 @@ class FakeClaude:
                      "Please talk to a trusted adult today, like a parent, a mentor, or your school counselor. "
                      "If you're in the US you can call or text 988 any time, and call 911 in an emergency.")
         yield StreamEvent("usage", usage={"input_tokens": sum(len(str(m["content"])) for m in messages) // 4})
+        searched = 0
+        if web_searches:
+            searched = 1
+            yield StreamEvent("search", text=" ".join(question.split()[:6]))
+            yield StreamEvent("sources", sources=[
+                {"url": "https://docs.wpilib.org/en/stable/", "title": "WPILib documentation (sample search result)"}])
         for start in range(0, len(reply), 14):
             await asyncio.sleep(self.delay)
             yield StreamEvent("text", text=reply[start:start + 14])
-        yield StreamEvent("usage", usage={"output_tokens": len(reply) // 4, "stop_reason": "end_turn"})
+        yield StreamEvent("usage", usage={"output_tokens": len(reply) // 4, "stop_reason": "end_turn",
+                                          "web_searches": searched or None})
         yield StreamEvent("done")
 
     async def complete(self, *, model: str, system: str, messages: list[dict], max_tokens: int,

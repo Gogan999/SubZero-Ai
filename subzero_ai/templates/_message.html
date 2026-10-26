@@ -11,6 +11,14 @@
   {% else %}
   <div class="msg-body prose">{{ m.html|safe }}</div>
   {% endif %}
+  {% if m.sources or m.searches %}
+  <details class="sources">
+    <summary>Searched the web{% if m.searches %} ({{ m.searches }} search{{ 'es' if m.searches != 1 else '' }}){% endif %}{% if m.sources %} · {{ m.sources|length }} source{{ 's' if m.sources|length != 1 else '' }}{% endif %}</summary>
+    <ol>
+      {% for src in m.sources %}<li><a href="{{ src.url }}" target="_blank" rel="noopener noreferrer nofollow">{{ src.title }}</a></li>{% endfor %}
+    </ol>
+  </details>
+  {% endif %}
 </li>
 {% else %}
 <li class="msg person{% if m.author_is_mentor %} by-mentor{% endif %}" id="m{{ m.id }}" data-message="{{ m.id }}" data-status="{{ m.status }}">
@@ -23,6 +31,7 @@
   <div class="msg-body plain">{{ m.html|safe }}</div>
   {% if m.files %}{% include "_files.html" %}{% endif %}
   {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
+  {% if m.tools %}<p class="asked-explainer">Asked for: {{ m.tools|join(', ') }}</p>{% endif %}
   {% if m.original %}
   <details class="original"><summary>Show what was originally sent</summary><div class="plain">{{ m.original }}</div></details>
   {% endif %}
