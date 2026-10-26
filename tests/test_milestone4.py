@@ -649,6 +649,16 @@ class PackagingTest(unittest.TestCase):
                 self.assertTrue(text.isascii(), f"{script.name} must be ASCII for Windows PowerShell 5.1")
                 self.assertNotRegex(text, r"5690|SubZero Robotics")
 
+    def test_cmd_files_explain_running_from_inside_the_zip(self):
+        # Opening a .cmd from inside the zip in Explorer copies just that file to a temp folder, so the
+        # script it runs isn't there. Each one says to extract the zip instead of failing in PowerShell.
+        for cmd in (ROOT / "packaging" / "windows" / "cmd").glob("*.cmd"):
+            text = cmd.read_text(encoding="utf-8")
+            script = re.search(r'-File "%~dp0(scripts\\[a-z-]+\.ps1)"', text).group(1)
+            self.assertIn(f'if exist "%~dp0{script}" goto run', text)
+            self.assertIn("Extract All", text)
+            self.assertLess(text.index("goto run"), text.index("powershell"))
+
 
 if __name__ == "__main__":
     unittest.main()

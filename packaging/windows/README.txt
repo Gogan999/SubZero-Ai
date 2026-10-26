@@ -2,7 +2,7 @@ SubZero AI for Windows
 ======================
 
 Install (on the mini PC)
-  1. Unzip this whole folder, for example to your Downloads folder.
+  1. Right-click SubZeroAI-windows.zip and choose Extract All. The .cmd files don't work from inside the zip.
   2. Double-click install.cmd and choose Yes when Windows asks for permission.
   3. Paste the Cloudflare Tunnel token when asked (or press Enter to add it later).
   4. Finish on the setup page that opens: http://localhost:8787/setup
