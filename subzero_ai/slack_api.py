@@ -15,10 +15,12 @@ log = logging.getLogger("subzero.slack")
 
 
 class SlackError(Exception):
-    def __init__(self, method: str, error: str):
-        super().__init__(f"Slack {method} failed: {error}")
+    def __init__(self, method: str, error: str, needed: str = ""):
+        detail = f"{error} (needs {needed})" if needed else error
+        super().__init__(f"Slack {method} failed: {detail}")
         self.method = method
         self.error = error
+        self.needed = needed  # for missing_scope, the scope Slack says is missing
 
 
 class SlackWebApi:
@@ -51,7 +53,7 @@ class SlackWebApi:
             resp.raise_for_status()
             body = resp.json()
             if not body.get("ok"):
-                raise SlackError(method, body.get("error", "unknown_error"))
+                raise SlackError(method, body.get("error", "unknown_error"), body.get("needed") or "")
             return body
         raise SlackError(method, "rate_limited")
 

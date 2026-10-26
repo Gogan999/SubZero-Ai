@@ -3,7 +3,8 @@
 # 1. Replace ai.yourdomain.org below with the app's real address.
 # 2. Go to https://api.slack.com/apps, choose Create New App, then From a manifest.
 # 3. Pick the team's workspace, choose YAML, paste this whole file, and create the app.
-# 4. Click Install to Workspace, then follow README.md, "Connect Slack".
+# 4. Click Install to Workspace, then follow README.md, "Setup page".
+# README.md, "Slack permissions", explains each scope and how to reinstall after changing them.
 display_information:
   name: SubZero AI
   description: Mentor-approved Claude for the robotics team
@@ -21,10 +22,10 @@ oauth_config:
     - https://ai.yourdomain.org/auth/slack/callback
   scopes:
     bot:
-      - chat:write    # post and update approval cards, send DMs
+      - chat:write    # post and update approval cards, send DMs and private notes
       - im:write      # open a DM with a student
-      - groups:read   # read #claude-approvals membership to know who's a mentor
-      - users:read    # names and pictures; spot removed accounts
+      - groups:read   # list private channels for setup; read #claude-approvals members to know who's a mentor
+      - users:read    # names and pictures; spot removed, guest, and bot accounts
     user:
       - openid        # Sign in with Slack
       - email

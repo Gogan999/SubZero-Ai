@@ -70,7 +70,7 @@ Running install.cmd again repairs an install and keeps all data.
 The setup page only opens on the mini PC, saves each step as you go, and locks when you finish.
 
 1. **Address.** Enter `https://ai.yourdomain.org`.
-2. **Slack app.** Click **Create Slack app**, choose the team workspace, and confirm. In the new app, click **Install to Workspace**, then generate an app-level token with the `connections:write` scope. Paste the bot token, app-level token, client ID, and client secret. The page checks them with Slack before saving.
+2. **Slack app.** Click **Create Slack app**, choose the team workspace, and confirm. In the new app, click **Install to Workspace**, then generate an app-level token with the `connections:write` scope. The permissions the app asks for, and why, are listed in [Slack permissions](#slack-permissions). Paste the bot token, app-level token, client ID, and client secret. The page checks them with Slack before saving.
 3. **Approvals channel.** Create the private **#claude-approvals** channel in Slack, add the coaches and mentors, and type `/invite @SubZero AI` in it. Reload the setup page and pick the channel.
 4. **Claude.** At platform.claude.com, create a workspace named **SubZero AI**, set its monthly spend limit, and create an API key inside it. Paste it; the page sends one tiny test request.
 5. **Admins.** Paste the coaches' Slack member IDs (click a person's name in Slack, open the three-dot menu, and choose **Copy member ID**).
@@ -79,6 +79,32 @@ The setup page only opens on the mini PC, saves each step as you go, and locks w
 ### 4. Check it
 
 Open `https://ai.yourdomain.org` on a phone and sign in with Slack as a coach. Open **Settings**: the health list should say Slack is working, and a backup should already be listed. Check the per-student limits, the retention period, and the three system prompt layers (ask a coach to review the safety layer). Then send a test message as a student and approve it in #claude-approvals.
+
+## Slack permissions
+
+The **Create Slack app** button and `slack-manifest.yaml` set all of these up for you. If you made the app by hand, or the setup page or check-settings.cmd says a permission is missing, compare the app's **OAuth & Permissions** page with this list.
+
+**Bot token scopes** (the `xoxb-` token)
+
+| Scope | Why SubZero AI needs it | Slack calls |
+| --- | --- | --- |
+| `chat:write` | Posts approval cards in #claude-approvals, updates them after a mentor decides, and sends DMs and private notes. | `chat.postMessage`, `chat.update`, `chat.postEphemeral` |
+| `im:write` | Opens a DM with a student or admin (approval results, health alerts). | `conversations.open` |
+| `groups:read` | Lists the private channels the bot was invited to (so the setup page can offer #claude-approvals) and reads that channel's members to know who the mentors are. Without it you get "missing_scope" after inviting the bot to the channel. | `conversations.list`, `conversations.members` |
+| `users:read` | Looks up names and profile pictures, and spots deactivated, guest, and bot accounts. | `users.info` |
+
+**User token scopes** (Sign in with Slack): `openid`, `email`, `profile`. These let a student sign in and give the app their Slack ID, name, email, and workspace. The app never keeps the user token.
+
+**App-level token** (the `xapp-` token, made under **Basic Information → App-Level Tokens**): `connections:write`, for Socket Mode. Socket Mode is how button clicks and approval forms reach the mini PC without opening a port.
+
+No scope is needed for `auth.test` (checking the token) or `views.open` (the reject-reason form).
+
+**After adding a scope**, Slack doesn't apply it until the app is reinstalled:
+
+1. Open the app at [api.slack.com/apps](https://api.slack.com/apps), go to **OAuth & Permissions**, and add the scope under **Bot Token Scopes** (or **User Token Scopes**).
+2. Click **Reinstall to Workspace** at the top of that page (Slack shows a yellow banner asking for it) and allow.
+3. The bot token usually stays the same, but copy the **Bot User OAuth Token** again to be sure. If it changed, paste it on the Settings page or the setup page (or in `SLACK_BOT_TOKEN` in config.env) and restart SubZero AI.
+4. Run **check-settings.cmd** to confirm Slack is working.
 
 ## Running it
 

@@ -156,8 +156,11 @@ def _slack_reason(exc: Exception) -> str:
             "invalid_auth": "The token is wrong or was revoked. Copy it again from the Slack app settings.",
             "not_authed": "The token is missing.",
             "account_inactive": "The app was uninstalled. Reinstall it to the workspace.",
-            "missing_scope": "The Slack app is missing a permission. Recreate it from slack-manifest.yaml.",
         }
+        if exc.error == "missing_scope":
+            scope = f" ({exc.needed})" if exc.needed else ""
+            return (f"The Slack app is missing a permission{scope}. Add it under OAuth & Permissions "
+                    "(see README.md, \"Slack permissions\"), then reinstall the app and copy the new bot token.")
         return hints.get(exc.error, f"Slack said: {exc.error}")
     return str(exc)
 
