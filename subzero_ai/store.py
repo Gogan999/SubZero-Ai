@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from .db import Database, utcnow
 
 MENTOR_ROLES = {"mentor", "admin"}
+THEMES = ("system", "light", "dark")
 
 # Statuses a user message can have
 PENDING = "pending"
@@ -36,6 +37,7 @@ class Viewer:
     name: str
     role: str
     avatar_url: str | None = None
+    theme: str = "system"
 
     @property
     def is_mentor(self) -> bool:
@@ -85,6 +87,16 @@ class Store:
 
     def set_user_role(self, user_id: int, role: str) -> None:
         self.db.execute("UPDATE users SET role = ? WHERE id = ? AND role != ?", (role, user_id, role))
+
+    def save_preferences(self, user_id: int, *, theme: str | None = None, notify_dm: bool | None = None,
+                         default_subteam: str | None | bool = False) -> None:
+        """Change any of the given preferences. default_subteam=None clears it; False leaves it alone."""
+        if theme is not None:
+            self.db.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, user_id))
+        if notify_dm is not None:
+            self.db.execute("UPDATE users SET notify_dm = ? WHERE id = ?", (int(notify_dm), user_id))
+        if default_subteam is not False:
+            self.db.execute("UPDATE users SET default_subteam = ? WHERE id = ?", (default_subteam, user_id))
 
     def deactivate_user(self, user_id: int) -> None:
         self.db.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
@@ -198,7 +210,8 @@ class Store:
     def message(self, message_id: int) -> sqlite3.Row | None:
         return self.db.one(
             "SELECT m.*, a.name AS author_name, a.avatar_url AS author_avatar, a.slack_user_id AS author_slack_id, "
-            "a.role AS author_role, r.name AS reviewer_name, r.slack_user_id AS reviewer_slack_id "
+            "a.role AS author_role, a.notify_dm AS author_notify_dm, r.name AS reviewer_name, "
+            "r.slack_user_id AS reviewer_slack_id "
             "FROM messages m LEFT JOIN users a ON a.id = m.author_id LEFT JOIN users r ON r.id = m.reviewed_by "
             "WHERE m.id = ?",
             (message_id,),

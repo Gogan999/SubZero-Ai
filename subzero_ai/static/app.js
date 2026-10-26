@@ -129,6 +129,21 @@
       return;
     }
 
+    // Appearance: switch at once, then save it to the person's profile
+    const themeButton = event.target.closest("[data-theme-form] button[name=theme]");
+    if (themeButton) {
+      event.preventDefault();
+      const theme = themeButton.value;
+      const root = document.documentElement;
+      if (theme === "system") root.removeAttribute("data-theme");
+      else root.dataset.theme = theme;
+      document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", theme === "system" ? "light dark" : theme);
+      themeButton.parentElement.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === themeButton)));
+      const result = await post("/profile/theme", { theme });
+      if (!result.ok) window.alert(result.error || "Couldn't save that. Reload the page and try again.");
+      return;
+    }
+
     const toggle = event.target.closest("[data-sidebar-toggle]");
     if (toggle) {
       setSidebar(!document.body.classList.contains("sidebar-open"));

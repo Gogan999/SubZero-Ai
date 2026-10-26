@@ -156,6 +156,12 @@ MIGRATIONS: list[str] = [
     ALTER TABLE conversations ADD COLUMN project_id INTEGER REFERENCES projects(id);
     CREATE INDEX idx_conversations_project ON conversations(project_id, updated_at DESC);
     """,
+    # Version 6: each person's preferences (Profile and preferences, Appearance)
+    """
+    ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'system';
+    ALTER TABLE users ADD COLUMN notify_dm INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE users ADD COLUMN default_subteam TEXT;
+    """,
 ]
 
 

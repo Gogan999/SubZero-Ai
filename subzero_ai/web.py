@@ -84,6 +84,7 @@ from .store import (
     REJECTED,
     STREAMING,
     WITHDRAWN,
+    THEMES,
     Store,
     Viewer,
 )
@@ -131,7 +132,7 @@ def short_text(text: str, limit: int = 60) -> str:
     return cut.rstrip(" ,.;:-") + "…"
 
 
-SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|projects(?:/\d+)?|queue|audit|settings|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|projects(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -230,7 +231,7 @@ async def current_viewer(request: Request) -> Viewer | None:
     if role != row["role"]:
         s.store.set_user_role(row["id"], role)
     return Viewer(id=row["id"], slack_user_id=row["slack_user_id"], name=row["name"], role=role,
-                  avatar_url=row["avatar_url"])
+                  avatar_url=row["avatar_url"], theme=row["theme"])
 
 
 def is_local_request(request: Request) -> bool:
@@ -695,6 +696,49 @@ async def artifact_page(request: Request, viewer: Viewer) -> Response:
                   chat_url=f"/c/{conv['id']}#m{msg['id']}", time=fmt_time(s.store, msg["created_at"]))
 
 
+# --------------------------------------------------------------------------- profile
+@page()
+async def profile_page(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    row = s.store.user(viewer.id)
+    needs_review = (not viewer.is_mentor) or s.settings.mentors_need_approval
+    usage = None
+    if needs_review and not viewer.is_mentor:
+        usage = {"approved": s.store.count_approved_today(viewer.id), "daily": s.settings.limit_approved_per_day,
+                 "waiting": s.store.count_pending_for(viewer.id), "max_waiting": s.settings.limit_pending_per_student}
+    return render(request, "profile.html", viewer, row=row, subteams=s.settings.subteams, usage=usage,
+                  slack_on=s.slack is not None, flash=request.session.pop("flash", None))
+
+
+@page()
+async def profile_save(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    form = await request.form()
+    subteam = str(form.get("default_subteam") or "")
+    s.store.save_preferences(viewer.id, notify_dm=form.get("notify_dm") == "1",
+                             default_subteam=subteam if subteam in s.settings.subteams else None)
+    theme = str(form.get("theme") or "")
+    if theme in THEMES:
+        s.store.save_preferences(viewer.id, theme=theme)
+    request.session["flash"] = "Saved your preferences."
+    return RedirectResponse("/profile", status_code=303)
+
+
+@page()
+async def theme_save(request: Request, viewer: Viewer) -> Response:
+    """Appearance, from the account menu. The script applies it at once; without the script the page reloads."""
+    s = services(request)
+    form = await request.form()
+    theme = str(form.get("theme") or "")
+    if theme not in THEMES:
+        return JSONResponse({"ok": False, "error": "Pick light, dark or system."}, status_code=400)
+    s.store.save_preferences(viewer.id, theme=theme)
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"ok": True})
+    back = str(form.get("next") or "/chats")
+    return RedirectResponse(back if SAFE_NEXT.fullmatch(back) else "/chats", status_code=303)
+
+
 # --------------------------------------------------------------------------- projects
 def project_views(s: Services, archived: bool = False) -> list[dict[str, Any]]:
     return [{"id": p["id"], "name": p["name"], "description": p["description"], "chats": p["chat_count"],
@@ -870,6 +914,10 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
     subteam = form.get("subteam") if form.get("subteam") in s.settings.subteams else None
+    if subteam is None:
+        # The new-chat page has no subteam picker; the person's default from Profile and preferences fills it in
+        default = s.store.user(viewer.id)["default_subteam"]
+        subteam = default if default in s.settings.subteams else None
     project_id = None
     if str(form.get("project_id") or "").isdigit():
         project = s.projects.active(int(form["project_id"]))
@@ -916,7 +964,7 @@ def _review_action(kind: str):
             if role != viewer.role:
                 s.store.set_user_role(viewer.id, role)
                 viewer = Viewer(id=viewer.id, slack_user_id=viewer.slack_user_id, name=viewer.name, role=role,
-                                avatar_url=viewer.avatar_url)
+                                avatar_url=viewer.avatar_url, theme=viewer.theme)
         if kind == "approve":
             text = form.get("text")
             outcome = await s.approvals.approve(viewer, mid, edited_text=str(text) if text is not None else None)
@@ -1250,6 +1298,9 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/chats", chats),
         Route("/chats/new", new_chat, methods=["POST"]),
         Route("/recents", recents_page),
+        Route("/profile", profile_page),
+        Route("/profile", profile_save, methods=["POST"]),
+        Route("/profile/theme", theme_save, methods=["POST"]),
         Route("/projects", projects_page),
         Route("/projects/new", project_create, methods=["POST"]),
         Route("/projects/{pid:int}", project_page),

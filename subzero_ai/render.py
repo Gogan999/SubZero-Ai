@@ -169,6 +169,9 @@ def plain_html(text: str) -> str:
 
 
 def pygments_css() -> str:
+    """Light colors, then dark ones for a dark device (unless the person picked Light) or a picked Dark,
+    the same way app.css switches its tokens."""
     light = HtmlFormatter(style="default").get_style_defs(".code pre")
-    dark = HtmlFormatter(style="monokai").get_style_defs(".code pre")
-    return light + "\n@media (prefers-color-scheme: dark) {\n" + dark + "\n}\n"
+    dark_device = HtmlFormatter(style="monokai").get_style_defs(':root:not([data-theme="light"]) .code pre')
+    dark_picked = HtmlFormatter(style="monokai").get_style_defs(':root[data-theme="dark"] .code pre')
+    return light + "\n@media (prefers-color-scheme: dark) {\n" + dark_device + "\n}\n" + dark_picked + "\n"

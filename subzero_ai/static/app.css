@@ -25,8 +25,10 @@
   --sidebar: 288px;
 }
 
+/* Dark tokens: used when the device is dark (unless the person picked Light in Appearance), or when they
+   picked Dark. The two blocks must match. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --ink: #e4ecf2;
     --ink-2: #a3b3c1;
     --paper: #0e1922;
@@ -44,6 +46,24 @@
     --muted-bg: #1b2a36;
     --field-edge: #62788a;
   }
+}
+:root[data-theme="dark"] {
+  --ink: #e4ecf2;
+  --ink-2: #a3b3c1;
+  --paper: #0e1922;
+  --sheet: #15232f;
+  --rule: #2a3b49;
+  --frost: #1c2d3b;
+  --brand: #5aa3d8;
+  --brand-hover: #79b6e3;
+  --brand-ink: #071520;
+  --focus: #7cc4ff;
+  --pending: #f3c86c; --pending-bg: #3a2c0d; --pending-edge: #a57a1c;
+  --approved: #8fd4a9; --approved-bg: #12301f;
+  --rejected: #f0a39b; --rejected-bg: #3a1716;
+  --held: #c3b5f2; --held-bg: #2a2147;
+  --muted-bg: #1b2a36;
+  --field-edge: #62788a;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -386,6 +406,22 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .audit th { background: var(--muted-bg); font-weight: 650; }
 .audit .details { display: grid; gap: .2rem; color: var(--ink-2); }
 .audit .details .plain { margin-top: .25rem; padding: .4rem .6rem; background: var(--muted-bg); border-radius: 6px; color: var(--ink); }
+
+/* Appearance switch in the account menu, and the Profile page */
+.theme-switch { display: grid; gap: .35rem; padding: .45rem .6rem; }
+.theme-label { display: flex; align-items: center; gap: .6rem; font-size: .92rem; }
+.segmented { display: grid; grid-template-columns: repeat(3, 1fr); gap: .2rem; padding: .2rem; background: var(--muted-bg); border-radius: 8px; }
+.segmented button { font: inherit; font-size: .85rem; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); cursor: pointer; }
+.segmented button:hover { color: var(--ink); }
+.segmented button[aria-pressed="true"] { background: var(--sheet); color: var(--ink); font-weight: 600; }
+.profile-card { display: flex; align-items: center; gap: .9rem; }
+.profile-card .avatar { width: 48px; height: 48px; font-size: 1.2rem; }
+.profile-card p { margin: 0; }
+.profile-name { font-weight: 650; }
+fieldset.field { border: 0; margin: 0; padding: 0; }
+fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-bottom: .3rem; }
+.radio { display: flex; align-items: center; gap: .5rem; min-height: 32px; }
+.radio input { width: 1.1rem; height: 1.1rem; accent-color: var(--brand); margin: 0; }
 
 /* Settings and setup ------------------------------------------------------------------- */
 .panel { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1.25rem; margin-top: 1.25rem; scroll-margin-top: 1rem; }

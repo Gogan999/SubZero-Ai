@@ -163,3 +163,45 @@ class ProjectsTest(FeatureTest):
         self.assertEqual(self.ava.get(f"/projects/{pid + 1}/files/{fid}").status_code, 404)
         self.kim.post(f"/projects/{pid}/files/{fid}/remove")
         self.assertEqual(self.ava.get(f"/projects/{pid}/files/{fid}").status_code, 404)
+
+
+class ProfileTest(FeatureTest):
+    def test_appearance_is_saved_and_drawn_on_the_page(self):
+        page = self.ava.get("/chats").text
+        self.assertIn('<html lang="en">', page)
+        self.assertIn('content="light dark"', page)
+        self.assertIn('action="/profile/theme"', page)
+        self.assertEqual(self.ava.post("/profile/theme", {"theme": "dark"}).json(), {"ok": True})
+        page = self.ava.get("/chats").text
+        self.assertIn('<html lang="en" data-theme="dark">', page)
+        self.assertIn('<meta name="color-scheme" content="dark">', page)
+        self.assertIn('value="dark" aria-pressed="true"', page)
+        self.assertNotIn("data-theme", self.ben.get("/chats").text.split("<head>")[0], "it's per person")
+        self.assertEqual(self.ava.post("/profile/theme", {"theme": "neon"}).status_code, 400)
+        resp = self.ava.post("/profile/theme", {"theme": "light", "next": "/artifacts"},
+                             headers={"Accept": "text/html"}, follow_redirects=False)
+        self.assertEqual(resp.headers["location"], "/artifacts")
+        resp = self.ava.post("/profile/theme", {"theme": "light", "next": "//evil.example"},
+                             headers={"Accept": "text/html"}, follow_redirects=False)
+        self.assertEqual(resp.headers["location"], "/chats")
+        css = self.ava.get("/assets/code.css").text
+        self.assertIn(':root[data-theme="dark"] .code pre', css)
+
+    def test_preferences(self):
+        page = self.ava.get("/profile").text
+        self.assertIn("Approved today", page, "students see how many messages they have left")
+        self.assertNotIn("Approved today", self.kim.get("/profile").text)
+        self.ava.post("/profile", {"default_subteam": "Programming", "theme": "system", "notify_dm": "1"})
+        mid, cid = self.start("How do I tune a flywheel?")
+        self.assertEqual(self.h.services.store.conversation(cid)["subteam"], "Programming")
+
+        dms = len(self.h.slack.dms)
+        self.approve(mid)
+        self.assertEqual(len(self.h.slack.dms), dms + 1)
+        self.ava.post("/profile", {"default_subteam": "Not a subteam"})  # notify_dm unchecked
+        user = self.ava.user
+        self.assertEqual((user["default_subteam"], user["notify_dm"]), (None, 0))
+        mid, _ = self.start("And a shooter?")
+        dms = len(self.h.slack.dms)
+        self.approve(mid)
+        self.assertEqual(len(self.h.slack.dms), dms, "no Slack message once turned off")

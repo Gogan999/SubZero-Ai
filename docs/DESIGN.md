@@ -184,6 +184,13 @@ here in the same PR.
   then a link to the full Chats page. Pills show Private and "n waiting".
 - The account button (`.account`) pinned to the bottom: avatar, name, role.
 
+### Appearance switch
+
+In the account menu, `.theme-switch` holds a `.segmented` group of three
+buttons (Light, Dark, Auto) with `aria-pressed`. The pressed one gets a
+`--sheet` fill on the `--muted-bg` track. The script applies the theme at once
+and saves it; without the script the form posts and the page reloads.
+
 ### Menus
 
 Pop-up menus (the account menu, the composer's tools menu) are `<details
@@ -394,11 +401,14 @@ Target: WCAG 2.2 level AA.
 
 ## 8. Dark mode
 
-- The site follows the device setting via `prefers-color-scheme`, and
-  `<meta name="color-scheme" content="light dark">` keeps form controls and
-  scrollbars matched.
-- Dark mode is a set of token overrides in one `@media
-  (prefers-color-scheme: dark)` block. Components must not have their own dark
+- The site follows the device setting via `prefers-color-scheme` unless the
+  person picks Light or Dark under Appearance (account menu or Profile). The
+  choice is saved on their profile and drawn as `data-theme` on `<html>` and in
+  `<meta name="color-scheme">`, so there's no flash of the wrong theme.
+- Dark mode is a set of token overrides, written twice: under `@media
+  (prefers-color-scheme: dark)` for `:root:not([data-theme="light"])`, and for
+  `:root[data-theme="dark"]`. Keep the two blocks identical. `/assets/code.css`
+  switches the Pygments colors the same way. Components must not have their own dark
   rules; if something looks wrong in dark mode, fix or add a token.
 - Dark surfaces are deep blue-gray, never pure black. Dark text is off-white,
   never pure white. Brand and status colors get lighter in dark mode so they
@@ -463,10 +473,8 @@ Each should be fixed in its own small PR.
    border that shows where a field is. The `--field-edge` token now exists and
    the Settings and setup forms use it; switch these older fields to it too and
    keep `--rule` for dividers.
-2. **No manual theme switch.** claude.ai lets people pick light, dark or
-   system. Add a `data-theme` attribute on `<html>` with the dark tokens also
-   applied under `:root[data-theme="dark"]`, and a small switch in the top bar,
-   remembered per browser.
+2. ~~No manual theme switch.~~ Fixed: Appearance in the account menu sets
+   `data-theme` on `<html>` (see [Dark mode](#8-dark-mode)).
 3. **Spacing and type sizes aren't tokens.** Sizes are written as literal
    `rem` values. Once the scale in sections 3 and 4 settles, turn them into
    `--space-*` and `--text-*` tokens.

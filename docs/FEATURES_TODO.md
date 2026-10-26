@@ -27,8 +27,6 @@ keeps its status tag.
 | Response styles | Composer tools menu | Choose how Claude answers: concise, explanatory, step by step. | One extra system-prompt line per style, chosen per message. |
 | Connectors (GitHub, Drive) | Composer tools menu | Pull files from the team's GitHub or Google Drive into a message instead of attaching them. | OAuth per service. Pulled files show on the review card like attachments. |
 | Share | Chat header | A read-only link to a chat for people outside the team, such as a parent. | Chats are already visible to the team. Needs a revocable link and mentor approval. |
-| Profile and preferences | Account menu | Display name, default subteam, Slack DM notifications on or off. | Store on the `users` row. |
-| Appearance | Account menu | Light, dark or match the device. | Known gap 2 in `docs/DESIGN.md`: `data-theme` on `<html>`, remembered per browser. |
 
 The model name in the composer is not a placeholder: students see which model
 answers, and mentors get a picker there (or in the chat header when reading
@@ -63,11 +61,15 @@ Not on screen yet. Add a placeholder only when work on one starts.
 ### Team and mentor side
 
 - **Memory**: facts about the team's robot that Claude remembers across chats, edited by mentors like the prompt layers in Settings.
-- **Usage for students**: how many messages they have left today, in the account menu.
 - **Mentor dashboard**: approval times, busiest subteams, most-asked topics.
 
 ## Done
 
+- Appearance: Light, Dark or Auto (match the device) in the account menu, saved on the person's profile so it
+  follows them to every device and draws without a flash.
+- Profile and preferences (`/profile`): name and picture from Slack, the person's subteam (tags new chats,
+  since the new-chat page has no picker), Slack DMs about reviews on or off, appearance, and for students
+  how many messages they have left today.
 - Projects (`/projects`): mentors make a project per mechanism or subsystem with a description, instructions
   for Claude and up to 20 reference files (code, text, PNG/JPG). Everyone can read them and start chats in the
   project; Claude gets the instructions after the safety rules and the files before the first message. Only

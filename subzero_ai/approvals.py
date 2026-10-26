@@ -320,7 +320,7 @@ class ApprovalService:
                                                 slack_cards.card_fallback_text(msg["author_name"], outcome), blocks)
             except Exception:
                 log.exception("Couldn't update the Slack card for message %s", message_id)
-        if outcome in (APPROVED, EDITED, REJECTED) and self.slack is not None:
+        if outcome in (APPROVED, EDITED, REJECTED) and self.slack is not None and msg["author_notify_dm"]:
             text = slack_cards.dm_text(outcome, title=conv["title"], link=link, mentor_name=msg["reviewer_name"],
                                        reason=msg["review_note"])
             try:
