@@ -90,6 +90,12 @@ class Settings:
     reminder_minutes: int = 120
     show_pending_to_team: bool = False
     show_rejected_to_team: bool = False
+    # After a mentor approves a message in a chat, the student's next messages in that chat go straight to
+    # Claude for this many minutes. Each one sent restarts the clock. 0 turns the window off.
+    approval_window_minutes: int = 5
+    always_review_slack_ids: frozenset[str] = frozenset()  # students who never get the approval window
+    screener_enabled: bool = True  # a small model checks each message in the window; anything it flags waits
+    model_screener: str = "claude-haiku-5-5"
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200

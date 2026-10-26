@@ -13,7 +13,11 @@
   <ul>
     <li>When you send a message, it waits for a mentor. You'll get a Slack DM when they act on it.</li>
     <li>A mentor can approve it, edit it before Claude sees it, reject it with a reason, or follow up with you in person.</li>
+    {% if settings.approval_window_minutes %}
+    <li>Once a mentor approves a message, your follow-ups in that chat go straight to Claude while you keep chatting. If you stop for {{ settings.approval_window_minutes }} minute{{ 's' if settings.approval_window_minutes != 1 }}, the next one waits for a mentor again.{% if settings.screener_enabled %} A small AI model checks each of those follow-ups first, and anything it isn't sure about waits for a mentor.{% endif %} Messages with files always wait, and mentors can see every message you send.</li>
+    {% else %}
     <li>Every follow-up message needs its own approval.</li>
+    {% endif %}
     <li>Mentors' own messages go straight to Claude.</li>
   </ul>
 

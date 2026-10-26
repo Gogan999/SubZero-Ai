@@ -381,6 +381,18 @@ class Milestone3FlowTest(unittest.TestCase):
         self.assertEqual(video.status_code, 206, "videos answer range requests so they can be played and seeked")
         self.assertEqual(video.headers["content-type"], "video/mp4")
 
+    def test_old_pictures_are_not_resent_forever(self):
+        from subzero_ai import generation
+        frames = [("frames", (f"clip.mp4@{i}.jpg", png_bytes(), "image/jpeg")) for i in range(8)]
+        resp = self.send_with(self.kim, {"text": "first"}, [("files", ("clip.mp4", MP4, "video/mp4")), *frames])
+        cid = int(resp.json()["url"].rsplit("/", 1)[1])
+        with mock.patch.object(generation, "HISTORY_IMAGES", 5):
+            self.send_with(self.kim, {"text": "second"}, [("files", ("shot.png", png_bytes(), "image/png"))], cid=cid)
+        images = [b for m in self.last_stream()["messages"] if isinstance(m["content"], list)
+                  for b in m["content"] if b["type"] == "image"]
+        self.assertEqual(len(images), 1, "only the newest message's picture; the 8 old stills are over budget")
+        self.assertIn("isn't sent again", json.dumps(self.last_stream()["messages"]))
+
     def test_a_video_without_stills_says_so(self):
         resp = self.send_with(self.ava, {}, [("files", ("clip.mov", MP4, "video/quicktime"))])
         self.approve(resp.json()["message_id"])

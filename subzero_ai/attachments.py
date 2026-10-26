@@ -209,8 +209,9 @@ class Attachments:
     def read(self, row: sqlite3.Row) -> bytes:
         return self.path(row).read_bytes()
 
-    def claude_blocks(self, rows: list[sqlite3.Row]) -> list[dict]:
-        """Content blocks for the Messages API: text files in <file> tags, images as base64."""
+    def claude_blocks(self, rows: list[sqlite3.Row], *, images: bool = True) -> list[dict]:
+        """Content blocks for the Messages API: text files in <file> tags, images as base64.
+        With images=False (older messages, see generation.py), pictures become a short note instead."""
         blocks: list[dict] = []
         for row in rows:
             name = row["name"].replace('"', "'")
@@ -227,6 +228,10 @@ class Attachments:
                 continue
             if row["kind"] == "frame":
                 blocks.append({"type": "text", "text": f"Still frame: {name}"})
+            if row["kind"] in ("image", "frame") and not images:
+                blocks.append({"type": "text", "text": f'<file name="{name}">(Image shown earlier in the chat; '
+                                                      "it isn't sent again.)</file>"})
+                continue
             try:
                 data = self.read(row)
             except OSError:

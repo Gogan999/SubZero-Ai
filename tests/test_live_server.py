@@ -36,7 +36,7 @@ class LiveServerTest(unittest.TestCase):
         cls.port = free_port()
         settings = load_settings(search_cwd=False, data_dir=cls.tmp, dev_login=True,
                                  public_url=f"http://127.0.0.1:{cls.port}", slack_approvals_channel="CAPPROVALS",
-                                 slack_team_id="TDEV")
+                                 slack_team_id="TDEV", approval_window_minutes=0)
         cls.slack = FakeSlack()
         cls.app = create_app(settings, slack=cls.slack, claude=FakeClaude(delay=0.01), background=False)
         config = uvicorn.Config(cls.app, host="127.0.0.1", port=cls.port, log_level="warning",

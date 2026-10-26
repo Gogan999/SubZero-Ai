@@ -127,7 +127,11 @@ MIGRATIONS: list[str] = [
     ALTER TABLE attachments_new RENAME TO attachments;
     CREATE INDEX idx_attachments_message ON attachments(message_id, id);
     """,
-    # Version 5: projects, which group chats and give them shared instructions and reference files
+    # Version 5: the approval window and pre-screen
+    """
+    ALTER TABLE messages ADD COLUMN screen_note TEXT;
+    """,
+    # Version 6: projects, which group chats and give them shared instructions and reference files
     """
     CREATE TABLE projects (
         id INTEGER PRIMARY KEY,
@@ -156,13 +160,13 @@ MIGRATIONS: list[str] = [
     ALTER TABLE conversations ADD COLUMN project_id INTEGER REFERENCES projects(id);
     CREATE INDEX idx_conversations_project ON conversations(project_id, updated_at DESC);
     """,
-    # Version 6: each person's preferences (Profile and preferences, Appearance)
+    # Version 7: each person's preferences (Profile and preferences, Appearance)
     """
     ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'system';
     ALTER TABLE users ADD COLUMN notify_dm INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE users ADD COLUMN default_subteam TEXT;
     """,
-    # Version 7: composer tools (response style, extended thinking, web search, research) and what they found
+    # Version 8: composer tools (response style, extended thinking, web search, research) and what they found
     """
     ALTER TABLE messages ADD COLUMN options TEXT;
     ALTER TABLE messages ADD COLUMN web_searches INTEGER;

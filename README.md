@@ -1,6 +1,6 @@
 # SubZero AI
 
-A claude.ai-style chat for a high school robotics team. Students ask Claude about code, mechanisms, physics, and materials. Every student message waits for a mentor to approve it in Slack before Claude sees it, and the whole team can read approved chats.
+A claude.ai-style chat for a high school robotics team. Students ask Claude about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
 This is version 0.4.1: all four milestones of the build plan.
 
@@ -119,7 +119,7 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 | **recovery-code.cmd** | Makes a new recovery code (the old one stops working). |
 | **uninstall.cmd** | Removes the app and its service. The data folder is kept. |
 
-- **Backups.** Every night at 2:00 AM the app copies the database, attached files, and changed prompts into a zip in `C:\ProgramData\SubZeroAI\backups` and keeps 14 days. For an off-site copy, set `BACKUP_DIR` in config.env to a folder that OneDrive or Google Drive syncs (the app's service account needs permission to write there). Backups leave out config.env, because it holds the API key and Slack tokens; keep your own copy of it somewhere safe.
+- **Backups.** Every night at 2:00 AM the app copies the database, attached files, and changed prompts into a zip in `C:\ProgramData\SubZeroAI\backups` and keeps 14 days. For an off-site copy, set `BACKUP_DIR` in config.env to a folder that OneDrive or Google Drive syncs (the app's service account needs permission to write there). Backups leave out config.env, because it holds the API key and Slack tokens; keep your own copy of it somewhere safe. They also leave out attached videos (each backup is a full copy, so 14 days would hold 14 copies of every clip); the still frames Claude saw are kept, and a restore keeps the videos already on disk. Copy `files\*.mp4`, `*.mov` and `*.webm` yourself if you need them off the PC.
 - **Retention.** Chats with no activity for 730 days (this season and the next) are deleted after the nightly backup. Change it, or set 0 to keep chats forever, on the Settings page.
 - **Reboots and Windows updates.** Both services start on their own after a restart, with nobody signed in.
 - **Health.** The Settings page shows the Slack connection, Claude API status, the last backup, and whether an update is out. If Slack or Claude calls fail for 15 minutes, admins get a Slack DM, and another when it works again. Cloudflare's dashboard shows whether the tunnel is up. `http://localhost:8787/healthz` answers with the same status for scripts.
@@ -164,7 +164,7 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 
 | | Students | Mentors | Admins |
 | --- | --- | --- | --- |
-| Start and continue their own chats | Yes, each message waits for review | Yes, messages go straight to Claude | Yes |
+| Start and continue their own chats | Yes, messages wait for review (see the approval window) | Yes, messages go straight to Claude | Yes |
 | Read the team's chats | Approved messages and replies | Everything | Everything |
 | Withdraw their own waiting message | Yes | Yes | Yes |
 | Approve, edit, reject, handle privately | No | Yes | Yes |
@@ -174,6 +174,9 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 - **Other students don't see messages that are waiting or rejected.** This is safer than the plan's original wording, because a message that needs handling privately is never shown to the team. To show them, set `SHOW_PENDING_TO_TEAM=1` or `SHOW_REJECTED_TO_TEAM=1`.
 - One message per chat can wait at a time. Each student can have 3 waiting messages and 25 approved messages per day; the count resets at midnight.
 - If a card waits 2 hours, the app posts one reminder in the card's Slack thread.
+- **Approval window**: after a mentor approves a message, the student's follow-ups in that chat go straight to Claude until they stop chatting for 5 minutes (each message sent restarts the clock). The first message of every chat, messages with files, and anything after a rejection, a "handle privately", or a MENTOR ALERT still wait. Admins can change the minutes, turn it off with 0, and list students who always wait, under Settings, Approval window.
+- **Screener**: inside the window, a small model (Haiku 5.5) reads each message first. Only a clear "safe" lets it through; anything it flags, and every message when it can't be reached, waits for a mentor, with the reason on the card. It can be turned off on the Settings page.
+- Messages sent in the window are logged in the audit log ("message auto approved"), tagged in the chat for mentors, and listed under "Sent without review" on the Review page for the last 24 hours.
 - **MENTOR ALERT**: when Claude flags a wellbeing concern, the chat becomes private to the student and mentors before any of the reply is shown, and an alert card is posted in #claude-approvals. The student still sees Claude's reply, which points them to trusted adults and the 988 Lifeline.
 - Claude receives only approved messages and its own earlier replies: no names, emails, or Slack IDs.
 - People removed from Slack lose access within a day. Someone removed from #claude-approvals can't approve anything from that moment on.

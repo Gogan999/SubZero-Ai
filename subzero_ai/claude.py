@@ -295,7 +295,7 @@ class FakeClaude:
     """Streams a canned reply. Lets you try the whole app without an API key.
 
     Include ALERT-TEST in a message to get a reply that starts with [MENTOR ALERT],
-    or ERROR-TEST to simulate a failed request. Ask for an interactive explainer to get a sample one."""
+    or ERROR-TEST to simulate a failed request. SCREEN-FLAG and SCREEN-ERROR do the same for the pre-screen. Ask for an interactive explainer to get a sample one."""
 
     def __init__(self, delay: float = 0.02):
         self.delay = delay
@@ -358,5 +358,11 @@ class FakeClaude:
     async def complete(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
                        effort: str | None = None) -> str:
         self.calls.append({"model": model, "system": system, "messages": messages, "kind": "complete"})
+        if "Reply with one line: SAFE" in system:
+            # The pre-screen. SCREEN-FLAG gets a message flagged and SCREEN-ERROR makes the check fail.
+            question = _last_user_text(messages)
+            if "SCREEN-ERROR" in question:
+                raise ClaudeError("Simulated screener failure for testing.")
+            return "REVIEW: Flagged for testing." if "SCREEN-FLAG" in question else "SAFE"
         words = _last_user_text(messages).split()
         return " ".join(words[:6]).strip(".,:;!?") or "New chat"
