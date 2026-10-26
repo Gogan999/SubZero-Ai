@@ -1,8 +1,9 @@
 {% from "_icons.html" import icon %}
 <div class="composer-tools">
-  <label class="tool-button attach" title="Attach files: code, text, or PNG/JPG screenshots">
+  <label class="tool-button attach" title="Attach files: code, text, PNG/JPG screenshots, or videos">
     <input class="visually-hidden" type="file" name="files" multiple accept="{{ accept }}" data-files
-      data-max-files="{{ max_files }}" data-max-bytes="{{ max_file_bytes }}" {% if waiting %}disabled{% endif %}>
+      data-max-files="{{ max_files }}" data-max-bytes="{{ max_file_bytes }}"
+      data-max-total="{{ max_message_bytes }}" data-max-frames="{{ max_frames }}" {% if waiting %}disabled{% endif %}>
     {{ icon('plus') }}<span class="visually-hidden">Attach files</span>
   </label>
   <details class="tools-menu" data-menu>

@@ -20,6 +20,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -33,7 +34,21 @@ from starlette.templating import Jinja2Templates
 
 from . import __version__, saved_settings, setup_flow
 from .approvals import ApprovalService, Outcome
-from .attachments import ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, Attachments, Prepared, prepare, size_label
+from .attachments import (
+    ACCEPT,
+    FRAME_MAX_BYTES,
+    MAX_FILE_BYTES,
+    MAX_FILES,
+    MAX_FRAMES_PER_VIDEO,
+    MAX_MESSAGE_BYTES,
+    AttachmentError,
+    clean_name,
+    Attachments,
+    Prepared,
+    prepare,
+    prepare_frame,
+    size_label,
+)
 from .auth import LoginError, SlackLogin, profile_from_claims
 from .claude import ClaudeClient, FakeClaude
 from .config import Settings, load_settings
@@ -132,7 +147,7 @@ SAFE_NEXT = re.compile(r"/(?:chats|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
-       "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
+       "media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
 
 
 @dataclass
@@ -242,7 +257,8 @@ def dev_login_allowed(request: Request) -> bool:
 
 
 def upload_context() -> dict[str, Any]:
-    return {"accept": ACCEPT, "max_files": MAX_FILES, "max_file_bytes": MAX_FILE_BYTES}
+    return {"accept": ACCEPT, "max_files": MAX_FILES, "max_file_bytes": MAX_FILE_BYTES,
+            "max_message_bytes": MAX_MESSAGE_BYTES, "max_frames": MAX_FRAMES_PER_VIDEO}
 
 
 async def read_uploads(form, settings: Settings) -> list[Prepared]:
@@ -252,13 +268,48 @@ async def read_uploads(form, settings: Settings) -> list[Prepared]:
         if len(uploads) > MAX_FILES:
             raise AttachmentError(f"You can attach up to {MAX_FILES} files to one message.")
         prepared = []
+        total = 0
         for upload in uploads:
             data = await upload.read(MAX_FILE_BYTES + 1)
+            total += len(data)
+            if total > MAX_MESSAGE_BYTES:
+                raise AttachmentError(f"Those files add up to more than {MAX_MESSAGE_BYTES // (1024 * 1024)} MB. "
+                                      "Send fewer or smaller files with this message.")
             prepared.append(await asyncio.to_thread(prepare, upload.filename, data,
                                                     max_text_bytes=settings.max_text_file_kb * 1024))
-        return prepared
+        return await _with_frames(form, prepared)
     finally:
         await form.close()  # delete the temporary copies of the uploads
+
+
+async def _with_frames(form, prepared: list[Prepared]) -> list[Prepared]:
+    """Still frames the browser took from each video (named "<video name>@<seconds>"), placed right after their
+    video. Frames for a video that wasn't sent, or past the per-video limit, are dropped."""
+    frames: dict[str, list[Prepared]] = {}
+    for upload in form.getlist("frames"):
+        if not hasattr(upload, "read"):
+            continue
+        raw_name, _, seconds = (getattr(upload, "filename", "") or "").rpartition("@")
+        video_name = clean_name(raw_name)
+        target = next((p for p in prepared if p.kind == "video" and p.name == video_name), None)
+        if target is None or len(frames.get(video_name, [])) >= MAX_FRAMES_PER_VIDEO:
+            continue
+        stem = seconds.rsplit(".", 1)[0]
+        at = int(stem) if stem.isdigit() else 0
+        data = await upload.read(FRAME_MAX_BYTES + 1)
+        if len(data) > FRAME_MAX_BYTES:
+            continue
+        try:
+            frames.setdefault(video_name, []).append(await asyncio.to_thread(prepare_frame, video_name, at, data))
+        except AttachmentError:
+            continue  # a bad frame just means Claude sees one fewer still
+    out = []
+    for item in prepared:
+        out.append(item)
+        if item.kind == "video":
+            out += frames.get(item.name, [])
+    return out
+
 
 
 def json_error(outcome: Outcome) -> JSONResponse:
@@ -349,6 +400,8 @@ def error_page(request: Request, viewer: Viewer | None, code: int, title: str, d
 
 def file_views(s: Services, message_id: int, rows=None) -> list[dict[str, Any]]:
     rows = s.attachments.for_message(message_id) if rows is None else rows
+    # Video stills are only for Claude; the page shows the video itself
+    rows = [f for f in rows if f["kind"] != "frame"]
     return [{"id": f["id"], "name": f["name"], "size": size_label(f["size"]), "kind": f["kind"],
              "url": f"/files/{f['id']}"} for f in rows]
 
@@ -778,10 +831,10 @@ async def attachment_file(request: Request, viewer: Viewer) -> Response:
     if conv is None or not s.store.can_view_message(viewer, conv, msg):
         return PlainTextResponse("Not found", status_code=404)
     try:
-        data = s.attachments.read(row)
+        path = s.attachments.path(row)
     except OSError:
         return PlainTextResponse("This file is missing from the server.", status_code=404)
-    media_type = row["media_type"] if row["kind"] == "image" else "text/plain; charset=utf-8"
+    media_type = row["media_type"] if row["kind"] != "text" else "text/plain; charset=utf-8"
     disposition = "attachment" if request.query_params.get("download") else "inline"
     ascii_name = row["name"].encode("ascii", "replace").decode().replace('"', "'").replace("?", "_")
     headers = {
@@ -790,7 +843,8 @@ async def attachment_file(request: Request, viewer: Viewer) -> Response:
         "Content-Disposition": f'{disposition}; filename="{ascii_name}"',
         "Cache-Control": "private, max-age=3600",
     }
-    return Response(data, media_type=media_type, headers=headers)
+    # FileResponse answers range requests, which browsers (Safari above all) need to play and seek a video
+    return FileResponse(path, media_type=media_type, headers=headers)
 
 
 @page(require="admin")
@@ -949,7 +1003,7 @@ class LimitBody:
     @staticmethod
     async def _too_big(send):
         response = JSONResponse({"ok": False, "error": f"That's too much to send at once. Attach up to {MAX_FILES} "
-                                                       "files of up to 5 MB each."}, status_code=413)
+                                                       "files of up to 50 MB each, and less than 90 MB in all."}, status_code=413)
         await response({"type": "http"}, None, send)
 
 
@@ -1052,7 +1106,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
     ]
     middleware = [
         Middleware(SecurityHeaders, https=settings.https),
-        Middleware(LimitBody, max_bytes=MAX_FILES * MAX_FILE_BYTES + 1024 * 1024),
+        # The files, plus the video stills the browser adds (each a small JPEG)
+        Middleware(LimitBody, max_bytes=MAX_MESSAGE_BYTES + 10 * 1024 * 1024),
         Middleware(SessionMiddleware, secret_key=settings.session_secret, session_cookie="subzero_session",
                    max_age=14 * 24 * 3600, same_site="lax", https_only=settings.https),
     ]

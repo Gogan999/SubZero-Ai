@@ -101,7 +101,7 @@ class ApprovalService:
             if files:
                 return Outcome(False, "invalid", "Add a message saying what you'd like Claude to do with the files.")
             return Outcome(False, "invalid", "Type a message first.")
-        if len(files) > MAX_FILES:
+        if len([f for f in files if f.kind != "frame"]) > MAX_FILES:
             return Outcome(False, "invalid", f"You can attach up to {MAX_FILES} files to one message.")
         if len(text) > MAX_MESSAGE_CHARS:
             return Outcome(False, "invalid", f"That message is over {MAX_MESSAGE_CHARS:,} characters. "
@@ -143,7 +143,7 @@ class ApprovalService:
                 self.attachments.save(conn, message_id, item)
             details = {"conversation": conversation_id, "status": status, "chars": len(text)}
             if files:
-                details["files"] = [f"{item.name} ({item.size:,} bytes)" for item in files]
+                details["files"] = [f"{item.name} ({item.size:,} bytes)" for item in files if item.kind != "frame"]
             if explainer:
                 details["explainer"] = True
             self.db.audit("message_sent", actor_id=viewer.id, target_type="message", target_id=message_id,
@@ -167,7 +167,7 @@ class ApprovalService:
             message_id=message_id, student_name=msg["author_name"], subteam=conv["subteam"], title=conv["title"],
             text=msg["content"], link=self.link(conv["id"]),
             previous_reply=previous["content"] if previous else None,
-            files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id)],
+            files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id) if f["kind"] != "frame"],
             explainer=bool(msg["wants_explainer"]))
         try:
             posted = await self.slack.post_message(self.settings.slack_approvals_channel,

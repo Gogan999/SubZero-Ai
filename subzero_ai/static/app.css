@@ -312,7 +312,8 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 /* Attached files on a message */
 .files { list-style: none; margin: .6rem 0 0; padding: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem; }
 .file { display: grid; grid-template-columns: auto auto; align-items: center; column-gap: .45rem; background: var(--muted-bg); border-radius: 8px; padding: .35rem .6rem; font-size: .88rem; max-width: 100%; }
-.file.image { grid-template-columns: minmax(0, 1fr) auto; padding: .4rem; }
+.file.image, .file.video { grid-template-columns: minmax(0, 1fr) auto; padding: .4rem; }
+.file-video { grid-column: 1 / -1; display: block; width: min(420px, 100%); max-height: 320px; margin-bottom: .3rem; border-radius: 6px; background: var(--ink); }
 .file-thumb { grid-column: 1 / -1; display: block; margin-bottom: .3rem; }
 .file-thumb img { display: block; max-width: min(260px, 100%); max-height: 200px; border-radius: 6px; }
 .file-name { font-weight: 600; overflow-wrap: anywhere; }

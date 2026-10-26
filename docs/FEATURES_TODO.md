@@ -54,6 +54,7 @@ Not on screen yet. Add a placeholder only when work on one starts.
 ### Files and output
 
 - **PDF attachments** (datasheets, the game manual) and CAD exports such as STEP previews.
+- **Better video for Claude**: stills taken on the server (needs ffmpeg in the Windows package) for formats the browser can't play, such as iPhone HEVC in some browsers, and the audio track as a transcript.
 - **Artifacts beyond explainers**: documents, diagrams and code files that open in a side panel next to the chat, with versions as Claude revises them.
 - **Download a chat** as Markdown or PDF for the engineering notebook.
 
@@ -74,4 +75,5 @@ Not on screen yet. Add a placeholder only when work on one starts.
 - Greeting on the new-chat page.
 - Explainers without a switch: asking for one in words ("make a simulation…") gives the reply room for a whole page, and Claude may build one on its own when it clearly helps.
 - Model picker in the composer for mentors.
+- Video attachments (MP4, MOV, WebM) and a 50 MB per-file limit (90 MB per message, under Cloudflare's 100 MB cap). Claude can't watch video, so the browser sends it up to 8 still frames per video.
 - Attachments, interactive explainers and the mentor approval flow (versions 0.2 to 0.4).

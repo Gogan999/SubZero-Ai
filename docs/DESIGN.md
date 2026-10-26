@@ -295,6 +295,7 @@ sandboxed; never relax the sandbox for styling reasons.
   explainer switch: Claude makes an interactive explainer when asked in words
   or when one would clearly help.
 - Under the box: errors, then the AI reminder note, centered.
+- Attached videos show as a native `<video controls>` (`.file-video`) with the file name under it. The still frames sent to Claude are never shown.
 - The start page uses `.composer.big`: a taller box, not sticky, under a
   greeting ("Good evening, Ava") and a one-line lede. Nothing else goes below
   it; keep the page as bare as claude.ai's.
