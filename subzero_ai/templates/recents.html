@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Chats · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <div class="page-head">
+    <h1>Your chat history</h1>
+    <a class="button primary" href="/chats">{{ icon('plus') }} New chat</a>
+  </div>
+  <form class="search" method="get" action="/recents" role="search">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    {% if owner_filter %}<input type="hidden" name="owner" value="{{ owner_filter.id }}">{% endif %}
+    <div class="search-box">
+      {{ icon('search') }}
+      <label class="visually-hidden" for="q">Search chats</label>
+      <input id="q" name="q" type="search" placeholder="Search your chats and the team’s" value="{{ query }}">
+    </div>
+    <label class="visually-hidden" for="subteam-filter">Subteam</label>
+    <select id="subteam-filter" name="subteam" data-autosubmit>
+      <option value="">All subteams</option>
+      {% for st in subteams %}<option {% if st == subteam_filter %}selected{% endif %}>{{ st }}</option>{% endfor %}
+    </select>
+    <button class="button" type="submit">Search</button>
+  </form>
+  <nav class="tabs" aria-label="Whose chats">
+    <a href="/recents?scope=team" {% if scope != 'mine' %}aria-current="page"{% endif %}>Team</a>
+    <a href="/recents?scope=mine" {% if scope == 'mine' %}aria-current="page"{% endif %}>Mine</a>
+  </nav>
+  {% if owner_filter %}
+  <p class="filter-note">Chats started by {{ owner_filter.name }}. <a href="/recents?scope={{ scope }}">Show everyone's</a></p>
+  {% endif %}
+  <ol class="chat-rows">
+    {% for item in items %}
+    <li>
+      <a href="/c/{{ item.id }}">
+        <span class="chat-title">{{ item.title }}</span>
+        <span class="chat-meta">
+          {{ item.owner }}{% if item.subteam %}, {{ item.subteam }}{% endif %}{% if item.updated %} · <time>{{ item.updated }}</time>{% endif %}
+          {% if item.private %}<span class="pill held">Private</span>{% endif %}
+          {% if item.pending %}<span class="pill pending">{{ item.pending }} waiting</span>{% endif %}
+        </span>
+      </a>
+    </li>
+    {% else %}
+    <li class="empty-state">{% if query %}No chats match “{{ query }}”.{% elif subteam_filter or owner_filter %}No chats match these filters.{% else %}No chats yet. Start one with New chat.{% endif %}</li>
+    {% endfor %}
+  </ol>
+</section>
+{% endblock %}

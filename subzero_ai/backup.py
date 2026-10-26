@@ -29,6 +29,9 @@ NAME_RE = re.compile(r"subzero-(\d{8})-(\d{6})(?:-([a-z0-9-]+))?\.zip")
 MANIFEST = "backup.json"
 DB_NAME = "subzero.db"
 FOLDERS = ("files", "prompts")  # folders under DATA_DIR that go in each backup
+# Videos (up to 50 MB each) are left out: every backup is a full copy, so 30 days of backups would hold 30 copies
+# of every clip. The stills Claude saw are small and stay in. A restore keeps the videos already on disk.
+VIDEO_SUFFIXES = (".mp4", ".m4v", ".mov", ".webm")
 
 
 class BackupError(Exception):
@@ -63,6 +66,7 @@ def make_backup(settings: Settings, *, label: str = "", now: datetime | None = N
         _copy_database(settings.db_path, db_copy)
         schema = _schema_version(db_copy)
         file_count = 0
+        videos_left_out = 0
         try:
             with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 zf.write(db_copy, DB_NAME)
@@ -71,12 +75,17 @@ def make_backup(settings: Settings, *, label: str = "", now: datetime | None = N
                     if not root.is_dir():
                         continue
                     for path in sorted(root.rglob("*")):
-                        if path.is_file() and not path.name.endswith(".tmp"):
-                            zf.write(path, f"{folder}/{path.relative_to(root).as_posix()}")
-                            file_count += folder == "files"
+                        if not path.is_file() or path.name.endswith(".tmp"):
+                            continue
+                        if folder == "files" and path.suffix.lower() in VIDEO_SUFFIXES:
+                            videos_left_out += 1
+                            continue
+                        zf.write(path, f"{folder}/{path.relative_to(root).as_posix()}")
+                        file_count += folder == "files"
                 zf.writestr(MANIFEST, json.dumps({
                     "app_version": __version__, "schema_version": schema,
                     "created_at": now.isoformat(timespec="seconds"), "attachments": file_count,
+                    "videos_left_out": videos_left_out,
                 }, indent=2))
             os.replace(partial, final)
         finally:
@@ -231,12 +240,24 @@ def restore_backup(settings: Settings, path: Path, *, now: datetime | None = Non
                 incoming.rename(current)
             elif folder == "files":
                 current.mkdir()
+            if folder == "files" and old.exists():
+                _keep_videos(old, current)
             if old.exists():
                 shutil.rmtree(old, ignore_errors=True)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     log.info("Restored %s", path)
     return {"manifest": manifest, "safety_backup": safety}
+
+
+def _keep_videos(old: Path, current: Path) -> None:
+    """Backups leave videos out, so carry the ones on disk over into the restored files folder."""
+    for path in old.rglob("*"):
+        if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES:
+            target = current / path.relative_to(old)
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(path, target)
 
 
 def size_text(size: int) -> str:

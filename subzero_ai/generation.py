@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -15,12 +16,25 @@ from .store import COMPLETE, ERROR, SENT_TO_CLAUDE, STREAMING, Store
 log = logging.getLogger("subzero.generation")
 
 ALERT_MARK = "[MENTOR ALERT]"
+# Pictures from earlier messages re-sent with each reply (the newest message always sends all of its own)
+HISTORY_IMAGES = 20
 PACKAGE_PROMPTS = Path(__file__).parent / "prompts"
 PROMPT_FILES = ("safety.md", "team.md", "formats.md")
 
 EXPLAINER_REQUEST = (
-    "The student ticked \"Interactive explainer\" for their latest message. Include one interactive explainer "
-    "in your reply, as described in the formatting rules, plus a short explanation outside it.")
+    "The student may want an interactive explainer: their latest message mentions one or a simulation. "
+    "Include one if it fits the formatting rules, plus a short explanation outside it.")
+
+# Phrases that suggest a student wants something they can play with. A match only gives the reply room for a
+# whole page; Claude still decides. Kept narrow so FRC words like "build artifact" or "AdvantageScope
+# animation" don't count.
+EXPLAINER_WORDS = re.compile(
+    r"\b(explainers?|simulations?|simulate|interactive (graph|diagram|plot|chart|demo|model|page|explanation)s?"
+    r"|something interactive)\b", re.I)
+
+
+def asks_for_explainer(text: str) -> bool:
+    return bool(EXPLAINER_WORDS.search(text or ""))
 
 TITLE_SYSTEM = ("Write a title of 3 to 6 words for this robotics team chat. "
                 "Reply with the title only, with no quotes and no ending punctuation.")
@@ -119,11 +133,26 @@ class ReplyRunner:
         self.tasks.spawn(self._run(conversation_id, user_message_id, reply_id), name=f"reply-{reply_id}")
         return reply_id
 
+    def history_files(self, conversation_id: int, user_message_id: int) -> dict[int, list[dict]]:
+        """Attachments for each message. Images and video stills are sent for the newest message, and for
+        earlier ones only while the total stays under HISTORY_IMAGES, newest first. Sending every picture on
+        every turn would cost a lot and, past 100 images or 32 MB, the API refuses the whole request."""
+        by_message = self.attachments.for_conversation(conversation_id)
+        budget = HISTORY_IMAGES
+        out: dict[int, list[dict]] = {}
+        for mid in sorted(by_message, reverse=True):
+            rows = by_message[mid]
+            pictures = sum(1 for r in rows if r["kind"] in ("image", "frame"))
+            send = mid >= user_message_id or pictures <= budget
+            if mid < user_message_id and send:
+                budget -= pictures
+            out[mid] = self.attachments.claude_blocks(rows, images=send)
+        return out
+
     async def _run(self, conversation_id: int, user_message_id: int, reply_id: int) -> None:
         topic = f"conv:{conversation_id}"
         conv = self.store.conversation(conversation_id)
-        files = {mid: self.attachments.claude_blocks(rows)
-                 for mid, rows in self.attachments.for_conversation(conversation_id).items()}
+        files = self.history_files(conversation_id, user_message_id)
         context = build_context(self.store.messages(conversation_id), user_message_id, files)
         asked = self.store.message(user_message_id)
         wants_explainer = bool(asked and asked["wants_explainer"])

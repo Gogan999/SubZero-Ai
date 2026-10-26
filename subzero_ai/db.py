@@ -110,7 +110,24 @@ MIGRATIONS: list[str] = [
         updated_at TEXT NOT NULL
     );
     """,
-    # Version 4: the approval window and pre-screen
+    # Version 4: video attachments, and the still frames taken from them for Claude
+    """
+    CREATE TABLE attachments_new (
+        id INTEGER PRIMARY KEY,
+        message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'image', 'video', 'frame')),
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    INSERT INTO attachments_new SELECT * FROM attachments;
+    DROP TABLE attachments;
+    ALTER TABLE attachments_new RENAME TO attachments;
+    CREATE INDEX idx_attachments_message ON attachments(message_id, id);
+    """,
+    # Version 5: the approval window and pre-screen
     """
     ALTER TABLE messages ADD COLUMN screen_note TEXT;
     """,
