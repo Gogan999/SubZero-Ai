@@ -68,6 +68,8 @@ class Harness:
         options = dict(
             data_dir=self.tmp, dev_login=True, public_url="http://localhost:8787",
             slack_approvals_channel="CAPPROVALS", slack_team_id="TDEV", timezone="America/Chicago",
+            # Most tests check that every student message waits; the approval window tests turn it on.
+            approval_window_minutes=0,
         )
         options.update(overrides)
         self.settings = load_settings(search_cwd=False, **options)

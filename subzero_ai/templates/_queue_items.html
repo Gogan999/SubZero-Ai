@@ -12,6 +12,7 @@
     <div class="msg-body plain">{{ m.html|safe }}</div>
     {% if m.files %}{% include "_files.html" %}{% endif %}
     {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
+    {% if m.screen_note %}<p class="queue-context">Sent in the approval window, but the screener flagged it: {{ m.screen_note }}</p>{% endif %}
     {% include "_review_controls.html" %}
   </li>
   {% else %}

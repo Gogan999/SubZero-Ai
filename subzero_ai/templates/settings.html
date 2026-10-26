@@ -26,6 +26,7 @@
       {% if f.kind == 'int' %}inputmode="numeric"{% else %}spellcheck="false" autocapitalize="off"{% endif %} {{ aria }}>
     {% endif %}
     {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}
+    {% if item.people %}<p class="field-hint">Saved now: {{ item.people }}</p>{% endif %}
     {% if item.error %}<p class="field-error" id="e-{{ f.name }}">{{ item.error }}</p>{% endif %}
   </div>
   {% endif %}

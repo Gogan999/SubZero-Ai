@@ -127,6 +127,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE attachments_new RENAME TO attachments;
     CREATE INDEX idx_attachments_message ON attachments(message_id, id);
     """,
+    # Version 5: the approval window and pre-screen
+    """
+    ALTER TABLE messages ADD COLUMN screen_note TEXT;
+    """,
 ]
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,11 +14,13 @@ from .db import Database, utcnow
 from .generation import ReplyRunner, asks_for_explainer
 from .live import Broker, Tasks
 from .roles import is_builtin_user, is_excluded_account
+from .screener import Screener
 from .store import (
     APPROVED,
     AUTO,
     EDITED,
     ERROR,
+    GRACE,
     HELD,
     PENDING,
     REJECTED,
@@ -57,8 +60,11 @@ class Outcome:
 
 class ApprovalService:
     def __init__(self, *, settings: Settings, db: Database, store: Store, slack, broker: Broker,
-                 tasks: Tasks, runner: ReplyRunner, attachments: Attachments):
+                 tasks: Tasks, runner: ReplyRunner, attachments: Attachments, screener: Screener | None = None):
         self.settings = settings
+        self.screener = screener or Screener(settings, runner.claude)
+        # One send at a time per chat, so two quick sends can't both slip through the approval window
+        self._chat_locks: dict[int, asyncio.Lock] = {}
         self.attachments = attachments
         self.db = db
         self.store = store
@@ -106,6 +112,21 @@ class ApprovalService:
         if len(text) > MAX_MESSAGE_CHARS:
             return Outcome(False, "invalid", f"That message is over {MAX_MESSAGE_CHARS:,} characters. "
                                              "Shorten it or split it into parts.")
+        if conversation_id is None:
+            return await self._submit(viewer, text, None, subteam, files, explainer)
+        lock = self._chat_locks.setdefault(conversation_id, asyncio.Lock())
+        async with lock:
+            return await self._submit(viewer, text, conversation_id, subteam, files, explainer)
+
+    def window_applies(self, viewer: Viewer, conversation_id: int | None, files=()) -> bool:
+        """Whether this message can skip review because a mentor approved the chat a few minutes ago.
+        Messages with files always wait: a mentor hasn't seen the file."""
+        return (conversation_id is not None and not files
+                and viewer.slack_user_id not in self.settings.always_review_slack_ids
+                and self.store.window_open(conversation_id, self.settings.approval_window_minutes))
+
+    async def _submit(self, viewer: Viewer, text: str, conversation_id: int | None, subteam: str | None,
+                      files, explainer: bool) -> Outcome:
         needs_review = (not viewer.is_mentor) or self.settings.mentors_need_approval
 
         if conversation_id is not None:
@@ -121,15 +142,28 @@ class ApprovalService:
                 return Outcome(False, "limit", "Wait for Claude to finish replying, then send your next message.")
 
         if needs_review and not viewer.is_mentor:
-            pending = self.store.count_pending_for(viewer.id)
-            if pending >= self.settings.limit_pending_per_student:
-                return Outcome(False, "limit", f"You have {pending} messages waiting for review. "
-                                               "Wait for a mentor before sending more.")
             if self.store.count_approved_today(viewer.id) >= self.settings.limit_approved_per_day:
                 return Outcome(False, "limit", f"You've reached today's limit of {self.settings.limit_approved_per_day} "
                                                "approved messages. It resets at midnight.")
 
         status = PENDING if needs_review else AUTO
+        screen = None  # "passed", "off", or the reason the screener flagged it
+        screen_note = None
+        if needs_review and self.window_applies(viewer, conversation_id, files):
+            if self.settings.screener_enabled:
+                verdict = await self.screener.check(text)
+                if verdict.passed:
+                    status, screen = GRACE, "passed"
+                else:
+                    screen = screen_note = verdict.note
+            else:
+                status, screen = GRACE, "off"
+
+        if status == PENDING and not viewer.is_mentor:
+            pending = self.store.count_pending_for(viewer.id)
+            if pending >= self.settings.limit_pending_per_student:
+                return Outcome(False, "limit", f"You have {pending} messages waiting for review. "
+                                               "Wait for a mentor before sending more.")
         with self.db.transaction() as conn:
             if conversation_id is None:
                 conversation_id = self.store.create_conversation(
@@ -139,6 +173,8 @@ class ApprovalService:
             message_id = self.store.add_message(conn, conversation_id=conversation_id, author_id=viewer.id,
                                                 role="user", content=text, status=status,
                                                 wants_explainer=explainer)
+            if screen_note:
+                conn.execute("UPDATE messages SET screen_note = ? WHERE id = ?", (screen_note, message_id))
             for item in files:
                 self.attachments.save(conn, message_id, item)
             details = {"conversation": conversation_id, "status": status, "chars": len(text)}
@@ -148,6 +184,15 @@ class ApprovalService:
                 details["explainer"] = True
             self.db.audit("message_sent", actor_id=viewer.id, target_type="message", target_id=message_id,
                           details=details, conn=conn)
+            if status == GRACE:
+                self.db.audit("message_auto_approved", actor_id=None, target_type="message", target_id=message_id,
+                              details={"conversation": conversation_id, "student": viewer.name,
+                                       "window_minutes": self.settings.approval_window_minutes,
+                                       "screener": "passed" if screen == "passed" else "turned off"}, conn=conn)
+            elif screen_note:
+                self.db.audit("message_flagged_by_screener", actor_id=None, target_type="message",
+                              target_id=message_id, details={"conversation": conversation_id, "reason": screen_note},
+                              conn=conn)
 
         self._publish(conversation_id, {"type": "changed", "id": message_id})
         if status == PENDING:
@@ -168,7 +213,7 @@ class ApprovalService:
             text=msg["content"], link=self.link(conv["id"]),
             previous_reply=previous["content"] if previous else None,
             files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id) if f["kind"] != "frame"],
-            explainer=bool(msg["wants_explainer"]))
+            explainer=bool(msg["wants_explainer"]), screen_note=msg["screen_note"])
         try:
             posted = await self.slack.post_message(self.settings.slack_approvals_channel,
                                                    slack_cards.card_fallback_text(msg["author_name"]), blocks)

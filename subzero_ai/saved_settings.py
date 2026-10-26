@@ -35,6 +35,7 @@ class Field:
     help: str = ""
     minimum: int = 0
     maximum: int = 0
+    optional: bool = False  # for ids: an empty list is allowed
 
 
 SECTIONS: dict[str, tuple[str, list[Field]]] = {
@@ -62,6 +63,19 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("mentors_need_approval", "Mentors' messages also wait for another mentor", "bool"),
         Field("show_pending_to_team", "Other students can see messages that are waiting", "bool"),
         Field("show_rejected_to_team", "Other students can see rejected messages and the reason", "bool"),
+    ]),
+    "window": ("Approval window", [
+        Field("approval_window_minutes", "Minutes a student can keep chatting after an approval", "int",
+              "After a mentor approves a message, the student's next messages in that chat go straight to Claude "
+              "until they stop for this long. The first message of every chat, messages with files, and anything "
+              "after a rejection or mentor alert still wait. 0 turns this off.", 0, 120),
+        Field("screener_enabled", "Screen messages in the window with a small model first", "bool",
+              "Anything it flags waits for a mentor, and so does everything if it can't be reached. Costs a "
+              "fraction of a cent per message."),
+        Field("model_screener", "Screener model", "model", "A small, fast model is enough."),
+        Field("always_review_slack_ids", "Students who always wait for a mentor", "ids",
+              "Slack member IDs, one per line. These students never get the approval window. In Slack, click a "
+              "person's name, open the three-dot menu, and choose Copy member ID.", optional=True),
     ]),
     "data": ("Data and backups", [
         Field("retention_days", "Delete chats with no activity for this many days", "int",
@@ -159,9 +173,10 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "")
             bad = [item for item in items if not SLACK_ID_RE.fullmatch(item)]
             if bad:
                 errors[f.name] = f"{bad[0]} isn't a Slack member ID. They start with U or W, like U012AB3CD."
-            elif not items:
+            elif not items and not f.optional:
                 errors[f.name] = "Name at least one admin."
-            elif actor_slack_id and SLACK_ID_RE.fullmatch(actor_slack_id) and actor_slack_id not in items:
+            elif (f.name == "admin_slack_ids" and actor_slack_id and SLACK_ID_RE.fullmatch(actor_slack_id)
+                  and actor_slack_id not in items):
                 errors[f.name] = "You can't remove yourself. Ask another admin to do it."
             else:
                 values[f.name] = frozenset(items)

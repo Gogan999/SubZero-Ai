@@ -68,6 +68,7 @@ from .store import (
     COMPLETE,
     EDITED,
     ERROR,
+    GRACE,
     HELD,
     PENDING,
     REJECTED,
@@ -458,6 +459,12 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
         view["tag"], view["tag_kind"] = "Withdrawn", "withdrawn"
     elif status == AUTO:
         view["tag"], view["tag_kind"] = None, None
+    elif status == GRACE:
+        # Mentors see which messages skipped review. Students see them like any approved message.
+        if viewer.is_mentor:
+            view["tag"], view["tag_kind"] = "Sent without review, in the approval window", "approved"
+        else:
+            view["tag"], view["tag_kind"] = None, None
     return view
 
 
@@ -663,6 +670,8 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
     needs_review = (not viewer.is_mentor) or s.settings.mentors_need_approval
     waiting = own and needs_review and s.store.conversation_has_pending(conv["id"])
     replying = s.store.conversation_is_replying(conv["id"])
+    if needs_review and own and not waiting and s.approvals.window_applies(viewer, conv["id"]):
+        needs_review = False  # a mentor approved this chat a few minutes ago, so the next message goes straight on
     if waiting:
         hint = "Waiting for a mentor to review your last message"
     elif replying:
@@ -776,7 +785,11 @@ def _review_action(kind: str):
 
 @page(require="mentor")
 async def queue_page(request: Request, viewer: Viewer) -> Response:
-    return render(request, "queue.html", viewer, items=_queue_items(services(request)))
+    s = services(request)
+    window = [{"id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
+               "title": m["conversation_title"] or "New chat", "text": short_text(m["content"], 120),
+               "time": fmt_time(s.store, m["created_at"])} for m in s.store.window_messages()]
+    return render(request, "queue.html", viewer, items=_queue_items(s), window=window)
 
 
 @page(require="mentor")
@@ -793,7 +806,7 @@ def _queue_items(s: Services) -> list[dict[str, Any]]:
             "avatar": m["author_avatar"], "title": m["conversation_title"] or "New chat",
             "subteam": m["conversation_subteam"], "html": plain_html(m["content"]), "raw": m["content"],
             "waited": waited(m["created_at"]), "files": file_views(s, m["id"]),
-            "explainer": bool(m["wants_explainer"]),
+            "explainer": bool(m["wants_explainer"]), "screen_note": m["screen_note"],
             "previous": (prev["content"][:200] + ("…" if len(prev["content"]) > 200 else "")) if prev else None,
         })
     return items

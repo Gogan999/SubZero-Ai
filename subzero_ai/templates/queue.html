@@ -7,5 +7,18 @@
   <div data-queue>
     {% include "_queue_items.html" %}
   </div>
+  {% if settings.approval_window_minutes or window %}
+  <section class="panel" id="window" aria-labelledby="window-title">
+    <h2 id="window-title">Sent without review</h2>
+    <p class="field-hint">Messages from the last 24 hours that went straight to Claude because a mentor approved the chat a few minutes before{% if settings.screener_enabled %} and the screener found nothing to flag{% endif %}. Open a chat to read the reply.</p>
+    {% if window %}
+    <ul class="simple-list">
+      {% for w in window %}<li><a href="/c/{{ w.conversation_id }}#m{{ w.id }}">{{ w.student }}: {{ w.text }}</a> <span class="field-hint">{{ w.title }}, {{ w.time }}</span></li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="field-hint">None yet.</p>
+    {% endif %}
+  </section>
+  {% endif %}
 </section>
 {% endblock %}
