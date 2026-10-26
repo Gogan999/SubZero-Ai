@@ -148,7 +148,7 @@ class SettingsPageTest(unittest.TestCase):
                                headers=HTML)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self.h.settings.subteams, ("Software", "Mechanical"))
-        self.assertIn("<option >Software</option>", self.h.login(STUDENT).get("/chats").text.replace("  ", ""))
+        self.assertIn("<option >Software</option>", self.h.login(STUDENT).get("/recents").text.replace("  ", ""))
 
     def test_prompt_layers(self):
         resp = self.coach.post("/settings/prompts/team", {"text": "## Team context\n- Robot code is Java."},
@@ -362,6 +362,20 @@ class BackupTest(unittest.TestCase):
         files = self.h.services.attachments.for_conversation(first)
         row = next(iter(files.values()))[0]
         self.assertEqual(self.h.services.attachments.read(row), b"kP = 0.2\n")
+
+    def test_videos_stay_out_of_backups_and_survive_a_restore(self):
+        mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2000
+        resp = self.ava.post("/chats/new", {"text": "Look at this"}, files=[("files", ("clip.mp4", mp4, "video/mp4"))])
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.h.idle()
+        videos = list((self.settings.data_dir / "files").glob("*.mp4"))
+        self.assertEqual(len(videos), 1)
+        made = backup.make_backup(self.settings, now=datetime(2026, 10, 25, 2, 0, 0))
+        with zipfile.ZipFile(made) as zf:
+            self.assertFalse(any(n.endswith(".mp4") for n in zf.namelist()))
+            self.assertEqual(json.loads(zf.read(backup.MANIFEST))["videos_left_out"], 1)
+        backup.restore_backup(self.settings, made, now=datetime(2026, 10, 26, 9, 0, 0))
+        self.assertTrue(videos[0].exists(), "a restore keeps the videos already on disk")
 
     def test_bad_backups_are_refused(self):
         not_backup = self.settings.backups_path / "subzero-20260101-000000.zip"

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ feature.title }} · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <p class="soon-banner"><span class="soon">Coming soon</span> This part of {{ settings.app_name }} isn't built yet.</p>
+  <h1>{{ feature.title }}</h1>
+  <p class="lede">{{ feature.summary }}</p>
+  <h2>What it will do</h2>
+  <ul class="prose-list">
+    {% for point in feature.points %}<li>{{ point }}</li>{% endfor %}
+  </ul>
+  <h2>Until then</h2>
+  <p>{{ feature.meanwhile }}</p>
+  <p><a class="button primary" href="/chats">Start a chat</a></p>
+</section>
+{% endblock %}

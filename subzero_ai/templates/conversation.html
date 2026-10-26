@@ -1,50 +1,69 @@
 {% extends "base.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
 {% block main %}
-<div class="layout">
-  <button class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="false" data-sidebar-toggle>All chats</button>
-  {% include "_sidebar.html" %}
-  <section class="thread-col" data-conversation="{{ conv.id }}">
-    <header class="thread-head">
+<section class="thread-col" data-conversation="{{ conv.id }}">
+  <header class="thread-head">
+    <div class="thread-title">
       <h1 data-title>{{ title }}</h1>
-      <div class="thread-meta">
-        <p>Started by <a href="/chats?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}</p>
-        {% if viewer.is_mentor %}
-        <form class="model-form" method="post" action="/c/{{ conv.id }}/model">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <label for="model-select">Model</label>
-          <select id="model-select" name="model" data-autosubmit>
+      <p class="thread-meta">Started by <a href="/recents?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}</p>
+    </div>
+    <div class="thread-actions">
+      {% if viewer.is_mentor and not can_send %}
+      <form class="model-form" method="post" action="/c/{{ conv.id }}/model">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label for="model-select">Model</label>
+        <select id="model-select" name="model" data-autosubmit>
+          {% for value, label in model_options %}<option value="{{ value }}" {% if value == conv.model %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+        <noscript><button class="button small" type="submit">Switch</button></noscript>
+      </form>
+      {% endif %}
+      <button class="button small" type="button" disabled title="Sharing a chat outside the team is coming soon">{{ icon('share') }} Share <span class="soon">Soon</span></button>
+    </div>
+    {% if conv.visibility == 'private' %}
+    <p class="private-note">Private: only {{ 'you' if own else conv.owner_name }} and mentors can see this chat.</p>
+    {% endif %}
+  </header>
+  <ol class="thread" data-thread>
+    {% for m in messages %}
+      {% include "_message.html" %}
+    {% endfor %}
+  </ol>
+  {% if can_send and long_chat %}
+  <p class="long-chat" role="note">This chat has gotten long, so each reply costs more and Claude can lose track of early details. For a new question, <a href="/chats">start a fresh chat</a> with a short summary of where you got to.</p>
+  {% endif %}
+  {% if can_send %}
+  {% if viewer.is_mentor %}
+  <form id="model-form" method="post" action="/c/{{ conv.id }}/model" hidden><input type="hidden" name="csrf" value="{{ csrf }}"></form>
+  {% endif %}
+  <form class="composer" data-composer data-url="/c/{{ conv.id }}/messages" {% if needs_review %}data-needs-review{% endif %}>
+    <div class="composer-box">
+      <label class="visually-hidden" for="reply-text">Message</label>
+      <textarea id="reply-text" name="text" rows="1" maxlength="20000" required
+        placeholder="{{ composer_hint }}" {% if waiting %}disabled{% endif %}></textarea>
+      <ul class="chosen-files" data-chosen hidden></ul>
+      <div class="composer-bar">
+        {% include "_composer_tools.html" %}
+        <div class="composer-send">
+          {% if viewer.is_mentor %}
+          <label class="visually-hidden" for="model-select">Model</label>
+          <select id="model-select" class="model-chip" name="model" form="model-form" data-autosubmit>
             {% for value, label in model_options %}<option value="{{ value }}" {% if value == conv.model %}selected{% endif %}>{{ label }}</option>{% endfor %}
           </select>
-          <noscript><button class="button small" type="submit">Switch</button></noscript>
-        </form>
-        {% endif %}
+          <noscript><button class="button small" type="submit" form="model-form">Switch</button></noscript>
+          {% else %}
+          <span class="model-chip" title="Mentors choose which model a chat uses">{{ model_name }}</span>
+          {% endif %}
+          <button class="button primary" type="submit" {% if waiting or replying %}disabled{% endif %}>{{ 'Send for review' if needs_review else 'Send' }}</button>
+        </div>
       </div>
-      {% if conv.visibility == 'private' %}
-      <p class="private-note">Private: only {{ 'you' if own else conv.owner_name }} and mentors can see this chat.</p>
-      {% endif %}
-    </header>
-    <ol class="thread" data-thread>
-      {% for m in messages %}
-        {% include "_message.html" %}
-      {% endfor %}
-    </ol>
-    {% if can_send and long_chat %}
-    <p class="long-chat" role="note">This chat has gotten long, so each reply costs more and Claude can lose track of early details. For a new question, <a href="/chats">start a fresh chat</a> with a short summary of where you got to.</p>
-    {% endif %}
-    {% if can_send %}
-    <form class="composer" data-composer data-url="/c/{{ conv.id }}/messages" {% if needs_review %}data-needs-review{% endif %}>
-      <label class="visually-hidden" for="reply-text">Message</label>
-      <textarea id="reply-text" name="text" rows="2" maxlength="20000" required
-        placeholder="{{ composer_hint }}" {% if waiting %}disabled{% endif %}></textarea>
-      {% include "_composer_tools.html" %}
-      <button class="button primary" type="submit" {% if waiting or replying %}disabled{% endif %}>{{ 'Send for review' if needs_review else 'Send' }}</button>
-      <p class="form-error" role="alert" hidden></p>
-      <p class="composer-note">Claude is an AI and can make mistakes. Check important answers with a mentor.</p>
-    </form>
-    {% else %}
-    <p class="read-only">You're reading {{ conv.owner_name }}'s chat. To ask something, <a href="/chats">start your own</a>.</p>
-    {% endif %}
-  </section>
-</div>
+    </div>
+    <p class="form-error" role="alert" hidden></p>
+    <p class="composer-note">Attach code, text, screenshots or videos, up to {{ max_files }} files of 50 MB. Don't attach photos or videos of people. Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
+  </form>
+  {% else %}
+  <p class="read-only">You're reading {{ conv.owner_name }}'s chat. To ask something, <a href="/chats">start your own</a>.</p>
+  {% endif %}
+</section>
 {% endblock %}

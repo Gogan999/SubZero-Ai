@@ -41,8 +41,47 @@
     textarea.style.height = Math.min(textarea.scrollHeight + 2, window.innerHeight * 0.4) + "px";
   }
 
+  // On phones the sidebar opens over the page from the menu button in the slim top bar.
+  function setSidebar(open) {
+    document.body.classList.toggle("sidebar-open", open);
+    // The page behind the full-screen panel can't be seen, so take it out of Tab order and screen readers
+    document.querySelector(".main-col")?.toggleAttribute("inert", open);
+    if (open) document.querySelector("#sidebar .side-new")?.focus();
+    document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
+      button.setAttribute("aria-expanded", String(open));
+      const label = open ? button.dataset.closeLabel : button.dataset.openLabel;
+      if (label) button.setAttribute("aria-label", label);
+    });
+  }
+
+  // Pop-up menus (the account menu, the composer's tools) are <details>: close them on a click elsewhere or Escape.
+  function closeMenus(except) {
+    document.querySelectorAll("details[data-menu][open]").forEach((menu) => {
+      if (menu !== except) menu.open = false;
+    });
+  }
+
+  // Widening past the phone layout (a tablet turned sideways) hides the menu button, so close the panel then
+  window.matchMedia("(max-width: 900px)").addEventListener("change", (event) => {
+    if (!event.matches) setSidebar(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const menu = document.querySelector("details[data-menu][open]");
+    if (menu) {
+      menu.open = false;
+      menu.querySelector("summary")?.focus();
+    } else if (document.body.classList.contains("sidebar-open")) {
+      setSidebar(false);
+      document.querySelector("[data-sidebar-toggle]")?.focus();
+    }
+  });
+
   // ------------------------------------------------------------------ clicks
   document.addEventListener("click", async (event) => {
+    closeMenus(event.target.closest("details[data-menu]"));
+
     const copy = event.target.closest("[data-copy]");
     if (copy) {
       const pre = copy.closest(".code")?.querySelector("pre");
@@ -92,11 +131,10 @@
 
     const toggle = event.target.closest("[data-sidebar-toggle]");
     if (toggle) {
-      const open = document.body.classList.toggle("sidebar-open");
-      toggle.setAttribute("aria-expanded", String(open));
-      toggle.textContent = open ? "Close chat list" : "All chats";
+      setSidebar(!document.body.classList.contains("sidebar-open"));
       return;
     }
+
 
     const opener = event.target.closest("[data-open]");
     if (opener) {
@@ -160,7 +198,7 @@
       event.preventDefault();
       const button = form.querySelector('[type="submit"]');
       button.disabled = true;
-      const result = await post("/chats/new", new FormData(form));
+      const result = await post("/chats/new", await withFrames(form));
       if (!result.ok) {
         button.disabled = false;
         return showError(form, result.error);
@@ -175,15 +213,13 @@
       const button = form.querySelector('[type="submit"]');
       if (!textarea.value.trim()) return;
       button.disabled = true;
-      const result = await post(form.dataset.url, new FormData(form));
+      const result = await post(form.dataset.url, await withFrames(form));
       button.disabled = false;
       if (!result.ok) return showError(form, result.error);
       showError(form, "");
       textarea.value = "";
       autosize(textarea);
       setChosen(form, []);
-      const explainer = form.querySelector('[name="explainer"]');
-      if (explainer) explainer.checked = false;
       if (result.message_id) refreshMessage(result.message_id);
     }
   });
@@ -245,18 +281,93 @@
     const input = form?.querySelector("[data-files]");
     if (!input || input.disabled) return;
     const maxFiles = Number(input.dataset.maxFiles), maxBytes = Number(input.dataset.maxBytes);
+    const maxTotal = Number(input.dataset.maxTotal) || Infinity;
     const allowed = input.accept.split(",");
     const picked = [...chosen(form)];
     let problem = "";
     for (const file of files) {
       const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase() : "";
       if (!allowed.includes(ext)) problem = `${file.name} can't be attached. Use code, text, or a PNG or JPG screenshot.`;
-      else if (file.size > maxBytes) problem = `${file.name} is over 5 MB.`;
+      else if (file.size > maxBytes) problem = `${file.name} is over ${Math.round(maxBytes / 1024 / 1024)} MB.`;
+      else if (picked.reduce((sum, f) => sum + f.size, file.size) > maxTotal) {
+        problem = `These files add up to more than ${Math.round(maxTotal / 1024 / 1024)} MB. Send fewer or smaller ones.`;
+      }
       else if (picked.length >= maxFiles) problem = `You can attach up to ${maxFiles} files to one message.`;
       else picked.push(file);
     }
     setChosen(form, picked);
     showError(form, problem);
+    picked.filter(isVideo).forEach((file) => stills(file, Number(input.dataset.maxFrames) || 8));
+  }
+
+  // ------------------------------------------------------------ video stills
+  // Claude can't watch video, so the browser takes a few evenly spaced still frames from each one and sends them
+  // with the message (as "frames", named "<video name>@<seconds>.jpg"). The page itself shows the video.
+  const frameJobs = new WeakMap(); // File -> Promise<File[]>
+
+  function isVideo(file) {
+    return /\.(mp4|m4v|mov|webm)$/i.test(file.name);
+  }
+
+  function stills(file, most) {
+    if (!frameJobs.has(file)) frameJobs.set(file, takeStills(file, most));
+    return frameJobs.get(file);
+  }
+
+  function waitFor(video, event) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timeout")), 15000);
+      video.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
+      video.addEventListener("error", () => { clearTimeout(timer); reject(new Error("error")); }, { once: true });
+    });
+  }
+
+  async function takeStills(file, most) {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    try {
+      const loaded = waitFor(video, "loadeddata");
+      video.src = url;
+      await loaded;
+      const duration = video.duration;
+      if (!Number.isFinite(duration) || duration <= 0 || !video.videoWidth) return [];
+      // About one still every 5 seconds, between 3 and the limit, each at most 1024px on its long edge
+      const count = Math.min(most, Math.max(3, Math.ceil(duration / 5)));
+      const scale = Math.min(1, 1024 / Math.max(video.videoWidth, video.videoHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      const frames = [];
+      for (let i = 0; i < count; i += 1) {
+        const at = (duration * (i + 0.5)) / count;
+        const seeked = waitFor(video, "seeked");
+        video.currentTime = at;
+        await seeked;
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
+        if (blob) frames.push(new File([blob], `${file.name}@${Math.floor(at)}.jpg`, { type: "image/jpeg" }));
+      }
+      return frames;
+    } catch {
+      return []; // a format this browser can't play: Claude is told it got no stills
+    } finally {
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function withFrames(form) {
+    const data = new FormData(form);
+    const input = form.querySelector("[data-files]");
+    const most = Number(input?.dataset.maxFrames) || 8;
+    for (const file of chosen(form).filter(isVideo)) {
+      (await stills(file, most)).forEach((frame) => data.append("frames", frame));
+    }
+    return data;
   }
 
   document.addEventListener("change", (event) => {
@@ -380,7 +491,7 @@
       && !!thread.querySelector('.msg.person[data-status="pending"]');
     const replying = !!thread.querySelector('.msg.claude[data-status="streaming"]');
     textarea.disabled = waiting; // drafting is fine while Claude replies
-    composer.querySelectorAll('[data-files], [name="explainer"]').forEach((input) => { input.disabled = waiting; });
+    composer.querySelectorAll("[data-files]").forEach((input) => { input.disabled = waiting; });
     button.disabled = waiting || replying;
     textarea.placeholder = waiting ? "Waiting for a mentor to review your last message"
       : replying ? "Claude is replying…" : "Ask a follow-up";

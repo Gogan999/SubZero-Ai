@@ -22,6 +22,7 @@ from subzero_ai.render import EXPLAINER_MAX_BYTES, explainer_download, explainer
 from .helpers import MENTOR, STUDENT, STUDENT_2, Harness
 
 JAVA = b"public class Arm {\r\n  double kP = 0.1;\r\n}\r\n"
+MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2000  # just the header a real MP4 starts with
 
 
 def png_bytes(width=40, height=30, color=(200, 30, 30)) -> bytes:
@@ -109,7 +110,9 @@ class PrepareTest(unittest.TestCase):
             ("blob.txt", b"abc\x00def", "doesn't look like a text file"),
             ("big.csv", b"a," * 200_000, "Text files can be up to 200 KB"),
             ("fake.png", b"not really an image", "couldn't be opened"),
-            ("huge.png", b"x" * (5 * 1024 * 1024 + 1), "over 5 MB"),
+            ("huge.png", b"x" * (50 * 1024 * 1024 + 1), "over 50 MB"),
+            ("clip.mp4", b"not a video at all", "doesn't look like a video"),
+            ("clip.webm", MP4, "doesn't look like a video"),
         ]
         for name, data, words in cases:
             with self.subTest(name=name), self.assertRaises(AttachmentError) as ctx:
@@ -164,10 +167,11 @@ class SearchTest(unittest.TestCase):
             ava.new_chat("Tuning kP_2 on the arm")
             ava.new_chat("Tuning kPx2 on the arm")
             h.idle()
-            listing = ava.get("/chats?q=kP_2&scope=mine").text
+            # Only the page's list, not the sidebar's Recents, which shows all of Ava's chats
+            listing = ava.get("/recents?q=kP_2&scope=mine").text.split('id="main"', 1)[1]
             self.assertIn("Tuning kP_2", listing)
             self.assertNotIn("Tuning kPx2", listing)
-            self.assertIn("Tuning kPx2", ava.get("/chats?q=kP&scope=mine").text)
+            self.assertIn("Tuning kPx2", ava.get("/recents?q=kP&scope=mine").text.split('id="main"', 1)[1])
         finally:
             h.close()
 
@@ -218,7 +222,7 @@ class Milestone3FlowTest(unittest.TestCase):
 
     # ----------------------------------------------------------- explainers
     def ask_for_explainer(self):
-        resp = self.send_with(self.ava, {"text": "How does kP change the arm?", "explainer": "1"})
+        resp = self.send_with(self.ava, {"text": "Can you make a simulation of how kP changes the arm?"})
         self.assertEqual(resp.status_code, 200, resp.text)
         mid = resp.json()["message_id"]
         cid = int(resp.json()["url"].rsplit("/", 1)[1])
@@ -234,7 +238,7 @@ class Milestone3FlowTest(unittest.TestCase):
         call = self.last_stream()
         self.assertEqual(call["max_tokens"], 16000)
         self.assertEqual(call["effort"], "high")
-        self.assertIn("Interactive explainer", call["system_extra"])
+        self.assertIn("may want an interactive explainer", call["system_extra"])
 
     def test_everyday_questions_stay_at_default_effort(self):
         resp = self.send_with(self.ava, {"text": "What is a PID loop?"})
@@ -353,8 +357,49 @@ class Milestone3FlowTest(unittest.TestCase):
         self.assertEqual(self.h.services.db.one("SELECT COUNT(*) FROM attachments")[0], 0)
         self.assertEqual(self.h.services.db.one("SELECT COUNT(*) FROM messages")[0], 0)
 
+    # ---------------------------------------------------------------- videos
+    def test_videos_are_stored_and_claude_gets_the_stills(self):
+        files = [("files", ("intake.mp4", MP4, "video/mp4")),
+                 ("frames", ("intake.mp4@0.jpg", png_bytes(), "image/jpeg")),
+                 ("frames", ("intake.mp4@4.jpg", png_bytes(), "image/jpeg")),
+                 ("frames", ("other.mp4@1.jpg", png_bytes(), "image/jpeg"))]  # no such video: dropped
+        resp = self.send_with(self.ava, {"text": "Why does the intake jam?"}, files)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        mid, cid = resp.json()["message_id"], int(resp.json()["url"].rsplit("/", 1)[1])
+        rows = self.h.services.attachments.for_message(mid)
+        self.assertEqual([r["kind"] for r in rows], ["video", "frame", "frame"])
+        self.assertEqual(rows[2]["name"], "intake.mp4 at 0:04")
+        page = self.ava.get(f"/c/{cid}").text
+        self.assertIn('<video class="file-video"', page)
+        self.assertNotIn("intake.mp4 at 0:04", page, "stills are for Claude, not shown on the page")
+        self.assertIn("1 file:", json.dumps(self.h.slack.posts[-1]["blocks"]), "the card lists the video only")
+        self.approve(mid)
+        content = self.last_stream()["messages"][0]["content"]
+        self.assertIn("2 still frames", content[0]["text"])
+        self.assertEqual([b["type"] for b in content[:5]], ["text", "text", "image", "text", "image"])
+        video = self.ava.get(f"/files/{rows[0]['id']}", headers={"Range": "bytes=0-99"})
+        self.assertEqual(video.status_code, 206, "videos answer range requests so they can be played and seeked")
+        self.assertEqual(video.headers["content-type"], "video/mp4")
+
+    def test_old_pictures_are_not_resent_forever(self):
+        from subzero_ai import generation
+        frames = [("frames", (f"clip.mp4@{i}.jpg", png_bytes(), "image/jpeg")) for i in range(8)]
+        resp = self.send_with(self.kim, {"text": "first"}, [("files", ("clip.mp4", MP4, "video/mp4")), *frames])
+        cid = int(resp.json()["url"].rsplit("/", 1)[1])
+        with mock.patch.object(generation, "HISTORY_IMAGES", 5):
+            self.send_with(self.kim, {"text": "second"}, [("files", ("shot.png", png_bytes(), "image/png"))], cid=cid)
+        images = [b for m in self.last_stream()["messages"] if isinstance(m["content"], list)
+                  for b in m["content"] if b["type"] == "image"]
+        self.assertEqual(len(images), 1, "only the newest message's picture; the 8 old stills are over budget")
+        self.assertIn("isn't sent again", json.dumps(self.last_stream()["messages"]))
+
+    def test_a_video_without_stills_says_so(self):
+        resp = self.send_with(self.ava, {}, [("files", ("clip.mov", MP4, "video/quicktime"))])
+        self.approve(resp.json()["message_id"])
+        self.assertIn("no still frames", self.last_stream()["messages"][0]["content"][0]["text"])
+
     def test_oversized_requests_are_refused_early(self):
-        resp = self.ava.post("/chats/new", {"text": "hi"}, headers={"Content-Length": str(40 * 1024 * 1024)})
+        resp = self.ava.post("/chats/new", {"text": "hi"}, headers={"Content-Length": str(200 * 1024 * 1024)})
         self.assertEqual(resp.status_code, 413)
 
     def test_edited_messages_keep_their_files(self):
@@ -380,8 +425,17 @@ class Milestone3FlowTest(unittest.TestCase):
 
     def test_composer_offers_files_and_explainers(self):
         page = self.ava.get("/chats").text
-        self.assertIn('type="file" name="files" multiple accept=".cpp,.csv,.gradle,.h,.java,.jpeg,.jpg,.json,.md,.png,.py,.txt,.yaml,.yml"', page)
-        self.assertIn('name="explainer" value="1"', page)
+        self.assertIn('type="file" name="files" multiple accept=".cpp,.csv,.gradle,.h,.java,.jpeg,.jpg,.json,.m4v,.md,.mov,.mp4,.png,.py,.txt,.webm,.yaml,.yml"', page)
+        self.assertNotIn('name="explainer"', page, "Claude decides on explainers; there's no switch")
+
+    def test_asking_in_words_counts_as_an_explainer_request(self):
+        from subzero_ai.generation import asks_for_explainer
+        for text in ("Make an interactive graph of torque", "Could you simulate the elevator?", "explainer please"):
+            self.assertTrue(asks_for_explainer(text), text)
+        for text in ("What is a PID loop?", "Explain how a gearbox works", "Gradle says the build artifact is missing",
+                     "Why is the AdvantageScope animation choppy?", "How do I visualize odometry in Glass?",
+                     "the interactive shell won't start"):
+            self.assertFalse(asks_for_explainer(text), text)
 
 
 if __name__ == "__main__":
