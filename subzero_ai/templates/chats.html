@@ -1,32 +1,47 @@
 {% extends "base.html" %}
-{% block title %}Chats · {{ settings.app_name }}{% endblock %}
+{% from "_icons.html" import icon %}
+{% block title %}New chat · {{ settings.app_name }}{% endblock %}
 {% block main %}
-<div class="layout">
-  <button class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="false" data-sidebar-toggle>All chats</button>
-  {% include "_sidebar.html" %}
-  <section class="thread-col start">
-    <div class="start-panel">
-      <h1>What are you working on?</h1>
-      <p class="lede">Ask about robot code, a mechanism, the physics behind a design, or which material to use.
-        {% if not viewer.is_mentor %}A mentor reviews your message before Claude sees it.{% endif %}</p>
-      <form class="composer big" data-new-chat>
+<section class="start">
+  <div class="start-panel">
+    <h1 class="greeting"><span class="greeting-mark" aria-hidden="true">SZ</span> {{ greeting }}</h1>
+    <p class="lede">Ask about robot code, a mechanism, the physics behind a design, or which material to use.
+      {% if not viewer.is_mentor %}A mentor reviews your message before Claude sees it.{% endif %}</p>
+    <form class="composer big" data-new-chat>
+      <div class="composer-box">
         <label class="visually-hidden" for="new-text">Message</label>
-        <textarea id="new-text" name="text" rows="5" required maxlength="20000"
-          placeholder="For example: our arm drifts down when the robot is disabled. Here's the subsystem code…"></textarea>
-        {% include "_composer_tools.html" %}
-        <div class="composer-row">
-          <label class="subteam">Subteam
-            <select name="subteam">
-              <option value="">Choose one</option>
+        <textarea id="new-text" name="text" rows="4" required maxlength="20000"
+          placeholder="How can Claude help with your robot today?"></textarea>
+        <ul class="chosen-files" data-chosen hidden></ul>
+        <div class="composer-bar">
+          {% include "_composer_tools.html" %}
+          <div class="composer-send">
+            <label class="visually-hidden" for="new-subteam">Subteam</label>
+            <select id="new-subteam" class="subteam" name="subteam">
+              <option value="">Pick a subteam</option>
               {% for st in subteams %}<option>{{ st }}</option>{% endfor %}
             </select>
-          </label>
-          <button class="button primary" type="submit">{{ 'Send for review' if not viewer.is_mentor else 'Send' }}</button>
+            <span class="model-chip" title="New chats use this model. Mentors can move a chat to a bigger one.">{{ model_name }}</span>
+            <button class="button primary" type="submit">{{ 'Send for review' if not viewer.is_mentor else 'Send' }}</button>
+          </div>
         </div>
-        <p class="form-error" role="alert" hidden></p>
-        <p class="composer-note">Claude is an AI and can make mistakes. Check important answers with a mentor.</p>
-      </form>
-    </div>
-  </section>
-</div>
+      </div>
+      <p class="form-error" role="alert" hidden></p>
+      <p class="composer-note">Attach code, text, or PNG/JPG screenshots, up to {{ max_files }} files of 5 MB. Don't attach photos of people. Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
+    </form>
+    <ul class="starters" aria-label="Ideas to start with">
+      <li><button class="chip" type="button" data-starter="Can you explain what this code does, step by step? ">{{ icon('code') }} Explain code</button></li>
+      <li><button class="chip" type="button" data-starter="Our mechanism isn't working the way we expected. Here's what it does: ">{{ icon('settings') }} Debug a mechanism</button></li>
+      <li><button class="chip" type="button" data-starter="Can you check my physics? Here's the problem and my working: ">{{ icon('research') }} Check the physics</button></li>
+      <li><button class="chip" type="button" data-starter="Which material should we use for this part, and why? The part is ">{{ icon('artifacts') }} Pick a material</button></li>
+    </ul>
+    {% if not viewer.is_mentor %}
+    <ol class="how-steps" aria-label="What happens when you send">
+      <li><span class="step-num">1</span> You send a message</li>
+      <li><span class="step-num">2</span> A mentor approves, edits or rejects it</li>
+      <li><span class="step-num">3</span> Claude replies, and the team can read the chat</li>
+    </ol>
+    {% endif %}
+  </div>
+</section>
 {% endblock %}

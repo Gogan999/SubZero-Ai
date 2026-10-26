@@ -148,7 +148,7 @@ class SettingsPageTest(unittest.TestCase):
                                headers=HTML)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self.h.settings.subteams, ("Software", "Mechanical"))
-        self.assertIn("<option >Software</option>", self.h.login(STUDENT).get("/chats").text.replace("  ", ""))
+        self.assertIn("<option >Software</option>", self.h.login(STUDENT).get("/recents").text.replace("  ", ""))
 
     def test_prompt_layers(self):
         resp = self.coach.post("/settings/prompts/team", {"text": "## Team context\n- Robot code is Java."},

@@ -69,7 +69,7 @@ class FlowTest(unittest.TestCase):
     def test_pending_messages_are_hidden_from_other_students(self):
         mid, cid = self.start("Something I want a mentor to see first")
         self.assertEqual(self.ben.get(f"/c/{cid}").status_code, 404)
-        self.assertNotIn(f"/c/{cid}", self.ben.get("/chats").text)
+        self.assertNotIn(f"/c/{cid}", self.ben.get("/recents").text)
         self.assertEqual(self.ben.get(f"/c/{cid}/m/{mid}").status_code, 204)
         # Mentors see everything
         self.assertIn("Something I want a mentor to see first", self.kim.get(f"/c/{cid}").text)
@@ -146,7 +146,7 @@ class FlowTest(unittest.TestCase):
         self.assertIn("Which bearing should the intake use?", page.text)
         self.assertIn("You're reading Ava (student)'s chat", page.text)
         self.assertNotIn("data-composer", page.text, "only the owner can add to a chat")
-        self.assertIn(f"/c/{cid}", self.ben.get("/chats").text)
+        self.assertIn(f"/c/{cid}", self.ben.get("/recents").text)
         # Other students can't add to it
         resp = self.ben.send(cid, "Me too")
         self.assertEqual(resp.status_code, 403)
@@ -252,7 +252,7 @@ class FlowTest(unittest.TestCase):
         self.assertIn("Held privately by <@DEV-mentor-kim>", json.dumps(self.h.slack.updates[-1]["blocks"]))
         # The whole chat disappears for other students, even the earlier approved part
         self.assertEqual(self.ben.get(f"/c/{cid}").status_code, 404)
-        self.assertNotIn(f"/c/{cid}", self.ben.get("/chats").text)
+        self.assertNotIn(f"/c/{cid}", self.ben.get("/recents").text)
         student_page = self.ava.get(f"/c/{cid}").text
         self.assertIn("A mentor will follow up with you directly", student_page)
         self.assertIn("Private: only you and mentors can see this chat", student_page)
@@ -383,6 +383,23 @@ class FlowTest(unittest.TestCase):
         self.assertNotIn("<script>alert(1)", page)
         self.assertNotIn('href="javascript:', page)
 
+    def test_sidebar_and_coming_soon_pages(self):
+        mid, cid = self.start("My own question")
+        page = self.ava.get("/chats").text
+        self.assertIn('href="/recents"', page)
+        self.assertIn(f'href="/c/{cid}"', page, "the sidebar's Recents lists the student's own chats")
+        self.assertIn("1 waiting", page)
+        for path in ("/projects", "/artifacts", "/code"):
+            self.assertIn(f'href="{path}"', page)
+            resp = self.ava.get(path)
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("Coming soon", resp.text)
+        self.assertNotIn('href="/queue"', page, "students don't get mentor tools")
+        self.assertIn('href="/queue"', self.kim.get("/chats").text)
+        # Old chat-list links still work
+        resp = self.ava.get("/chats?scope=mine", follow_redirects=False)
+        self.assertEqual(resp.headers["location"], "/recents?scope=mine")
+
     def test_security_headers(self):
         resp = self.ava.get("/chats")
         self.assertIn("script-src 'self'", resp.headers["content-security-policy"])
@@ -441,14 +458,14 @@ class FlowTest(unittest.TestCase):
         other = self.kim.new_chat("Fab question", subteam="Fab and design").json()
         self.h.idle()
         other_id = int(other["url"].rsplit("/", 1)[1])
-        page = self.ben.get("/chats?subteam=Fab+and+design").text
+        page = self.ben.get("/recents?subteam=Fab+and+design").text
         self.assertIn(f"/c/{other_id}", page)
         self.assertNotIn(f'href="/c/{cid}"', page)
-        page = self.ben.get(f"/chats?owner={self.ava.user['id']}").text
+        page = self.ben.get(f"/recents?owner={self.ava.user['id']}").text
         self.assertIn(f'href="/c/{cid}"', page)
         self.assertNotIn(f'href="/c/{other_id}"', page)
         self.assertIn("Chats started by Ava (student)", page)
-        page = self.ben.get("/chats?q=Fab").text
+        page = self.ben.get("/recents?q=Fab").text
         self.assertIn(f"/c/{other_id}", page)
         self.assertNotIn(f'href="/c/{cid}"', page)
 
@@ -457,8 +474,8 @@ class FlowTest(unittest.TestCase):
         self.approve(mid)
         self.ava.send(cid, "secretword in a pending follow-up")
         self.h.idle()
-        self.assertNotIn(f'href="/c/{cid}"', self.ben.get("/chats?q=secretword").text)
-        self.assertIn(f'href="/c/{cid}"', self.ava.get("/chats?q=secretword").text)
+        self.assertNotIn(f'href="/c/{cid}"', self.ben.get("/recents?q=secretword").text)
+        self.assertIn(f'href="/c/{cid}"', self.ava.get("/recents?q=secretword").text)
 
     # ----------------------------------------------------------------- model
     def test_mentor_can_switch_a_chat_to_the_bigger_model(self):

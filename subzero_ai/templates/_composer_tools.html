@@ -1,12 +1,24 @@
+{% from "_icons.html" import icon %}
 <div class="composer-tools">
-  <label class="attach">
+  <label class="tool-button attach" title="Attach files: code, text, or PNG/JPG screenshots">
     <input class="visually-hidden" type="file" name="files" multiple accept="{{ accept }}" data-files
       data-max-files="{{ max_files }}" data-max-bytes="{{ max_file_bytes }}" {% if waiting %}disabled{% endif %}>
-    <span aria-hidden="true">+</span> Attach files
+    {{ icon('plus') }}<span class="visually-hidden">Attach files</span>
   </label>
+  <details class="tools-menu" data-menu>
+    <summary class="tool-button" aria-label="More tools" title="More tools">{{ icon('tools') }}</summary>
+    <div class="menu">
+      <p class="menu-note">These claude.ai tools aren't available here yet.</p>
+      <ul>
+        <li><span class="menu-item" aria-disabled="true">{{ icon('globe') }} Web search <span class="soon">Soon</span></span></li>
+        <li><span class="menu-item" aria-disabled="true">{{ icon('think') }} Extended thinking <span class="soon">Soon</span></span></li>
+        <li><span class="menu-item" aria-disabled="true">{{ icon('research') }} Research <span class="soon">Soon</span></span></li>
+        <li><span class="menu-item" aria-disabled="true">{{ icon('style') }} Response styles <span class="soon">Soon</span></span></li>
+        <li><span class="menu-item" aria-disabled="true">{{ icon('plug') }} Connectors (GitHub, Drive) <span class="soon">Soon</span></span></li>
+      </ul>
+    </div>
+  </details>
   <label class="explainer-toggle" title="Claude builds a small interactive web page, like a simulation or a graph you can play with. It costs a little more.">
     <input type="checkbox" name="explainer" value="1" {% if waiting %}disabled{% endif %}> Interactive explainer
   </label>
-  <span class="composer-hint">Code, text, or PNG/JPG screenshots, up to {{ max_files }} files of 5 MB. Don't attach photos of people.</span>
 </div>
-<ul class="chosen-files" data-chosen hidden></ul>

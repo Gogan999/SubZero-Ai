@@ -164,10 +164,11 @@ class SearchTest(unittest.TestCase):
             ava.new_chat("Tuning kP_2 on the arm")
             ava.new_chat("Tuning kPx2 on the arm")
             h.idle()
-            listing = ava.get("/chats?q=kP_2&scope=mine").text
+            # Only the page's list, not the sidebar's Recents, which shows all of Ava's chats
+            listing = ava.get("/recents?q=kP_2&scope=mine").text.split('id="main"', 1)[1]
             self.assertIn("Tuning kP_2", listing)
             self.assertNotIn("Tuning kPx2", listing)
-            self.assertIn("Tuning kPx2", ava.get("/chats?q=kP&scope=mine").text)
+            self.assertIn("Tuning kPx2", ava.get("/recents?q=kP&scope=mine").text.split('id="main"', 1)[1])
         finally:
             h.close()
 

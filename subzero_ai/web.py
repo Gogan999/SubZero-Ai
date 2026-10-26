@@ -72,6 +72,46 @@ MODEL_LABELS = {
 }
 
 
+# How many of a person's own chats the sidebar lists before "All chats"
+RECENTS = 25
+
+# claude.ai features with a place in the sidebar but not built yet. Each gets a "Coming soon" page that says
+# what it will do, so students aren't left guessing. docs/FEATURES_TODO.md tracks them.
+COMING_SOON = {
+    "projects": {
+        "title": "Projects",
+        "summary": "Group related chats with shared files and instructions, like one project per robot mechanism.",
+        "points": [
+            "Keep every chat about one subsystem, such as the intake or the climber, in one place.",
+            "Add reference files once (wiring maps, CAD exports, code) and have Claude use them in every chat.",
+            "Give a project its own instructions, such as which motor controllers and library versions the team uses.",
+            "Mentors still review every student message inside a project.",
+        ],
+        "meanwhile": "Put the subsystem's name in your first message and pick a subteam, so the team can find it in Chats.",
+    },
+    "artifacts": {
+        "title": "Artifacts",
+        "summary": "A gallery of the interactive explainers, documents and code Claude has made for the team.",
+        "points": [
+            "Browse every interactive explainer from approved chats in one place.",
+            "Open an explainer full screen or download it without scrolling back through the chat.",
+            "Save useful ones so the team can reuse them at the next build season.",
+        ],
+        "meanwhile": "Tick Interactive explainer when you send a message, and the explainer appears in the chat.",
+    },
+    "code": {
+        "title": "Claude Code",
+        "summary": "Let Claude work in the team's robot code repository: read it, run tests and suggest changes.",
+        "points": [
+            "Ask about the team's actual robot code, not just pasted snippets.",
+            "Claude proposes changes as a pull request that a mentor reviews before anything is merged.",
+            "Runs with mentor approval at every step, the same way chat messages do.",
+        ],
+        "meanwhile": "Attach the code files you're asking about (up to 5) to a normal chat message.",
+    },
+}
+
+
 def model_label(model_id: str) -> str:
     return MODEL_LABELS.get(model_id, model_id)
 
@@ -288,6 +328,9 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         "setting_alert": viewer is not None and viewer.is_admin and any(
             row.get("alert") for row in _health_alerts(s)),
         "path": request.url.path,
+        # The sidebar's Recents: the viewer's own chats, looked up only when a page draws the sidebar
+        "recents": (lambda: conversation_list(s, viewer, "mine", "", limit=RECENTS + 1)) if viewer else list,
+        "recents_shown": RECENTS,
     }
     base.update(context)
     return templates.TemplateResponse(request, name, base, status_code=status_code)
@@ -364,8 +407,9 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
 
 
 def conversation_list(s: Services, viewer: Viewer, scope: str, query: str, subteam: str | None = None,
-                      owner_id: int | None = None):
-    rows = s.store.list_conversations(viewer, scope=scope, query=query, subteam=subteam, owner_id=owner_id)
+                      owner_id: int | None = None, limit: int = 200):
+    rows = s.store.list_conversations(viewer, scope=scope, query=query, subteam=subteam, owner_id=owner_id,
+                                      limit=limit)
     items = []
     for c in rows:
         own = c["owner_id"] == viewer.id
@@ -378,9 +422,9 @@ def conversation_list(s: Services, viewer: Viewer, scope: str, query: str, subte
     return items
 
 
-def sidebar_context(s: Services, viewer: Viewer, request: Request | None = None) -> dict[str, Any]:
-    """The chat list with the filters from the query string (search, subteam, and who started the chat)."""
-    params = request.query_params if request is not None else {}
+def list_context(s: Services, viewer: Viewer, request: Request) -> dict[str, Any]:
+    """The Chats page list with the filters from the query string (search, subteam, and who started the chat)."""
+    params = request.query_params
     scope = "mine" if params.get("scope") == "mine" else "team"
     query = (params.get("q") or "").strip()[:100]
     subteam = params.get("subteam") if params.get("subteam") in s.settings.subteams else None
@@ -518,11 +562,34 @@ async def logout(request: Request) -> Response:
     return RedirectResponse("/login", status_code=303)
 
 
+def greeting(s: Services, viewer: Viewer) -> str:
+    hour = datetime.now(s.store.tz).hour
+    part = "morning" if 4 <= hour < 12 else "afternoon" if hour < 18 else "evening"
+    return f"Good {part}, {viewer.name.split()[0]}"
+
+
 @page()
 async def chats(request: Request, viewer: Viewer) -> Response:
     s = services(request)
-    return render(request, "chats.html", viewer, current_id=None, **upload_context(),
-                  **sidebar_context(s, viewer, request))
+    if any(key in request.query_params for key in ("q", "scope", "subteam", "owner")):
+        # The chat list and its filters moved to the Chats page; keep old links working
+        return RedirectResponse(f"/recents?{request.url.query}", status_code=303)
+    return render(request, "chats.html", viewer, current_id=None, subteams=s.settings.subteams,
+                  greeting=greeting(s, viewer), model_name=model_label(s.settings.model_default),
+                  **upload_context())
+
+
+@page()
+async def recents_page(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    return render(request, "recents.html", viewer, **list_context(s, viewer, request))
+
+
+def coming_soon(key: str):
+    @page()
+    async def endpoint(request: Request, viewer: Viewer) -> Response:
+        return render(request, "coming_soon.html", viewer, feature=COMING_SOON[key])
+    return endpoint
 
 
 @page()
@@ -554,8 +621,8 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
     models = [(m, model_label(m)) for m in dict.fromkeys([s.settings.model_default, s.settings.model_hard, conv["model"]])]
     return render(request, "conversation.html", viewer, conv=conv, messages=messages, own=own, title=title,
                   can_send=own, waiting=waiting, replying=replying, composer_hint=hint, needs_review=needs_review,
-                  model_options=models, current_id=conv["id"], long_chat=long_chat, **upload_context(),
-                  **sidebar_context(s, viewer))
+                  model_options=models, model_name=model_label(conv["model"]), current_id=conv["id"],
+                  long_chat=long_chat, **upload_context())
 
 
 @page()
@@ -961,6 +1028,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/logout", logout, methods=["POST"]),
         Route("/chats", chats),
         Route("/chats/new", new_chat, methods=["POST"]),
+        Route("/recents", recents_page),
+        *[Route(f"/{key}", coming_soon(key)) for key in COMING_SOON],
         Route("/c/{cid:int}", conversation_page),
         Route("/c/{cid:int}/messages", send_message, methods=["POST"]),
         Route("/c/{cid:int}/m/{mid:int}", message_partial),

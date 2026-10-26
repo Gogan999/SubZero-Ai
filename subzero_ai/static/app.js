@@ -41,8 +41,39 @@
     textarea.style.height = Math.min(textarea.scrollHeight + 2, window.innerHeight * 0.4) + "px";
   }
 
+  // On phones the sidebar opens over the page from the menu button in the slim top bar.
+  function setSidebar(open) {
+    document.body.classList.toggle("sidebar-open", open);
+    document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
+      button.setAttribute("aria-expanded", String(open));
+      const label = open ? button.dataset.closeLabel : button.dataset.openLabel;
+      if (label) button.setAttribute("aria-label", label);
+    });
+  }
+
+  // Pop-up menus (the account menu, the composer's tools) are <details>: close them on a click elsewhere or Escape.
+  function closeMenus(except) {
+    document.querySelectorAll("details[data-menu][open]").forEach((menu) => {
+      if (menu !== except) menu.open = false;
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const menu = document.querySelector("details[data-menu][open]");
+    if (menu) {
+      menu.open = false;
+      menu.querySelector("summary")?.focus();
+    } else if (document.body.classList.contains("sidebar-open")) {
+      setSidebar(false);
+      document.querySelector("[data-sidebar-toggle]")?.focus();
+    }
+  });
+
   // ------------------------------------------------------------------ clicks
   document.addEventListener("click", async (event) => {
+    closeMenus(event.target.closest("details[data-menu]"));
+
     const copy = event.target.closest("[data-copy]");
     if (copy) {
       const pre = copy.closest(".code")?.querySelector("pre");
@@ -92,9 +123,19 @@
 
     const toggle = event.target.closest("[data-sidebar-toggle]");
     if (toggle) {
-      const open = document.body.classList.toggle("sidebar-open");
-      toggle.setAttribute("aria-expanded", String(open));
-      toggle.textContent = open ? "Close chat list" : "All chats";
+      setSidebar(!document.body.classList.contains("sidebar-open"));
+      return;
+    }
+
+    // Starter chips on the new-chat page begin the message for you
+    const starter = event.target.closest("[data-starter]");
+    if (starter) {
+      const textarea = document.querySelector("[data-new-chat] textarea");
+      if (!textarea) return;
+      textarea.value = starter.dataset.starter;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      autosize(textarea);
       return;
     }
 

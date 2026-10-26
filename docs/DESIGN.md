@@ -6,7 +6,8 @@ change to a template (`subzero_ai/templates/`), the stylesheet
 must follow it. If a change needs something this file does not allow, update
 this file in the same pull request and say why in the PR description.
 
-The standards describe the site as it is today (version 0.4.0). Places where
+The standards describe the site as it is today (version 0.4.0, with the
+claude.ai-style sidebar layout). Places where
 the current code falls short are listed under [Known gaps](#known-gaps) so they
 can be fixed in small, separate PRs. New work must meet the standard even where
 old code does not yet.
@@ -14,9 +15,14 @@ old code does not yet.
 ## 1. Principles
 
 1. **Feels like claude.ai.** Students should already know how to use it. Copy
-   claude.ai's layout and interaction patterns (sidebar of chats, centered
-   thread, sticky composer at the bottom, Markdown replies with code blocks)
-   unless a safety feature needs something different.
+   claude.ai's layout and interaction patterns (left sidebar with New chat,
+   Chats, Projects, Artifacts, Code, Recents and the account menu; centered
+   thread; a rounded composer with tools on the left and the model and Send on
+   the right; Markdown replies with code blocks) unless a safety feature needs
+   something different. claude.ai features that aren't built yet still get
+   their place in the layout, marked with a **Soon** pill (see
+   [Coming soon](#coming-soon-placeholders)) and listed in
+   `docs/FEATURES_TODO.md`.
 2. **Status is never hidden.** Every student message shows where it stands
    (waiting, approved, edited, rejected, held). Use the inspection tag (see
    [Tags](#tags-message-status)) for this, never color alone.
@@ -135,7 +141,7 @@ Rules:
   - 6px for nav items, tabs and small panels
   - 8px for buttons, inputs and code/explainer blocks
   - `--radius` (10px) for cards: messages, queue items, the composer box, tables
-  - 14px for the sign-in panel only
+  - 14px for the sign-in panel and the composer box
   - 999px for pills and chips
 - **Borders** are 1px `--rule`. Use a heavier stripe (3–4px) only to mark state:
   the selected chat (inset brand stripe) and pending queue cards
@@ -146,8 +152,13 @@ Rules:
   - Chat thread and composer: max 780px, centered
   - Text pages (about, sign-in help): `.page.narrow`, max 760px
   - Wide pages (queue, audit log): `.page`, max 1100px
-  - Sidebar: 300px on desktop
-  - Top bar: `--topbar` (56px) tall, sticky
+  - Sidebar: `--sidebar` (288px) on desktop, full window height
+  - Top bar: only when signed out (sign-in, setup), `--topbar` (56px) tall,
+    sticky. Signed in, the sidebar holds the brand and there is no top bar on
+    desktop; phones get the slim `.mobile-bar` (also `--topbar` tall)
+- **App shell** (signed in): `.shell` is a grid of the sidebar and
+  `.main-col`. The AI notice and test-mode bar sit at the top of `.main-col`,
+  then `main`. The window scrolls; the sidebar is sticky.
 - Side padding is at least 1rem on phones and 1.25rem on wider screens. There
   must never be sideways page scrolling.
 
@@ -155,6 +166,60 @@ Rules:
 
 Reuse these before making anything new. A new component needs a short entry
 here in the same PR.
+
+### Sidebar
+
+`_sidebar.html`, on every signed-in page, top to bottom:
+
+- Brand (hidden on phones, where the mobile bar shows it).
+- `.side-new`: New chat, with a 28px brand-filled circle around the plus icon.
+  This is the sidebar's one brand-filled element.
+- `.side-nav`: Chats (`/recents`), Projects, Artifacts, Code. Each row is
+  icon + label, with a `.soon` pill or `.count` pushed right. The current page
+  gets `aria-current="page"` and a `--frost` fill.
+- Mentor tools (mentors only, with an `.side-label` heading): Review with the
+  waiting count, then Audit log and Settings for admins. The approval queue
+  must stay one click away for mentors.
+- Recents (`.chat-list`): the viewer's own chats, newest first, at most 25,
+  then a link to the full Chats page. Pills show Private and "n waiting".
+- The account button (`.account`) pinned to the bottom: avatar, name, role.
+
+### Menus
+
+Pop-up menus (the account menu, the composer's tools menu) are `<details
+data-menu>` with a `<summary>` trigger and a `.menu` panel: `--sheet` fill,
+1px `--rule` border, `--radius` corners, no shadow. Items are `.menu-item`
+(links or buttons, icon + label). The script closes an open menu on a click
+outside it or Escape, returning focus to the trigger.
+
+### Coming soon placeholders
+
+A claude.ai feature that isn't built yet can appear in the layout so the site
+matches claude.ai, but it must be impossible to mistake for a working control:
+
+- Mark it with a `.soon` pill ("Soon"): `--muted-bg` fill, `--ink-2` text, a
+  dashed `--field-edge` border. The dashed border is reserved for this.
+- A placeholder in a menu is a `<span class="menu-item"
+  aria-disabled="true">`, not a link or button. A placeholder button uses the
+  `disabled` attribute and a `title` saying it's coming soon.
+- A placeholder in the sidebar links to a "Coming soon" page
+  (`coming_soon.html`, data in `COMING_SOON` in `web.py`) that says what the
+  feature will do and what to use until then.
+- Every placeholder has a row in `docs/FEATURES_TODO.md`. Remove the pill when
+  the feature ships.
+
+### Icons
+
+Inline SVG from the `icon()` macro in `_icons.html`: 18px, 20×20 view box,
+1.6 stroke in `currentColor`, `aria-hidden="true"`. An icon always sits next
+to a text label or inside a control with an `aria-label` or visually hidden
+text. Add new icons to the macro rather than inline in a template. No icon
+fonts or image files.
+
+### Chips
+
+`.chip` is a pill-shaped button (`--sheet` fill, `--rule` border, 36px tall)
+for suggestions, such as the starter prompts under the new-chat composer.
 
 ### Buttons
 
@@ -225,14 +290,22 @@ sandboxed; never relax the sandbox for styling reasons.
 
 - Sticky at the bottom of the thread, fading the page behind it with a
   `--paper` gradient.
-- Order: message box, tools row (Attach files, Interactive explainer, hint),
-  chosen files as removable chips, then the AI reminder note and the Send
-  button on the same row.
-- The start page uses `.composer.big`: a taller box, not sticky.
+- One `.composer-box` (14px radius, `--field-edge` border, `--sheet` fill)
+  holds the borderless textarea, the chosen files as removable chips, and the
+  `.composer-bar`. The focus ring goes around the whole box.
+- The bar: on the left, the attach button (plus icon), the tools menu
+  (placeholders for web search, extended thinking and so on) and the
+  Interactive explainer toggle; on the right, the subteam select (new chat
+  only), the model (a picker for mentors, the model's name for students) and
+  the Send button. Students' Send button says "Send for review".
+- Under the box: errors, then the AI reminder note, centered.
+- The start page uses `.composer.big`: a taller box, not sticky, under a
+  greeting ("Good evening, Ava"), with starter chips and, for students, the
+  three approval steps below it.
 
 ### Notices and banners
 
-- The AI notice under the top bar must appear on every page. Don't remove or
+- The AI notice at the top of every page (above `main`) must appear on every page. Don't remove or
   shrink it below .85rem.
 - The test-mode bar (`.devbar`) uses pending colors so it can't be missed.
 - Inline warnings (long chat) use the pending pair; private-chat notes use the
@@ -320,11 +393,11 @@ Target: WCAG 2.2 level AA.
 - **Breakpoints:** 900px and 520px, both `max-width`. Don't add new ones unless
   a layout truly breaks; reuse these.
 - **Above 900px:** sidebar and thread side by side.
-- **900px and below:** sidebar hides behind an "All chats" toggle and opens as a
-  full-screen panel under the top bar; user name and app name hide from the
-  top bar (the brand mark stays). The nav links scroll sideways inside the
-  top bar if they don't fit (admins have four), so the page itself never does.
-  A fade on the bar's right edge shows there are more links.
+- **900px and below:** the sidebar hides. A slim `.mobile-bar` shows a menu
+  button (44px, its `aria-label` switches between "Open menu" and "Close
+  menu"), the brand and a New chat button. The menu button opens the sidebar
+  as a full-screen panel under the bar; Escape closes it. Sidebar rows grow to
+  44px tall.
 - **520px and below:** panels like sign-in lose their outer margin.
 - Grid and flex children that hold text use `minmax(0, 1fr)` or `min-width: 0`
   so long content can't push the layout wider than the screen.
@@ -384,15 +457,11 @@ Each should be fixed in its own small PR.
    18×20px and fails the 24px minimum today; fix it first. The code Copy
    button, explainer actions and `.button.small` pass 24px but are under 44px
    on phones; enlarge them in the 900px breakpoint.
-5. **`100vh` on phones.** The layout and sidebar heights use `100vh`, which on
-   mobile browsers includes the hidden address bar area. Use `100dvh` with a
+5. ~~`100vh` on phones.~~ The shell and sidebar now use `100dvh` with a
    `100vh` fallback.
-6. **Tabs aren't full tabs.** The Team/Mine switch uses `role="tablist"` but
-   they are links to new pages and don't support arrow keys. Either drop the
-   tab roles and use `aria-current`, or add arrow-key handling.
-7. **No icons.** Actions are text-only ("+ Attach files"). That's fine, but if
-   icons are added they must be inline SVG using `currentColor`, 16–20px, with a
-   text label or `aria-label`, and documented here first.
+6. ~~Tabs aren't full tabs.~~ Fixed: the Team/Mine switch on the Chats page
+   is a `nav` of links with `aria-current`.
+7. ~~No icons.~~ Done: see [Icons](#icons).
 8. **Streaming replies aren't announced.** Screen-reader users get no signal
    that Claude has finished replying. Add a polite live region that says
    "Claude replied" when streaming ends.

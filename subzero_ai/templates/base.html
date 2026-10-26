@@ -10,34 +10,33 @@
   <link rel="stylesheet" href="/assets/code.css?v={{ version }}">
   <script src="/static/app.js?v={{ version }}" defer></script>
 </head>
-<body class="{% block body_class %}{% endblock %}">
+<body class="{% if viewer %}has-sidebar {% endif %}{% block body_class %}{% endblock %}">
   <a class="skip" href="#main">Skip to content</a>
+  {% if viewer %}
+  {% from "_icons.html" import icon %}
+  {# Signed in: a claude.ai-style shell, with the sidebar on the left and the page beside it #}
+  <header class="mobile-bar">
+    <button class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false"
+      data-sidebar-toggle data-open-label="Open menu" data-close-label="Close menu" aria-label="Open menu">{{ icon('menu') }}</button>
+    <a class="brand" href="/chats">
+      <span class="brand-mark" aria-hidden="true">SZ</span>
+      <span class="brand-name">{{ settings.app_name }}</span>
+    </a>
+    <a class="icon-button" href="/chats" aria-label="New chat">{{ icon('plus') }}</a>
+  </header>
+  <div class="shell">
+    {% include "_sidebar.html" %}
+    <div class="main-col">
+  {% else %}
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="/chats">
         <span class="brand-mark" aria-hidden="true">SZ</span>
         <span class="brand-name">{{ settings.app_name }}</span>
       </a>
-      {% if viewer %}
-      <nav class="nav" aria-label="Main">
-        <a href="/chats" {% if path.startswith('/chats') or path.startswith('/c/') %}aria-current="page"{% endif %}>Chats</a>
-        {% if viewer.is_mentor %}
-        <a href="/queue" {% if path.startswith('/queue') %}aria-current="page"{% endif %}>Review
-          {% if pending_count %}<span class="count" aria-label="{{ pending_count }} waiting">{{ pending_count }}</span>{% endif %}</a>
-        {% endif %}
-        {% if viewer.is_admin %}
-        <a href="/audit" {% if path.startswith('/audit') %}aria-current="page"{% endif %}>Audit log</a>
-        <a href="/settings" {% if path.startswith('/settings') %}aria-current="page"{% endif %}>Settings
-          {% if setting_alert %}<span class="count alert"><span aria-hidden="true">!</span><span class="visually-hidden">needs attention</span></span>{% endif %}</a>
-        {% endif %}
-      </nav>
-      <div class="me">
-        <span class="me-name">{{ viewer.name }}{% if viewer.is_mentor %} <span class="role">{{ 'Admin' if viewer.is_admin else 'Mentor' }}</span>{% endif %}</span>
-        <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Sign out</button></form>
-      </div>
-      {% endif %}
     </div>
   </header>
+  {% endif %}
   <aside class="notice" role="note">
     <p>You're chatting with Claude, an AI made by Anthropic, not a person. It can be wrong, so check important answers with a mentor. Mentors review every student message, and the team can see approved chats. <a href="/about">How this works</a></p>
   </aside>
@@ -45,5 +44,9 @@
   <main id="main">
     {% block main %}{% endblock %}
   </main>
+  {% if viewer %}
+    </div>
+  </div>
+  {% endif %}
 </body>
 </html>
