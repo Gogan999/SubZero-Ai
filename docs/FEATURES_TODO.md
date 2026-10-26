@@ -21,7 +21,6 @@ keeps its status tag.
 | Feature | Where the placeholder is | What it should do | Notes for building it |
 |---|---|---|---|
 | Projects | Sidebar, `/projects` | Group chats about one mechanism or subsystem, with shared reference files and project instructions that go into every chat. | New `projects` table; conversations get a `project_id`. Project files reuse the attachment store. Project instructions written by mentors, or reviewed like messages. |
-| Artifacts | Sidebar, `/artifacts` | The home for interactive explainers: a gallery of every explainer (later documents and code) from approved chats, with full screen and download. Explainers have no switch in the composer; Claude makes one when a student asks in words, or when it would clearly help. | Explainers already exist per reply (`render.explainers`), so a gallery query over approved replies is most of it. Private chats stay private. |
 | Claude Code | Sidebar, `/code` | Let Claude read the team's robot code repository, run builds and tests, and propose changes as a pull request. | The biggest item. Needs a sandboxed runner, a narrowly scoped GitHub token, and mentor approval for every step that writes. Probably mentors only at first. |
 | Web search | Composer tools menu | Let Claude look up datasheets, game rules and part specs. | API web search tool. Costs extra per search: add a daily cap and a Settings switch. Show the searches on the mentor's review card. |
 | Extended thinking | Composer tools menu | Let Claude think longer on hard problems. | API `thinking` setting. Costs more, so maybe mentors turn it on per chat, like the model switch. |
@@ -70,6 +69,9 @@ Not on screen yet. Add a placeholder only when work on one starts.
 
 ## Done
 
+- Artifacts (`/artifacts`): a gallery of every interactive explainer from chats the viewer can see, with
+  search and Team / From my chats tabs, and a page per explainer with Full screen, Download and View code.
+  An explainer is exactly as visible as the reply it's in, so private chats stay private.
 - Sidebar like claude.ai with New chat, Chats, Recents and an account menu.
 - Chats page (`/recents`) with search, subteam filter and Team/Mine, moved from the old sidebar.
 - Greeting on the new-chat page.

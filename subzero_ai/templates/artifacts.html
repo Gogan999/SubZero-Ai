@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Artifacts · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page">
+  <div class="page-head">
+    <h1>Artifacts</h1>
+    <a class="button primary" href="/chats">{{ icon('plus') }} New chat</a>
+  </div>
+  <p class="lede">Interactive explainers Claude has made in the team's chats: simulations, moving diagrams and graphs you can play with. Ask for one in any chat, like “make a simulation of our arm with a P controller”.</p>
+  <form class="search" method="get" action="/artifacts" role="search">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    <div class="search-box">
+      {{ icon('search') }}
+      <label class="visually-hidden" for="q">Search artifacts</label>
+      <input id="q" name="q" type="search" placeholder="Search artifacts" value="{{ query }}">
+    </div>
+    <button class="button" type="submit">Search</button>
+  </form>
+  <nav class="tabs" aria-label="Whose artifacts">
+    <a href="/artifacts?scope=team" {% if scope != 'mine' %}aria-current="page"{% endif %}>Team</a>
+    <a href="/artifacts?scope=mine" {% if scope == 'mine' %}aria-current="page"{% endif %}>From my chats</a>
+  </nav>
+  <ul class="artifact-grid">
+    {% for item in items %}
+    <li class="artifact-card">
+      <span class="artifact-mark" aria-hidden="true">{{ icon('artifacts') }}</span>
+      <a class="artifact-title" href="{{ item.url }}">{{ item.title }}</a>
+      <span class="chat-meta">Interactive explainer · {{ item.owner }}{% if item.time %} · <time>{{ item.time }}</time>{% endif %}
+        {% if item.private %}<span class="pill held">Private</span>{% endif %}</span>
+      <a class="artifact-chat" href="{{ item.chat_url }}">From “{{ item.chat_title }}”</a>
+    </li>
+    {% else %}
+    <li class="empty-state">{% if query %}No artifacts match “{{ query }}”.{% elif scope == 'mine' %}None of your chats has an interactive explainer yet. Ask Claude for a simulation or an interactive diagram in a chat.{% else %}No interactive explainers yet. Ask Claude for a simulation or an interactive diagram in a chat, and it will show up here once a mentor approves the question.{% endif %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

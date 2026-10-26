@@ -200,6 +200,23 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .chat-rows a:hover { background: var(--frost); }
 .chat-rows time { font-variant-numeric: tabular-nums; }
 
+/* Artifacts gallery: one card per interactive explainer, and a page for each */
+.artifact-grid { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: .75rem; }
+.artifact-grid .empty-state { grid-column: 1 / -1; }
+.artifact-card { position: relative; display: grid; align-content: start; gap: .35rem; padding: 1rem; background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); min-width: 0; }
+.artifact-card:hover { background: var(--frost); }
+.artifact-mark { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: var(--muted-bg); color: var(--brand); }
+.artifact-title { font-weight: 650; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+/* The title link covers the whole card; the chat link sits above it so both can be clicked */
+.artifact-title::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
+.artifact-title:focus-visible { outline: none; }
+.artifact-card:has(.artifact-title:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+.artifact-chat { position: relative; font-size: .85rem; overflow-wrap: anywhere; }
+.artifact-chat:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.crumbs { margin: 0 0 .5rem; font-size: .9rem; }
+.artifact-view { margin-top: 1rem; }
+.artifact-view .explainer iframe { height: min(78vh, 760px); }
+
 /* Coming soon pages */
 .soon-banner { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; color: var(--ink-2); font-size: .9rem; }
 .prose-list { padding-left: 1.4rem; margin: 0 0 1rem; }

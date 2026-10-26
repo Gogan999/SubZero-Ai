@@ -281,6 +281,17 @@ Interactive explainers sit in an `.explainer` frame with a bar holding the
 label and text-style actions (Full screen, Download, View code). The iframe is
 sandboxed; never relax the sandbox for styling reasons.
 
+### Artifact cards
+
+The Artifacts gallery (`artifacts.html`) is a `.artifact-grid` of
+`.artifact-card`s: a `--sheet` card with the artifacts icon in a 36px
+`--muted-bg` square, the title, a `.chat-meta` line (kind, owner, time,
+Private pill) and a link back to the chat. The title link covers the whole
+card (the focus ring goes around the card); the chat link sits above it so it
+stays clickable. Each artifact gets its own page (`artifact.html`) showing the
+same `.explainer` frame as the chat, taller, under a `.crumbs` link back to the
+gallery.
+
 ### Composer
 
 - Sticky at the bottom of the thread, fading the page behind it with a

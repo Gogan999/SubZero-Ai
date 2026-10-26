@@ -57,7 +57,17 @@ from .generation import ReplyRunner
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
-from .render import EXPLAINER_CSP, explainer_download, explainers, markdown_html, plain_html, pygments_css
+from .render import (
+    EXPLAINER_CSP,
+    EXPLAINER_MAX_BYTES,
+    explainer_download,
+    explainer_figure,
+    explainer_title,
+    explainers,
+    markdown_html,
+    plain_html,
+    pygments_css,
+)
 from .roles import DEV_USERS, RECOVERY_USER, Directory, is_excluded_account
 from .slack_api import FakeSlack, SlackWebApi
 from .slack_handlers import SlackInteractions
@@ -104,18 +114,6 @@ COMING_SOON = {
         ],
         "meanwhile": "Put the subsystem's name in your first message, so the team can find the chat with search on the Chats page.",
     },
-    "artifacts": {
-        "title": "Artifacts",
-        "summary": "A gallery of the interactive explainers (simulations, moving diagrams, graphs you can play with) "
-                   "and other things Claude has made for the team.",
-        "points": [
-            "Browse every interactive explainer from approved chats in one place.",
-            "Open an explainer full screen or download it without scrolling back through the chat.",
-            "Save useful ones so the team can reuse them at the next build season.",
-        ],
-        "meanwhile": "Ask Claude for a simulation or an interactive explainer in a normal chat. Claude also makes one on "
-                     "its own when it would help, and it appears right in the reply.",
-    },
     "code": {
         "title": "Claude Code",
         "summary": "Let Claude work in the team's robot code repository: read it, run tests and suggest changes.",
@@ -143,7 +141,7 @@ def short_text(text: str, limit: int = 60) -> str:
     return cut.rstrip(" ,.;:-") + "…"
 
 
-SAFE_NEXT = re.compile(r"/(?:chats|queue|audit|settings|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -647,6 +645,64 @@ def coming_soon(key: str):
     return endpoint
 
 
+def artifact_list(s: Services, viewer: Viewer, scope: str, query: str) -> list[dict[str, Any]]:
+    """Every interactive explainer the viewer can see, newest first. An explainer is only as visible as the
+    reply it's in, so private chats stay private and other students' chats show once something was approved."""
+    convs: dict[int, Any] = {}
+    items = []
+    needle = query.lower()
+    for row in s.store.explainer_replies(owner_id=viewer.id if scope == "mine" else None):
+        cid = row["conversation_id"]
+        if cid not in convs:
+            convs[cid] = s.store.conversation(cid)
+        conv = convs[cid]
+        msg = s.store.message(row["id"])
+        if conv is None or msg is None or not s.store.can_view_message(viewer, conv, msg):
+            continue
+        chat_title = conv["title"] or "New chat"
+        for index, page_html in enumerate(explainers(row["content"])):
+            if len(page_html.encode("utf-8")) > EXPLAINER_MAX_BYTES:
+                continue  # the chat shows these as code, not as a working explainer
+            title = explainer_title(page_html) or f"Explainer from {chat_title}"
+            if needle and needle not in title.lower() and needle not in chat_title.lower():
+                continue
+            items.append({"url": f"/artifacts/{row['id']}/{index}", "title": title, "chat_title": chat_title,
+                          "chat_url": f"/c/{cid}#m{row['id']}", "owner": conv["owner_name"],
+                          "subteam": conv["subteam"], "private": conv["visibility"] == "private",
+                          "time": fmt_time(s.store, row["created_at"])})
+    return items
+
+
+@page()
+async def artifacts_page(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    scope = "mine" if request.query_params.get("scope") == "mine" else "team"
+    query = (request.query_params.get("q") or "").strip()[:100]
+    return render(request, "artifacts.html", viewer, items=artifact_list(s, viewer, scope, query), scope=scope,
+                  query=query)
+
+
+@page()
+async def artifact_page(request: Request, viewer: Viewer) -> Response:
+    """One explainer on its own page, with the same Full screen, Download and View code actions as in the chat."""
+    s = services(request)
+    msg = s.store.message(request.path_params["mid"])
+    conv = s.store.conversation(msg["conversation_id"]) if msg is not None else None
+    if (conv is None or msg["role"] != "assistant" or msg["status"] != COMPLETE
+            or not s.store.can_view_message(viewer, conv, msg)):
+        return error_page(request, viewer, 404, "Artifact not found",
+                          "This artifact doesn't exist, or it's in a chat that's private to the student and mentors.")
+    pages = explainers(msg["content"])
+    index = request.path_params["n"]
+    if index >= len(pages) or len(pages[index].encode("utf-8")) > EXPLAINER_MAX_BYTES:
+        return error_page(request, viewer, 404, "Artifact not found", "This chat doesn't have that explainer.")
+    chat_title = conv["title"] or "New chat"
+    title = explainer_title(pages[index]) or f"Explainer from {chat_title}"
+    figure = explainer_figure(pages[index], f"/c/{conv['id']}/x/{msg['id']}/{index}")
+    return render(request, "artifact.html", viewer, title=title, figure=figure, conv=conv, chat_title=chat_title,
+                  chat_url=f"/c/{conv['id']}#m{msg['id']}", time=fmt_time(s.store, msg["created_at"]))
+
+
 @page()
 async def conversation_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
@@ -1085,6 +1141,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/chats", chats),
         Route("/chats/new", new_chat, methods=["POST"]),
         Route("/recents", recents_page),
+        Route("/artifacts", artifacts_page),
+        Route("/artifacts/{mid:int}/{n:int}", artifact_page),
         *[Route(f"/{key}", coming_soon(key)) for key in COMING_SOON],
         Route("/c/{cid:int}", conversation_page),
         Route("/c/{cid:int}/messages", send_message, methods=["POST"]),
