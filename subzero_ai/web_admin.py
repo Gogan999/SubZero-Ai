@@ -100,6 +100,15 @@ def health_rows(s: Services) -> list[dict[str, Any]]:
     return rows
 
 
+def _names_for(s: Services, slack_ids) -> str:
+    """Who a list of Slack member IDs is, for the hint under the field."""
+    names = []
+    for slack_id in sorted(slack_ids):
+        user = s.store.user_by_slack_id(slack_id)
+        names.append(user["name"] if user else f"{slack_id} (hasn't signed in yet)")
+    return ", ".join(names)
+
+
 def settings_context(s: Services, errors: dict[str, str] | None = None,
                      submitted: dict[str, str] | None = None) -> dict[str, Any]:
     sections = []
@@ -109,7 +118,10 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
             value = (submitted or {}).get(f.name)
             if value is None:
                 value = saved_settings.current(s.settings, f.name)
-            items.append({"field": f, "value": value, "error": (errors or {}).get(f.name)})
+            item = {"field": f, "value": value, "error": (errors or {}).get(f.name)}
+            if f.kind == "ids":
+                item["people"] = _names_for(s, getattr(s.settings, f.name))
+            items.append(item)
         sections.append({"key": key, "title": title, "fields": items})
     prompts = []
     for name, label, help_text in saved_settings.PROMPT_LAYERS:

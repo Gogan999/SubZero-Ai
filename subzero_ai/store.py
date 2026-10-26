@@ -16,10 +16,11 @@ PENDING = "pending"
 APPROVED = "approved"
 EDITED = "edited"
 AUTO = "auto"  # a mentor's own message, sent without review
+GRACE = "grace"  # a student's message sent without review, inside the approval window
 REJECTED = "rejected"
 HELD = "held"
 WITHDRAWN = "withdrawn"
-SENT_TO_CLAUDE = {APPROVED, EDITED, AUTO}
+SENT_TO_CLAUDE = {APPROVED, EDITED, AUTO, GRACE}
 
 # Statuses for Claude's replies
 STREAMING = "streaming"
@@ -129,7 +130,7 @@ class Store:
             return False
         # Other students only see a conversation once something in it has been approved.
         row = self.db.one(
-            "SELECT 1 FROM messages WHERE conversation_id = ? AND role = 'user' AND status IN ('approved','edited','auto') LIMIT 1",
+            "SELECT 1 FROM messages WHERE conversation_id = ? AND role = 'user' AND status IN ('approved','edited','auto','grace') LIMIT 1",
             (conv["id"],),
         )
         return row is not None
@@ -154,13 +155,13 @@ class Store:
         if not viewer.is_mentor:
             where.append(
                 "(c.owner_id = ? OR (c.visibility = 'team' AND EXISTS (SELECT 1 FROM messages m2 WHERE "
-                "m2.conversation_id = c.id AND m2.role = 'user' AND m2.status IN ('approved','edited','auto'))))"
+                "m2.conversation_id = c.id AND m2.role = 'user' AND m2.status IN ('approved','edited','auto','grace'))))"
             )
             params.append(viewer.id)
         if query:
             where.append(
                 "(c.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM messages m3 WHERE m3.conversation_id = c.id AND "
-                "m3.content LIKE ? ESCAPE '\\' AND (m3.role = 'assistant' OR m3.status IN ('approved','edited','auto') OR c.owner_id = ?)))"
+                "m3.content LIKE ? ESCAPE '\\' AND (m3.role = 'assistant' OR m3.status IN ('approved','edited','auto','grace') OR c.owner_id = ?)))"
             )
             # Search for what was typed: % and _ are wildcards in LIKE, so escape them.
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -257,11 +258,45 @@ class Store:
         local_midnight = datetime.now(self.tz).replace(hour=0, minute=0, second=0, microsecond=0)
         since = local_midnight.astimezone(timezone.utc).isoformat(timespec="seconds")
         row = self.db.one(
-            "SELECT COUNT(*) AS n FROM messages WHERE author_id = ? AND status IN ('approved','edited') "
-            "AND reviewed_at >= ?",
-            (user_id, since),
+            "SELECT COUNT(*) AS n FROM messages WHERE author_id = ? AND ((status IN ('approved','edited') "
+            "AND reviewed_at >= ?) OR (status = 'grace' AND created_at >= ?))",
+            (user_id, since, since),
         )
         return row["n"]
+
+    def window_open(self, conversation_id: int, minutes: int) -> bool:
+        """Whether a student's next message in this chat can skip review: the latest message they sent was
+        approved by a mentor, or itself sent in the window, less than this many minutes ago. A rejected,
+        privately handled, or flagged message closes the window, and so does a MENTOR ALERT (which makes the
+        chat private). The first message of every chat is always reviewed."""
+        if minutes <= 0:
+            return False
+        conv = self.db.one("SELECT visibility FROM conversations WHERE id = ?", (conversation_id,))
+        if conv is None or conv["visibility"] != "team":
+            return False
+        last = self.db.one(
+            "SELECT status, created_at, reviewed_at FROM messages WHERE conversation_id = ? AND role = 'user' "
+            "AND status != 'withdrawn' ORDER BY id DESC LIMIT 1", (conversation_id,))
+        if last is None:
+            return False
+        if last["status"] in (APPROVED, EDITED):
+            cleared = last["reviewed_at"]
+        elif last["status"] == GRACE:
+            cleared = last["created_at"]
+        else:
+            return False
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+        return bool(cleared) and cleared > cutoff
+
+    def window_messages(self, hours: int = 24, limit: int = 50) -> list[sqlite3.Row]:
+        """Messages sent without review in the approval window, newest first, for mentors to look over."""
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+        return self.db.all(
+            "SELECT m.*, a.name AS author_name, c.title AS conversation_title "
+            "FROM messages m JOIN users a ON a.id = m.author_id JOIN conversations c ON c.id = m.conversation_id "
+            "WHERE m.status = 'grace' AND m.created_at >= ? ORDER BY m.id DESC LIMIT ?",
+            (since, limit),
+        )
 
     def previous_reply(self, conversation_id: int, before_message_id: int) -> sqlite3.Row | None:
         return self.db.one(

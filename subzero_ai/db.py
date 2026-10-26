@@ -110,6 +110,10 @@ MIGRATIONS: list[str] = [
         updated_at TEXT NOT NULL
     );
     """,
+    # Version 4: the approval window and pre-screen
+    """
+    ALTER TABLE messages ADD COLUMN screen_note TEXT;
+    """,
 ]
 
 

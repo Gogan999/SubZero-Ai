@@ -52,7 +52,8 @@ def files_line(files: list[tuple[str, int]], link: str) -> str:
 
 def approval_card(*, message_id: int, student_name: str, subteam: str | None, title: str | None,
                   text: str, link: str, previous_reply: str | None = None,
-                  files: list[tuple[str, int]] | None = None, explainer: bool = False) -> list[dict]:
+                  files: list[tuple[str, int]] | None = None, explainer: bool = False,
+                  screen_note: str | None = None) -> list[dict]:
     blocks: list[dict] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": card_header(student_name, subteam, title, link)}},
         {"type": "section", "text": {"type": "mrkdwn", "text": card_body(text, link)}},
@@ -62,6 +63,9 @@ def approval_card(*, message_id: int, student_name: str, subteam: str | None, ti
         extras.append({"type": "mrkdwn", "text": files_line(files, link)})
     if explainer:
         extras.append({"type": "mrkdwn", "text": ":bulb: Asked for an interactive explainer (costs a little more)"})
+    if screen_note:
+        extras.append({"type": "mrkdwn", "text": ":mag: Sent in the approval window, but the screener flagged it: "
+                                                 + _mrkdwn_escape(screen_note)})
     if extras:
         blocks.append({"type": "context", "elements": extras})
     if previous_reply:
