@@ -355,17 +355,18 @@ class Store:
         )
         return row["n"]
 
-    def explainer_replies(self, *, owner_id: int | None = None, limit: int = 300) -> list[sqlite3.Row]:
-        """Finished replies that hold at least one interactive explainer, newest first. The caller checks who
-        may see each one."""
-        where = "m.role = 'assistant' AND m.status = 'complete' AND m.content LIKE '%```explainer%'"
+    def explainer_replies(self, *, owner_id: int | None = None, limit: int = 5000) -> list[sqlite3.Row]:
+        """Finished replies that hold at least one interactive explainer, newest first, without their text. The
+        caller checks who may see each one."""
+        where = ("m.role = 'assistant' AND m.status = 'complete' "
+                 "AND (m.content LIKE '%```explainer%' OR m.content LIKE '%~~~explainer%')")
         params: list = []
         if owner_id is not None:
             where += " AND c.owner_id = ?"
             params.append(owner_id)
         params.append(limit)
         return self.db.all(
-            "SELECT m.id, m.conversation_id, m.content, m.created_at FROM messages m "
+            "SELECT m.id, m.conversation_id, m.created_at FROM messages m "
             f"JOIN conversations c ON c.id = m.conversation_id WHERE {where} ORDER BY m.id DESC LIMIT ?",
             tuple(params),
         )

@@ -10,7 +10,7 @@ import secrets
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -158,6 +158,8 @@ class Services:
     health: Health
     nightly: Nightly
     projects: Projects
+    # Explainer titles and sizes per finished reply, for the Artifacts gallery (a finished reply never changes)
+    artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
@@ -657,32 +659,47 @@ def coming_soon(key: str):
     return endpoint
 
 
+ARTIFACTS_SHOWN = 300
+
+
+def _explainer_index(s: Services, message_id: int) -> list[tuple[int, str, int]]:
+    """(number, title, size) for each explainer in a finished reply, worked out once and then remembered."""
+    if message_id not in s.artifact_index:
+        msg = s.store.message(message_id)
+        s.artifact_index[message_id] = [(i, explainer_title(page_html), len(page_html.encode("utf-8")))
+                                        for i, page_html in enumerate(explainers(msg["content"] if msg else ""))]
+    return s.artifact_index[message_id]
+
+
 def artifact_list(s: Services, viewer: Viewer, scope: str, query: str) -> list[dict[str, Any]]:
     """Every interactive explainer the viewer can see, newest first. An explainer is only as visible as the
     reply it's in, so private chats stay private and other students' chats show once something was approved."""
     convs: dict[int, Any] = {}
-    items = []
+    items: list[dict[str, Any]] = []
     needle = query.lower()
+    # can_view_message only needs these for a finished reply
+    reply = {"role": "assistant", "status": COMPLETE, "author_id": None}
     for row in s.store.explainer_replies(owner_id=viewer.id if scope == "mine" else None):
         cid = row["conversation_id"]
         if cid not in convs:
             convs[cid] = s.store.conversation(cid)
         conv = convs[cid]
-        msg = s.store.message(row["id"])
-        if conv is None or msg is None or not s.store.can_view_message(viewer, conv, msg):
+        if conv is None or not s.store.can_view_message(viewer, conv, reply):
             continue
         chat_title = conv["title"] or "New chat"
-        for index, page_html in enumerate(explainers(row["content"])):
-            if len(page_html.encode("utf-8")) > EXPLAINER_MAX_BYTES:
+        for index, page_title, size in _explainer_index(s, row["id"]):
+            if size > EXPLAINER_MAX_BYTES:
                 continue  # the chat shows these as code, not as a working explainer
-            title = explainer_title(page_html) or f"Explainer from {chat_title}"
+            title = page_title or f"Explainer from {chat_title}"
             if needle and needle not in title.lower() and needle not in chat_title.lower():
                 continue
             items.append({"url": f"/artifacts/{row['id']}/{index}", "title": title, "chat_title": chat_title,
                           "chat_url": f"/c/{cid}#m{row['id']}", "owner": conv["owner_name"],
                           "subteam": conv["subteam"], "private": conv["visibility"] == "private",
                           "time": fmt_time(s.store, row["created_at"])})
-    return items
+        if len(items) >= ARTIFACTS_SHOWN:
+            break
+    return items[:ARTIFACTS_SHOWN]
 
 
 @page()
