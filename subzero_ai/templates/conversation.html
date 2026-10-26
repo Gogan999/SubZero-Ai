@@ -19,7 +19,9 @@
         <noscript><button class="button small" type="submit">Switch</button></noscript>
       </form>
       {% endif %}
-      <button class="button small" type="button" disabled title="Sharing a chat outside the team is coming soon">{{ icon('share') }} Share <span class="soon">Soon</span></button>
+      {% if (own or viewer.is_mentor) and conv.visibility != 'private' %}
+      <a class="button small" href="/c/{{ conv.id }}/share">{{ icon('share') }} Share</a>
+      {% endif %}
     </div>
     {% if conv.visibility == 'private' %}
     <p class="private-note">Private: only {{ 'you' if own else conv.owner_name }} and mentors can see this chat.</p>

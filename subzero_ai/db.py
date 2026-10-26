@@ -172,6 +172,25 @@ MIGRATIONS: list[str] = [
     ALTER TABLE messages ADD COLUMN web_searches INTEGER;
     ALTER TABLE messages ADD COLUMN sources TEXT;
     """,
+    # Version 9: read-only share links for people outside the team, approved by a mentor
+    """
+    CREATE TABLE shares (
+        id INTEGER PRIMARY KEY,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        token TEXT NOT NULL UNIQUE,
+        upto_message_id INTEGER NOT NULL,
+        audience TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'active', 'declined', 'revoked')),
+        requested_by INTEGER NOT NULL REFERENCES users(id),
+        reviewed_by INTEGER REFERENCES users(id),
+        views INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        expires_at TEXT
+    );
+    CREATE INDEX idx_shares_conversation ON shares(conversation_id, id);
+    CREATE INDEX idx_shares_status ON shares(status, id);
+    """,
 ]
 
 

@@ -317,6 +317,18 @@ line). A project page is `.project-layout`: the project's composer
 instructions, files and, for mentors, the upload form and an "Edit project"
 disclosure. Archiving uses `.button.reject` with `data-confirm`.
 
+### Share links
+
+The chat header's Share button (`.button.small` with the share icon) opens the
+Share page. Each link is a `.share-link` box (1px `--rule` border, 10px
+corners) with who it's for, a status `.pill` (`ok` working, `pending` waiting,
+`bad` not approved, `unknown` expired or revoked), the read-only URL in a mono
+`.share-url` field with a Copy button (`data-copy-value`), a `.fine` line of
+who asked and when, and `.share-actions`. The mentor queue lists waiting links
+the same way in its own `#shares` panel. The page a link opens has no sidebar
+and its own notice saying it's a read-only copy reviewed by mentors; people
+show as "Student" or "Mentor" with an initial instead of a name or photo.
+
 ### Composer
 
 - Sticky at the bottom of the thread, fading the page behind it with a

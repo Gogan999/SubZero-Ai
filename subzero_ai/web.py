@@ -58,6 +58,7 @@ from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
 from .projects import MAX_PROJECT_FILES, ProjectError, Projects
+from .shares import SHARE_DAYS, ShareError, Shares, state as share_state
 from .render import (
     EXPLAINER_CSP,
     EXPLAINER_MAX_BYTES,
@@ -158,6 +159,7 @@ class Services:
     health: Health
     nightly: Nightly
     projects: Projects
+    shares: Shares
     # Explainer titles and sizes per finished reply, for the Artifacts gallery (a finished reply never changes)
     artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
@@ -192,7 +194,8 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
     return Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
-                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects)
+                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
+                    Shares(db))
 
 
 # --------------------------------------------------------------------------- helpers
@@ -377,7 +380,8 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         "csrf": csrf_token(request),
         "dev_mode": s.settings.dev_login,
         "version": __version__,
-        "pending_count": len(s.store.pending_messages()) if viewer and viewer.is_mentor else 0,
+        "pending_count": (len(s.store.pending_messages()) + s.shares.count_pending()
+                          if viewer and viewer.is_mentor else 0),
         "setting_alert": viewer is not None and viewer.is_admin and any(
             row.get("alert") for row in _health_alerts(s)),
         "path": request.url.path,
@@ -1027,10 +1031,12 @@ def _review_action(kind: str):
 @page(require="mentor")
 async def queue_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
+    shares = [share_link_view(s, row) for row in s.shares.pending()]
     window = [{"id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
                "title": m["conversation_title"] or "New chat", "text": short_text(m["content"], 120),
                "time": fmt_time(s.store, m["created_at"])} for m in s.store.window_messages()]
-    return render(request, "queue.html", viewer, items=_queue_items(s), window=window)
+    return render(request, "queue.html", viewer, items=_queue_items(s), window=window, shares=shares,
+                  flash=request.session.pop("flash", None))
 
 
 @page(require="mentor")
@@ -1075,6 +1081,175 @@ async def explainer_page(request: Request, viewer: Viewer) -> Response:
         name = f"explainer-{conv['id']}-{msg['id']}-{index + 1}.html"
         headers["Content-Disposition"] = f'attachment; filename="{name}"'
     return HTMLResponse(page_html, headers=headers)
+
+
+# --------------------------------------------------------------------------- share links
+SHARE_HEADERS = {"X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store"}
+SHARE_STATES = {"pending": "Waiting for a mentor", "active": "Working", "expired": "Expired",
+                "declined": "Not approved", "revoked": "Revoked"}
+
+
+def share_link_view(s: Services, row) -> dict[str, Any]:
+    current = share_state(row)
+    return {"id": row["id"], "url": s.settings.url(f"/s/{row['token']}"), "audience": row["audience"],
+            "state": current, "label": SHARE_STATES[current], "requester": row["requester_name"],
+            "reviewer": row["reviewer_name"], "views": row["views"], "title": row["conversation_title"] or "New chat",
+            "conversation_id": row["conversation_id"], "created": fmt_time(s.store, row["created_at"]),
+            "expires": fmt_time(s.store, row["expires_at"]) if row["expires_at"] else None}
+
+
+def shared_messages(s: Services, row, explainer_base: Callable[[int], str]) -> list[dict[str, Any]]:
+    """The chat as a share link shows it: no names, no files, nothing that wasn't approved."""
+    items = []
+    for m in s.shares.public_messages(row["conversation_id"], row["upto_message_id"]):
+        item = {"role": m["role"], "time": fmt_time(s.store, m["created_at"]), "sources": [], "files": 0}
+        if m["role"] == "assistant":
+            item["html"] = markdown_html(m["content"], explainer_base=explainer_base(m["id"]))
+            try:
+                item["sources"] = json.loads(m["sources"] or "[]")
+            except ValueError:
+                pass
+        else:
+            item["who"] = "Mentor" if m["author_role"] in ("mentor", "admin") else "Student"
+            item["html"] = plain_html(m["content"])
+            item["files"] = sum(1 for f in s.attachments.for_message(m["id"]) if f["kind"] != "frame")
+        items.append(item)
+    return items
+
+
+def _share_conversation(s: Services, viewer: Viewer, cid: int):
+    conv = s.store.conversation(cid)
+    if conv is None or not s.store.can_view_conversation(viewer, conv) or not s.shares.can_manage(viewer, conv):
+        return None
+    return conv
+
+
+@page()
+async def share_page(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    conv = _share_conversation(s, viewer, request.path_params["cid"])
+    if conv is None:
+        return error_page(request, viewer, 404, "Chat not found",
+                          "Only the student who started a chat, or a mentor, can share it.")
+    return _render_share(request, viewer, s, conv, flash=request.session.pop("flash", None),
+                         error=request.session.pop("share_error", None))
+
+
+def _render_share(request: Request, viewer: Viewer, s: Services, conv, *, flash=None, error=None, audience="",
+                  status_code: int = 200) -> Response:
+    links = [share_link_view(s, row) for row in s.shares.for_conversation(conv["id"])]
+    return render(request, "share.html", viewer, status_code=status_code, conv=conv, links=links, days=SHARE_DAYS,
+                  title=conv["title"] or "New chat", flash=flash, error=error, audience=audience)
+
+
+@page()
+async def share_create(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    conv = _share_conversation(s, viewer, request.path_params["cid"])
+    if conv is None:
+        return error_page(request, viewer, 404, "Chat not found",
+                          "Only the student who started a chat, or a mentor, can share it.")
+    form = await request.form()
+    audience = str(form.get("audience", ""))
+    try:
+        row = s.shares.request(viewer, conv, audience)
+    except ShareError as exc:
+        return _render_share(request, viewer, s, conv, error=str(exc), audience=audience[:120], status_code=400)
+    if row["status"] == "active":
+        request.session["flash"] = "Made a share link. Copy it below."
+    else:
+        request.session["flash"] = "Asked a mentor to approve the link. It starts working once they do."
+        if s.slack is not None and s.settings.slack_approvals_channel:
+            text = (f"{viewer.name} asked to share the chat \"{row['conversation_title'] or 'New chat'}\" outside "
+                    f"the team, for {row['audience']}. Approve or decline it: {s.settings.url('/queue#shares')}")
+            s.tasks.spawn(_slack_note(s, s.settings.slack_approvals_channel, text), name=f"share-{row['id']}")
+    return RedirectResponse(f"/c/{conv['id']}/share", status_code=303)
+
+
+async def _slack_note(s: Services, channel: str, text: str, dm: bool = False) -> None:
+    try:
+        if dm:
+            await s.slack.dm(channel, text)
+        else:
+            await s.slack.post_message(channel, text)
+    except Exception:
+        log.exception("Couldn't send a Slack message about a share link")
+
+
+def _share_action(kind: str):
+    @page()
+    async def action(request: Request, viewer: Viewer) -> Response:
+        s = services(request)
+        sid = request.path_params["sid"]
+        back = "/queue#shares" if kind in ("approve", "decline") else None
+        try:
+            if kind == "revoke":
+                row = s.shares.revoke(viewer, sid)
+                request.session["flash"] = "Revoked the link. It stops working right away."
+            else:
+                row = s.shares.review(viewer, sid, approve=kind == "approve")
+                request.session["flash"] = ("Approved the share link." if kind == "approve"
+                                            else "Declined the share link.")
+                if s.slack is not None and row["requester_notify_dm"] and row["requester_slack_id"]:
+                    link = s.settings.url(f"/c/{row['conversation_id']}/share")
+                    verb = "approved" if kind == "approve" else "didn't approve"
+                    text = f"{viewer.name} {verb} your link to share \"{row['conversation_title'] or 'New chat'}\". {link}"
+                    s.tasks.spawn(_slack_note(s, row["requester_slack_id"], text, dm=True), name=f"share-dm-{sid}")
+        except ShareError as exc:
+            request.session["share_error"] = str(exc)
+            row = s.shares.get(sid)
+        if back is None:
+            back = f"/c/{row['conversation_id']}/share" if row is not None else "/chats"
+        elif "share_error" in request.session:
+            request.session["flash"] = request.session.pop("share_error")
+        return RedirectResponse(back, status_code=303)
+
+    action.__name__ = f"share_{kind}"
+    return action
+
+
+@page()
+async def share_preview(request: Request, viewer: Viewer) -> Response:
+    """What a link shows, for the mentor deciding on it (and the person who asked for it)."""
+    s = services(request)
+    row = s.shares.get(request.path_params["sid"])
+    conv = s.store.conversation(row["conversation_id"]) if row is not None else None
+    if conv is None or not (viewer.is_mentor or row["requested_by"] == viewer.id):
+        return error_page(request, viewer, 404, "Not found", "This share link doesn't exist.")
+    cid = conv["id"]
+    messages = shared_messages(s, row, lambda mid: f"/c/{cid}/x/{mid}")
+    return render(request, "shared.html", viewer, share=share_link_view(s, row), messages=messages,
+                  title=conv["title"] or "New chat", preview=True)
+
+
+async def shared_page(request: Request) -> Response:
+    """A share link, for someone outside the team. No sign-in."""
+    s = services(request)
+    token = request.path_params["token"]
+    row = s.shares.open(token)
+    if row is None:
+        return render(request, "error.html", None, status_code=404, title="Link not working",
+                      detail="This share link was revoked, has expired, or never existed. Ask the person who sent "
+                             "it for a new one.")
+    messages = shared_messages(s, row, lambda mid: f"/s/{token}/x/{mid}")
+    response = render(request, "shared.html", None, share=share_link_view(s, row), messages=messages,
+                      title=row["conversation_title"] or "Shared chat", preview=False)
+    response.headers.update(SHARE_HEADERS)
+    return response
+
+
+async def shared_explainer(request: Request) -> Response:
+    s = services(request)
+    row = s.shares.check(request.path_params["token"])
+    mid, index = request.path_params["mid"], request.path_params["n"]
+    msg = s.store.message(mid) if row is not None else None
+    if (msg is None or msg["conversation_id"] != row["conversation_id"] or msg["id"] > row["upto_message_id"]
+            or msg["role"] != "assistant" or msg["status"] != COMPLETE):
+        return PlainTextResponse("Not found", status_code=404)
+    pages = explainers(msg["content"])
+    if index >= len(pages):
+        return PlainTextResponse("Not found", status_code=404)
+    return HTMLResponse(pages[index], headers={"Content-Security-Policy": EXPLAINER_CSP, **SHARE_HEADERS})
 
 
 @page()
@@ -1218,9 +1393,11 @@ class SecurityHeaders:
                     headers.append((b"content-security-policy", CSP.encode()))
                 headers += [
                     (b"x-content-type-options", b"nosniff"),
-                    (b"referrer-policy", b"same-origin"),
                     (b"x-frame-options", b"SAMEORIGIN" if own_policy else b"DENY"),
                 ]
+                # Share links send no referrer at all, so the link never leaks to a site a reply links to
+                if not any(name.lower() == b"referrer-policy" for name, _ in headers):
+                    headers.append((b"referrer-policy", b"same-origin"))
                 if self.https:
                     headers.append((b"strict-transport-security", b"max-age=31536000"))
                 message["headers"] = headers
@@ -1363,6 +1540,14 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/c/{cid:int}/events", conversation_events),
         Route("/c/{cid:int}/model", set_model, methods=["POST"]),
         Route("/c/{cid:int}/x/{mid:int}/{n:int}", explainer_page),
+        Route("/c/{cid:int}/share", share_page),
+        Route("/c/{cid:int}/share", share_create, methods=["POST"]),
+        Route("/shares/{sid:int}/preview", share_preview),
+        Route("/shares/{sid:int}/approve", _share_action("approve"), methods=["POST"]),
+        Route("/shares/{sid:int}/decline", _share_action("decline"), methods=["POST"]),
+        Route("/shares/{sid:int}/revoke", _share_action("revoke"), methods=["POST"]),
+        Route("/s/{token:str}", shared_page),
+        Route("/s/{token:str}/x/{mid:int}/{n:int}", shared_explainer),
         Route("/files/{aid:int}", attachment_file),
         *review_routes,
         Route("/queue", queue_page),

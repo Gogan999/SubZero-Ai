@@ -22,7 +22,6 @@ keeps its status tag.
 |---|---|---|---|
 | Claude Code | Sidebar, `/code` | Let Claude read the team's robot code repository, run builds and tests, and propose changes as a pull request. | The biggest item. Needs a sandboxed runner, a narrowly scoped GitHub token, and mentor approval for every step that writes. Probably mentors only at first. |
 | Connectors (GitHub, Drive) | Composer tools menu | Pull files from the team's GitHub or Google Drive into a message instead of attaching them. | OAuth per service. Pulled files show on the review card like attachments. |
-| Share | Chat header | A read-only link to a chat for people outside the team, such as a parent. | Chats are already visible to the team. Needs a revocable link and mentor approval. |
 
 The model name in the composer is not a placeholder: students see which model
 answers, and mentors get a picker there (or in the chat header when reading
@@ -61,6 +60,12 @@ Not on screen yet. Add a placeholder only when work on one starts.
 
 ## Done
 
+- Share (`/c/<id>/share`): the chat's student or a mentor makes a read-only link and says who it's for, such as
+  "my parents". A student's link waits for a mentor, who previews it and approves or declines it in Review
+  (with a note in #claude-approvals); a mentor's link works at once. The link shows the chat as it was when
+  shared: approved messages and finished replies, people as "Student" or "Mentor" without names, and no
+  attached files. Links expire after 30 days, can be revoked any time, stop working if the chat is made
+  private, aren't indexed by search engines, and every step is in the audit log.
 - Composer tools menu: Web search, Research (mentors only unless an admin allows students), Extended thinking
   and Response styles (Normal, Concise, Explanatory, Step by step). They're picked per message, shown on the
   review card and in the queue, and approved with the message. Web search uses the API's server-side search

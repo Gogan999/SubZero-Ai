@@ -279,3 +279,117 @@ class ComposerToolsTest(FeatureTest):
         body = ClaudeClient.request_body(model="m", system="s", messages=[], max_tokens=10, web_searches=5)
         self.assertEqual(body["tools"], [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5}])
         self.assertNotIn("tools", ClaudeClient.request_body(model="m", system="s", messages=[], max_tokens=10))
+
+
+class ShareTest(FeatureTest):
+    def chat_with_reply(self):
+        mid, cid = self.start("How do I tune kP for the arm?")
+        self.approve(mid)
+        return mid, cid
+
+    def ask(self, actor, cid, audience="my parents"):
+        """Asks for a link; returns the error shown, or None."""
+        resp = actor.post(f"/c/{cid}/share", {"audience": audience}, follow_redirects=False)
+        if resp.status_code == 303:
+            return None
+        self.assertEqual(resp.status_code, 400, resp.text)
+        return resp.text
+
+    def shares(self, cid):
+        return self.h.services.shares.for_conversation(cid)
+
+    def anon(self, path):
+        self.h.client.cookies.clear()
+        return self.h.client.get(path)
+
+    def test_student_link_waits_for_a_mentor(self):
+        _, cid = self.chat_with_reply()
+        self.assertIn(f'href="/c/{cid}/share"', self.ava.get(f"/c/{cid}").text)
+        self.assertIsNone(self.ask(self.ava, cid))
+        share = self.shares(cid)[0]
+        self.assertEqual(share["status"], "pending")
+        self.assertEqual(self.anon(f"/s/{share['token']}").status_code, 404, "not live until approved")
+        self.h.idle()
+        self.assertTrue(any("for my parents" in p["text"] and "/queue#shares" in p["text"] for p in self.h.slack.posts))
+
+        queue = self.kim.get("/queue").text
+        self.assertIn("wants to share", queue)
+        preview = self.kim.get(f"/shares/{share['id']}/preview")
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn("This is exactly what they see", preview.text)
+        self.assertEqual(self.ben.get(f"/shares/{share['id']}/preview").status_code, 404)
+        self.ava.post(f"/shares/{share['id']}/approve", follow_redirects=False)  # a student can't approve
+        self.assertEqual(self.shares(cid)[0]["status"], "pending")
+        self.kim.post(f"/shares/{share['id']}/approve", follow_redirects=False)
+        self.h.idle()
+        self.assertEqual(self.shares(cid)[0]["status"], "active")
+        self.assertTrue(any("approved your link" in d["text"] for d in self.h.slack.dms))
+
+        resp = self.anon(f"/s/{share['token']}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("How do I tune kP for the arm?", resp.text)
+        self.assertIn("noindex", resp.headers["x-robots-tag"])
+        self.assertEqual(resp.headers["referrer-policy"], "no-referrer")
+        self.assertEqual(self.shares(cid)[0]["views"], 1)
+
+    def test_link_hides_names_files_and_later_messages(self):
+        mid, cid = self.chat_with_reply()
+        self.ask(self.kim, cid, "a sponsor")
+        share = self.shares(cid)[0]
+        self.assertEqual(share["status"], "active", "a mentor's link works straight away")
+        later = self.ava.send(cid, "Thanks! What about kD?").json()["message_id"]
+        self.h.idle()
+        text = self.anon(f"/s/{share['token']}").text
+        student = self.ava.user["name"]
+        self.assertNotIn(student, text)
+        self.assertIn(">Student<", text)
+        self.assertNotIn("What about kD", text, "pending, and after the link was made")
+        self.approve(later)
+        self.assertNotIn("What about kD", self.anon(f"/s/{share['token']}").text, "the link is a snapshot")
+        self.assertNotIn("/files/", text)
+
+    def test_revoke_expire_and_private(self):
+        _, cid = self.chat_with_reply()
+        self.ask(self.kim, cid)
+        share = self.shares(cid)[0]
+        token = share["token"]
+        self.assertEqual(self.anon(f"/s/{token}").status_code, 200)
+        self.h.services.store.make_private(cid)
+        self.assertEqual(self.anon(f"/s/{token}").status_code, 404)
+        self.h.services.db.execute("UPDATE conversations SET visibility = 'team' WHERE id = ?", (cid,))
+        self.h.services.db.execute("UPDATE shares SET expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+                                   (share["id"],))
+        self.assertEqual(self.anon(f"/s/{token}").status_code, 404)
+        self.assertIn("Expired", self.ava.get(f"/c/{cid}/share").text)
+        self.h.services.db.execute("UPDATE shares SET expires_at = NULL WHERE id = ?", (share["id"],))
+        self.ava.post(f"/shares/{share['id']}/revoke", follow_redirects=False)
+        self.assertEqual(self.shares(cid)[0]["status"], "revoked")
+        self.assertEqual(self.anon(f"/s/{token}").status_code, 404)
+        actions = [r["action"] for r in self.h.services.store.audit_entries()]
+        self.assertIn("share_created", actions)
+        self.assertIn("share_revoked", actions)
+
+    def test_who_can_share(self):
+        mid, cid = self.start("A question nobody has approved yet")
+        self.assertIn("nothing to share yet", self.ask(self.ava, cid))
+        self.approve(mid)
+        self.assertEqual(self.ben.get(f"/c/{cid}/share").status_code, 404, "another student's chat")
+        self.assertEqual(self.ben.post(f"/c/{cid}/share", {"audience": "x"}).status_code, 404)
+        self.assertNotIn(f'href="/c/{cid}/share"', self.ben.get(f"/c/{cid}").text)
+        self.assertIn("Say who the link is for", self.ask(self.ava, cid, " "))
+        self.h.services.store.make_private(cid)
+        self.assertIn("This chat is private, so it can", self.ask(self.ava, cid))
+        self.assertEqual(self.shares(cid), [])
+
+    def test_shared_explainer_is_served_only_through_a_live_link(self):
+        mid, cid = self.start("Can you make a simulation of how kP changes the arm?")
+        self.approve(mid)
+        reply_id = self.h.reply_to(mid)["id"]
+        self.ask(self.kim, cid)
+        token = self.shares(cid)[0]["token"]
+        self.assertIn(f"/s/{token}/x/{reply_id}/0", self.anon(f"/s/{token}").text)
+        resp = self.anon(f"/s/{token}/x/{reply_id}/0")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("sandbox", resp.headers["content-security-policy"])
+        self.assertEqual(self.anon(f"/s/{token}/x/{reply_id}/1").status_code, 404)
+        self.assertEqual(self.anon(f"/s/wrong/x/{reply_id}/0").status_code, 404)

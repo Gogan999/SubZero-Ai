@@ -82,6 +82,21 @@
   document.addEventListener("click", async (event) => {
     closeMenus(event.target.closest("details[data-menu]"));
 
+    const copyValue = event.target.closest("[data-copy-value]");
+    if (copyValue) {
+      const field = document.querySelector(copyValue.dataset.copyValue);
+      if (!field) return;
+      try {
+        await navigator.clipboard.writeText(field.value);
+        copyValue.textContent = "Copied";
+      } catch {
+        field.select();
+        copyValue.textContent = "Press Ctrl+C";
+      }
+      setTimeout(() => { copyValue.textContent = "Copy"; }, 1600);
+      return;
+    }
+
     const copy = event.target.closest("[data-copy]");
     if (copy) {
       const pre = copy.closest(".code")?.querySelector("pre");
