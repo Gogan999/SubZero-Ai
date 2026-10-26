@@ -20,11 +20,15 @@ PACKAGE_PROMPTS = Path(__file__).parent / "prompts"
 PROMPT_FILES = ("safety.md", "team.md", "formats.md")
 
 EXPLAINER_REQUEST = (
-    "The student asked for an interactive explainer in their latest message. Include one interactive explainer "
-    "in your reply, as described in the formatting rules, plus a short explanation outside it.")
+    "The student may want an interactive explainer: their latest message mentions one or a simulation. "
+    "Include one if it fits the formatting rules, plus a short explanation outside it.")
 
-# Words that mean a student wants something they can play with. A match gives the reply room for a whole page.
-EXPLAINER_WORDS = re.compile(r"\b(explainer|simulat\w*|interactive|animat\w*|visuali[sz]\w*|artifact)\b", re.I)
+# Phrases that suggest a student wants something they can play with. A match only gives the reply room for a
+# whole page; Claude still decides. Kept narrow so FRC words like "build artifact" or "AdvantageScope
+# animation" don't count.
+EXPLAINER_WORDS = re.compile(
+    r"\b(explainers?|simulations?|simulate|interactive (graph|diagram|plot|chart|demo|model|page|explanation)s?"
+    r"|something interactive)\b", re.I)
 
 
 def asks_for_explainer(text: str) -> bool:

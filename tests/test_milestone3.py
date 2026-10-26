@@ -235,7 +235,7 @@ class Milestone3FlowTest(unittest.TestCase):
         call = self.last_stream()
         self.assertEqual(call["max_tokens"], 16000)
         self.assertEqual(call["effort"], "high")
-        self.assertIn("asked for an interactive explainer", call["system_extra"])
+        self.assertIn("may want an interactive explainer", call["system_extra"])
 
     def test_everyday_questions_stay_at_default_effort(self):
         resp = self.send_with(self.ava, {"text": "What is a PID loop?"})
@@ -388,7 +388,9 @@ class Milestone3FlowTest(unittest.TestCase):
         from subzero_ai.generation import asks_for_explainer
         for text in ("Make an interactive graph of torque", "Could you simulate the elevator?", "explainer please"):
             self.assertTrue(asks_for_explainer(text), text)
-        for text in ("What is a PID loop?", "Explain how a gearbox works"):
+        for text in ("What is a PID loop?", "Explain how a gearbox works", "Gradle says the build artifact is missing",
+                     "Why is the AdvantageScope animation choppy?", "How do I visualize odometry in Glass?",
+                     "the interactive shell won't start"):
             self.assertFalse(asks_for_explainer(text), text)
 
 

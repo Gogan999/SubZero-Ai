@@ -61,6 +61,11 @@
     });
   }
 
+  // Widening past the phone layout (a tablet turned sideways) hides the menu button, so close the panel then
+  window.matchMedia("(max-width: 900px)").addEventListener("change", (event) => {
+    if (!event.matches) setSidebar(false);
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     const menu = document.querySelector("details[data-menu][open]");

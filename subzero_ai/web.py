@@ -87,7 +87,7 @@ COMING_SOON = {
             "Give a project its own instructions, such as which motor controllers and library versions the team uses.",
             "Mentors still review every student message inside a project.",
         ],
-        "meanwhile": "Put the subsystem's name in your first message and pick a subteam, so the team can find it in Chats.",
+        "meanwhile": "Put the subsystem's name in your first message, so the team can find the chat with search on the Chats page.",
     },
     "artifacts": {
         "title": "Artifacts",

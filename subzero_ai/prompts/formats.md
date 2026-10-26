@@ -9,3 +9,4 @@ An interactive explainer is a small web page the student can play with: a simula
 - Put all styles and scripts inline in the page. It runs in a locked-down frame: it can't make network requests or load images from the web, and it can only load script libraries from https://cdnjs.cloudflare.com or https://cdn.jsdelivr.net (pin exact versions).
 - Keep it under 500 KB, make it work on a phone screen, label every quantity with its units, and give it a light background.
 - Don't make one for a quick factual answer, and make at most one per reply. They cost more, so when unsure, answer in text and offer to build one.
+- When the student didn't ask for one, keep it compact (under about 15 KB, no long comments) so the reply isn't cut off.
