@@ -136,9 +136,11 @@
       const textarea = document.querySelector("[data-new-chat] textarea");
       if (!textarea) return;
       // Never throw away what the student typed: replace only an empty box or another starter's text
-      const current = textarea.value.trim();
-      const isStarter = [...document.querySelectorAll("[data-starter]")].some((b) => b.dataset.starter.trim() === current);
-      textarea.value = !current || isStarter ? starter.dataset.starter : starter.dataset.starter + current;
+      // (swapping one starter for another keeps the student's own words after it)
+      const starters = [...document.querySelectorAll("[data-starter]")].map((b) => b.dataset.starter);
+      const previous = starters.find((text) => textarea.value.startsWith(text));
+      const own = (previous ? textarea.value.slice(previous.length) : textarea.value).trim();
+      textarea.value = starter.dataset.starter + own;
       textarea.focus();
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       autosize(textarea);
