@@ -109,7 +109,7 @@ try {
         if (-not $TunnelToken) {
             Write-Note "In the Cloudflare Zero Trust dashboard, open Networks, Tunnels, your subzero-ai tunnel,"
             Write-Note "and copy the token from the Windows install command (the long text after 'service install')."
-            Write-Note "Its public hostname should point to HTTP localhost:$AppPort."
+            Write-Note "Its public hostname should point to HTTP 127.0.0.1:$AppPort."
             $secure = Read-Host "   Paste the tunnel token (or press Enter to skip for now)" -AsSecureString
             $TunnelToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
                 [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)).Trim()

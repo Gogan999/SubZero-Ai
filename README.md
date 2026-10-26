@@ -51,7 +51,7 @@ Expect about an hour. No Docker, no Python install, and no router changes.
 
 ### 1. Cloudflare Tunnel
 
-In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and create a tunnel named **subzero-ai**. Choose Windows and copy the long token from the install command it shows (you paste it into the installer). Add a public hostname (Cloudflare may call it a published application route): **ai.yourdomain.org**, type **HTTP**, URL **localhost:8787**. The free Zero Trust plan asks for a payment method but doesn't charge for the plan.
+In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and create a tunnel named **subzero-ai**. Choose Windows and copy the long token from the install command it shows (you paste it into the installer). Add a public hostname (Cloudflare may call it a published application route): **ai.yourdomain.org**, type **HTTP**, URL **127.0.0.1:8787** (not `localhost`, which Windows may send to the IPv6 address the app doesn't listen on). The free Zero Trust plan asks for a payment method but doesn't charge for the plan.
 
 ### 2. Run the installer
 
@@ -172,7 +172,7 @@ Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` fo
 - **Slack says "redirect_uri did not match"**: the Slack app's redirect URL must be `PUBLIC_URL` followed by `/auth/slack/callback`. Run the settings check to see the exact value.
 - **No cards appear in Slack**: run the settings check. Most often the app isn't in the channel (`/invite @SubZero AI`) or the channel ID is wrong.
 - **Buttons on the cards don't do anything**: `SLACK_APP_TOKEN` is missing or wrong, or the SubZero AI service is stopped (check services.msc).
-- **The site shows a Cloudflare error page**: the SubZero AI service isn't running, or the tunnel's URL isn't `localhost:8787`.
+- **The site shows a Cloudflare error page**: the SubZero AI service isn't running, or the tunnel's URL isn't `127.0.0.1:8787`.
 
 ## For developers
 
