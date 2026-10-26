@@ -140,7 +140,7 @@ Rules:
   - 4px for tiny badges, inline code and small text buttons
   - 6px for nav items, tabs and small panels
   - 8px for buttons, inputs and code/explainer blocks
-  - `--radius` (10px) for cards: messages, queue items, the composer box, tables
+  - `--radius` (10px) for cards: messages, queue items, tables
   - 14px for the sign-in panel and the composer box
   - 999px for pills and chips
 - **Borders** are 1px `--rule`. Use a heavier stripe (3–4px) only to mark state:
@@ -243,7 +243,7 @@ attribute, not just a class.
 ### Form fields
 
 Text inputs, selects and textareas use `font: inherit`, 1px `--rule` border,
-8px radius (10px for the composer), `--paper` or `--sheet` fill and `--ink`
+8px radius (the composer box is 14px), `--paper` or `--sheet` fill and `--ink`
 text. Every field has a visible `<label>` or, when the design has no room (the
 sidebar search), a `.visually-hidden` label. Placeholder text is never the only
 label.
@@ -305,7 +305,7 @@ sandboxed; never relax the sandbox for styling reasons.
 
 ### Notices and banners
 
-- The AI notice at the top of every page (above `main`) must appear on every page. Don't remove or
+- The AI notice above `main` must appear on every page. Don't remove or
   shrink it below .85rem.
 - The test-mode bar (`.devbar`) uses pending colors so it can't be missed.
 - Inline warnings (long chat) use the pending pair; private-chat notes use the

@@ -44,6 +44,9 @@
   // On phones the sidebar opens over the page from the menu button in the slim top bar.
   function setSidebar(open) {
     document.body.classList.toggle("sidebar-open", open);
+    // The page behind the full-screen panel can't be seen, so take it out of Tab order and screen readers
+    document.querySelector(".main-col")?.toggleAttribute("inert", open);
+    if (open) document.querySelector("#sidebar .side-new")?.focus();
     document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
       button.setAttribute("aria-expanded", String(open));
       const label = open ? button.dataset.closeLabel : button.dataset.openLabel;
@@ -132,7 +135,10 @@
     if (starter) {
       const textarea = document.querySelector("[data-new-chat] textarea");
       if (!textarea) return;
-      textarea.value = starter.dataset.starter;
+      // Never throw away what the student typed: replace only an empty box or another starter's text
+      const current = textarea.value.trim();
+      const isStarter = [...document.querySelectorAll("[data-starter]")].some((b) => b.dataset.starter.trim() === current);
+      textarea.value = !current || isStarter ? starter.dataset.starter : starter.dataset.starter + current;
       textarea.focus();
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       autosize(textarea);
