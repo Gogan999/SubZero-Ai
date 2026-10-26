@@ -163,6 +163,15 @@ class WindowTest(unittest.TestCase):
         entry = self.h.services.db.one("SELECT details FROM audit_log WHERE action = 'message_flagged_by_screener'")
         self.assertEqual(json.loads(entry["details"])["reason"], "Flagged for testing.")
 
+    def test_withdrawing_a_flagged_message_keeps_the_window_closed(self):
+        mid, cid = self.start()
+        self.approve(mid)
+        flagged = self.send(cid, "SCREEN-FLAG first try")
+        self.assertEqual(self.ava.post(f"/m/{flagged}/withdraw").status_code, 200)
+        self.h.idle()
+        self.assertEqual(self.status(self.send(cid, "Reworded second try")), "pending",
+                         "rewording a flagged message doesn't get around review")
+
     def test_screener_errors_fail_closed(self):
         mid, cid = self.start()
         self.approve(mid)
