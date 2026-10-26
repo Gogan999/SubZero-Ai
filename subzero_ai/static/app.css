@@ -211,14 +211,6 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .greeting { display: flex; align-items: center; justify-content: center; gap: .75rem; font-size: 2rem; letter-spacing: -0.02em; text-align: center; }
 .greeting-mark { font-size: 1rem; }
 .start-panel .lede { margin: 0 auto; text-align: center; }
-.starters { list-style: none; margin: 1rem 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; }
-.chip { display: inline-flex; align-items: center; gap: .4rem; min-height: 36px; padding: .35rem .85rem; border: 1px solid var(--rule); border-radius: 999px; background: var(--sheet); color: var(--ink); font: inherit; font-size: .9rem; cursor: pointer; }
-.chip:hover { background: var(--frost); }
-.chip .icon { color: var(--ink-2); }
-/* The approval steps, so a student knows what Send for review will do */
-.how-steps { list-style: none; margin: 1.5rem 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem 1.25rem; font-size: .85rem; color: var(--ink-2); }
-.how-steps li { display: flex; align-items: center; gap: .4rem; }
-.step-num { display: inline-grid; place-items: center; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--frost); color: var(--brand); font-weight: 700; font-size: .75rem; }
 
 /* Messages ---------------------------------------------------------------------- */
 /* minmax(0, 1fr) keeps a long code line from widening the page on phones; it scrolls inside its block instead */
@@ -304,11 +296,7 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .attach:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
 .tools-menu { position: relative; }
 .tools-menu .menu { bottom: calc(100% + .4rem); left: 0; width: 17rem; max-width: 80vw; }
-.explainer-toggle { display: inline-flex; align-items: center; gap: .4rem; min-height: 36px; padding: 0 .65rem; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); color: var(--ink); font-weight: 600; cursor: pointer; }
-.explainer-toggle:hover { background: var(--frost); }
-.explainer-toggle input { margin: 0; accent-color: var(--brand); }
-.attach:has(input:disabled), .explainer-toggle:has(input:disabled) { opacity: .55; cursor: not-allowed; }
-.composer-send { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .5rem; margin-left: auto; }
+.attach:has(input:disabled), .composer-send { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .5rem; margin-left: auto; }
 .model-chip { font-size: .88rem; font-weight: 550; color: var(--ink-2); padding: .3rem .4rem; }
 .composer-send select { font: inherit; font-size: .88rem; padding: .35rem .45rem; border: 1px solid var(--field-edge); border-radius: 8px; background: var(--sheet); color: var(--ink); max-width: 11rem; }
 .composer-note { margin: .5rem 0 0; font-size: .8rem; color: var(--ink-2); text-align: center; }

@@ -216,11 +216,6 @@ to a text label or inside a control with an `aria-label` or visually hidden
 text. Add new icons to the macro rather than inline in a template. No icon
 fonts or image files.
 
-### Chips
-
-`.chip` is a pill-shaped button (`--sheet` fill, `--rule` border, 36px tall)
-for suggestions, such as the starter prompts under the new-chat composer.
-
 ### Buttons
 
 `.button` is the only button style. Variants combine with it:
@@ -293,15 +288,16 @@ sandboxed; never relax the sandbox for styling reasons.
 - One `.composer-box` (14px radius, `--field-edge` border, `--sheet` fill)
   holds the borderless textarea, the chosen files as removable chips, and the
   `.composer-bar`. The focus ring goes around the whole box.
-- The bar: on the left, the attach button (plus icon), the tools menu
-  (placeholders for web search, extended thinking and so on) and the
-  Interactive explainer toggle; on the right, the subteam select (new chat
-  only), the model (a picker for mentors, the model's name for students) and
-  the Send button. Students' Send button says "Send for review".
+- The bar: on the left, the attach button (plus icon) and the tools menu
+  (placeholders for web search, extended thinking and so on); on the right,
+  the model (a picker for mentors, the model's name for students) and the
+  Send button. Students' Send button says "Send for review". There is no
+  explainer switch: Claude makes an interactive explainer when asked in words
+  or when one would clearly help.
 - Under the box: errors, then the AI reminder note, centered.
 - The start page uses `.composer.big`: a taller box, not sticky, under a
-  greeting ("Good evening, Ava"), with starter chips and, for students, the
-  three approval steps below it.
+  greeting ("Good evening, Ava") and a one-line lede. Nothing else goes below
+  it; keep the page as bare as claude.ai's.
 
 ### Notices and banners
 

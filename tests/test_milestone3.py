@@ -219,7 +219,7 @@ class Milestone3FlowTest(unittest.TestCase):
 
     # ----------------------------------------------------------- explainers
     def ask_for_explainer(self):
-        resp = self.send_with(self.ava, {"text": "How does kP change the arm?", "explainer": "1"})
+        resp = self.send_with(self.ava, {"text": "Can you make a simulation of how kP changes the arm?"})
         self.assertEqual(resp.status_code, 200, resp.text)
         mid = resp.json()["message_id"]
         cid = int(resp.json()["url"].rsplit("/", 1)[1])
@@ -235,7 +235,7 @@ class Milestone3FlowTest(unittest.TestCase):
         call = self.last_stream()
         self.assertEqual(call["max_tokens"], 16000)
         self.assertEqual(call["effort"], "high")
-        self.assertIn("Interactive explainer", call["system_extra"])
+        self.assertIn("asked for an interactive explainer", call["system_extra"])
 
     def test_everyday_questions_stay_at_default_effort(self):
         resp = self.send_with(self.ava, {"text": "What is a PID loop?"})
@@ -382,7 +382,14 @@ class Milestone3FlowTest(unittest.TestCase):
     def test_composer_offers_files_and_explainers(self):
         page = self.ava.get("/chats").text
         self.assertIn('type="file" name="files" multiple accept=".cpp,.csv,.gradle,.h,.java,.jpeg,.jpg,.json,.md,.png,.py,.txt,.yaml,.yml"', page)
-        self.assertIn('name="explainer" value="1"', page)
+        self.assertNotIn('name="explainer"', page, "Claude decides on explainers; there's no switch")
+
+    def test_asking_in_words_counts_as_an_explainer_request(self):
+        from subzero_ai.generation import asks_for_explainer
+        for text in ("Make an interactive graph of torque", "Could you simulate the elevator?", "explainer please"):
+            self.assertTrue(asks_for_explainer(text), text)
+        for text in ("What is a PID loop?", "Explain how a gearbox works"):
+            self.assertFalse(asks_for_explainer(text), text)
 
 
 if __name__ == "__main__":

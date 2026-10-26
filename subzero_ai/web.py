@@ -91,13 +91,15 @@ COMING_SOON = {
     },
     "artifacts": {
         "title": "Artifacts",
-        "summary": "A gallery of the interactive explainers, documents and code Claude has made for the team.",
+        "summary": "A gallery of the interactive explainers (simulations, moving diagrams, graphs you can play with) "
+                   "and other things Claude has made for the team.",
         "points": [
             "Browse every interactive explainer from approved chats in one place.",
             "Open an explainer full screen or download it without scrolling back through the chat.",
             "Save useful ones so the team can reuse them at the next build season.",
         ],
-        "meanwhile": "Tick Interactive explainer when you send a message, and the explainer appears in the chat.",
+        "meanwhile": "Ask Claude for a simulation or an interactive explainer in a normal chat. Claude also makes one on "
+                     "its own when it would help, and it appears right in the reply.",
     },
     "code": {
         "title": "Claude Code",

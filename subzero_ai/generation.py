@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -19,8 +20,15 @@ PACKAGE_PROMPTS = Path(__file__).parent / "prompts"
 PROMPT_FILES = ("safety.md", "team.md", "formats.md")
 
 EXPLAINER_REQUEST = (
-    "The student ticked \"Interactive explainer\" for their latest message. Include one interactive explainer "
+    "The student asked for an interactive explainer in their latest message. Include one interactive explainer "
     "in your reply, as described in the formatting rules, plus a short explanation outside it.")
+
+# Words that mean a student wants something they can play with. A match gives the reply room for a whole page.
+EXPLAINER_WORDS = re.compile(r"\b(explainer|simulat\w*|interactive|animat\w*|visuali[sz]\w*|artifact)\b", re.I)
+
+
+def asks_for_explainer(text: str) -> bool:
+    return bool(EXPLAINER_WORDS.search(text or ""))
 
 TITLE_SYSTEM = ("Write a title of 3 to 6 words for this robotics team chat. "
                 "Reply with the title only, with no quotes and no ending punctuation.")

@@ -130,22 +130,6 @@
       return;
     }
 
-    // Starter chips on the new-chat page begin the message for you
-    const starter = event.target.closest("[data-starter]");
-    if (starter) {
-      const textarea = document.querySelector("[data-new-chat] textarea");
-      if (!textarea) return;
-      // Never throw away what the student typed: replace only an empty box or another starter's text
-      // (swapping one starter for another keeps the student's own words after it)
-      const starters = [...document.querySelectorAll("[data-starter]")].map((b) => b.dataset.starter);
-      const previous = starters.find((text) => textarea.value.startsWith(text));
-      const own = (previous ? textarea.value.slice(previous.length) : textarea.value).trim();
-      textarea.value = starter.dataset.starter + own;
-      textarea.focus();
-      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-      autosize(textarea);
-      return;
-    }
 
     const opener = event.target.closest("[data-open]");
     if (opener) {
@@ -231,8 +215,6 @@
       textarea.value = "";
       autosize(textarea);
       setChosen(form, []);
-      const explainer = form.querySelector('[name="explainer"]');
-      if (explainer) explainer.checked = false;
       if (result.message_id) refreshMessage(result.message_id);
     }
   });
@@ -429,7 +411,7 @@
       && !!thread.querySelector('.msg.person[data-status="pending"]');
     const replying = !!thread.querySelector('.msg.claude[data-status="streaming"]');
     textarea.disabled = waiting; // drafting is fine while Claude replies
-    composer.querySelectorAll('[data-files], [name="explainer"]').forEach((input) => { input.disabled = waiting; });
+    composer.querySelectorAll("[data-files]").forEach((input) => { input.disabled = waiting; });
     button.disabled = waiting || replying;
     textarea.placeholder = waiting ? "Waiting for a mentor to review your last message"
       : replying ? "Claude is replying…" : "Ask a follow-up";

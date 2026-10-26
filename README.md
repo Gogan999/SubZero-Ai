@@ -11,7 +11,7 @@ This is version 0.4.1: all four milestones of the build plan.
 - **Approvals**: each student message posts a card in #claude-approvals with Approve, Edit, Reject, and Handle privately. Students get a Slack DM when a mentor acts. The app's Review page does the same thing if Slack is down. A second mentor tapping a handled card is told who already handled it.
 - **Audit log** (admins): sign-ins, messages, every review with the before and after text of edits, alerts, and Slack problems.
 - **Attachments**: code and text files (.java, .py, .cpp, .h, .json, .gradle, .yaml, .txt, .md, .csv) and PNG or JPG screenshots, up to 5 per message and 5 MB each. Pick them, drag them onto the message box, or paste a screenshot. Text files are also capped at 200 KB (`MAX_TEXT_FILE_KB`), because Claude reads every line on every reply. Photos are re-encoded on upload, which removes hidden details like a phone's GPS location and shrinks them to the size Claude uses. Slack cards and the Review page list the files; mentors open them in the app.
-- **Interactive explainers**: tick *Interactive explainer* and Claude builds a small web page, like a simulation you can play with. It runs in a sandboxed frame that can't reach the network or the app's cookies, with Full screen, Download, and View code buttons. These replies use high effort and up to 16,000 tokens; messages with files also use high effort.
+- **Interactive explainers**: ask for one in words ("make a simulation of…", "an interactive graph of…") and Claude builds a small web page you can play with. Claude may also make one on its own when it clearly helps. It runs in a sandboxed frame that can't reach the network or the app's cookies, with Full screen, Download, and View code buttons. Messages that ask for one use high effort and up to 16,000 tokens; messages with files also use high effort.
 - **Long chats**: once a chat sends Claude about 150,000 tokens per reply, the app suggests starting a fresh one.
 - Also: the three-layer system prompt with the child-safety layer, MENTOR ALERT handling, per-student limits, the permanent AI notice, and the "Using SubZero AI responsibly" page.
 
@@ -31,7 +31,7 @@ Also try:
 - Edit, Reject, and Handle privately from Mentor Kim's Review page.
 - Signing in as **Ben (student)** to see what other students can and can't see.
 - A message containing `ALERT-TEST`, which makes the pretend Claude raise a mentor alert, or `ERROR-TEST`, which makes it fail so you can try **Try again**.
-- Attaching files, or ticking **Interactive explainer** to get a sample explainer. Its last line confirms the network is blocked inside the frame.
+- Attaching files, or asking for a simulation or an interactive explainer to get a sample explainer. Its last line confirms the network is blocked inside the frame.
 - Signing in as **Head coach** and opening **Settings**.
 
 Test data lives in the `test-data` folder next to the .cmd file. Delete it to start over. Close the window to stop the app.

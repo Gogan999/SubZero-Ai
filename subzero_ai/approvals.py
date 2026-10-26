@@ -10,7 +10,7 @@ from . import slack_cards
 from .attachments import MAX_FILES, Attachments, Prepared
 from .config import Settings
 from .db import Database, utcnow
-from .generation import ReplyRunner
+from .generation import ReplyRunner, asks_for_explainer
 from .live import Broker, Tasks
 from .roles import is_builtin_user, is_excluded_account
 from .store import (
@@ -95,6 +95,8 @@ class ApprovalService:
                      subteam: str | None = None, files: list[Prepared] | tuple = (),
                      explainer: bool = False) -> Outcome:
         text = clean_text(text)
+        # There's no explainer switch any more: asking for one in words is how a student requests it
+        explainer = explainer or asks_for_explainer(text)
         if not text:
             if files:
                 return Outcome(False, "invalid", "Add a message saying what you'd like Claude to do with the files.")
