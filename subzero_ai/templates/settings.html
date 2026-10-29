@@ -39,6 +39,7 @@
     <ul class="settings-nav">
       <li><a href="#health">Health and backups</a></li>
       {% for sec in sections %}<li><a href="#{{ sec.key }}">{{ sec.title }}</a></li>{% endfor %}
+      <li><a href="#connectors">Connectors</a></li>
       <li><a href="#prompts">System prompt</a></li>
       <li><a href="#history">Change history</a></li>
     </ul>
@@ -84,6 +85,42 @@
     </form>
   </section>
   {% endfor %}
+
+  <section class="panel" id="connectors" aria-labelledby="connectors-title">
+    <h2 id="connectors-title">Connectors</h2>
+    <p class="field-hint">Let people add files to a message from the composer's tools menu instead of attaching them. The files go on the review card like attachments, so mentors still see everything before Claude does.</p>
+    <form method="post" action="/settings/connectors" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        <div class="field">
+          <label for="github-repo">GitHub repository</label>
+          <input id="github-repo" name="connector_github_repo" value="{{ connectors.repo }}" placeholder="owner/name" autocomplete="off" spellcheck="false" aria-describedby="github-repo-hint">
+          <p class="field-hint" id="github-repo-hint">The team's robot code, as owner/name or its github.com address. Leave it empty to turn GitHub off.</p>
+        </div>
+        <div class="field">
+          <label for="github-branch">Branch</label>
+          <input id="github-branch" name="connector_github_branch" value="{{ connectors.branch }}" placeholder="Default branch" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="github-token">Access token{% if connectors.token_set %} <span class="pill ok">Saved</span>{% endif %}</label>
+          <input id="github-token" name="connector_github_token" type="password" autocomplete="off" spellcheck="false" aria-describedby="github-token-hint" placeholder="{{ 'Leave empty to keep the saved token' if connectors.token_set else 'Only for a private repository' }}">
+          <p class="field-hint" id="github-token-hint">For a private repository, make a fine-grained token on GitHub for just this repository with read-only Contents access. It's saved in config.env on the mini PC and never shown here.</p>
+        </div>
+        {% if connectors.token_set %}
+        <div class="field check">
+          <input type="checkbox" id="remove-token" name="remove_token" value="1">
+          <label for="remove-token">Remove the saved token</label>
+        </div>
+        {% endif %}
+        <div class="field check">
+          <input type="checkbox" id="drive-links" name="connector_drive_links" value="1" {% if connectors.drive %}checked{% endif %} aria-describedby="drive-links-hint">
+          <label for="drive-links">People can add Google Drive links</label>
+          <p class="field-hint" id="drive-links-hint">Docs, Sheets, Slides and files shared as "Anyone with the link". There's no Google sign-in, so private files can't be added.</p>
+        </div>
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">Save connectors</button></div>
+    </form>
+  </section>
 
   <section class="panel" id="prompts" aria-labelledby="prompts-title">
     <h2 id="prompts-title">System prompt</h2>

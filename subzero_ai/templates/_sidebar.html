@@ -12,9 +12,11 @@
       <a class="side-new" href="/chats" {% if path == '/chats' %}aria-current="page"{% endif %}><span class="side-new-mark">{{ icon('plus') }}</span> New chat</a>
       <ul class="side-nav">
         <li><a href="/recents" {% if path.startswith('/recents') %}aria-current="page"{% endif %}>{{ icon('chats') }} Chats</a></li>
-        <li><a href="/projects" {% if path.startswith('/projects') %}aria-current="page"{% endif %}>{{ icon('projects') }} Projects <span class="soon">Soon</span></a></li>
-        <li><a href="/artifacts" {% if path.startswith('/artifacts') %}aria-current="page"{% endif %}>{{ icon('artifacts') }} Artifacts <span class="soon">Soon</span></a></li>
-        <li><a href="/code" {% if path.startswith('/code') %}aria-current="page"{% endif %}>{{ icon('code') }} Code <span class="soon">Soon</span></a></li>
+        <li><a href="/projects" {% if path.startswith('/projects') %}aria-current="page"{% endif %}>{{ icon('projects') }} Projects</a></li>
+        <li><a href="/artifacts" {% if path.startswith('/artifacts') %}aria-current="page"{% endif %}>{{ icon('artifacts') }} Artifacts</a></li>
+        {% if viewer.is_mentor %}
+        <li><a href="/code" {% if path.startswith('/code') %}aria-current="page"{% endif %}>{{ icon('code') }} Code</a></li>
+        {% endif %}
       </ul>
       {% if viewer.is_mentor %}
       <h2 class="side-label">Mentor tools</h2>
@@ -60,8 +62,19 @@
     </summary>
     <ul class="menu">
       <li><a class="menu-item" href="/about">{{ icon('help') }} How this works</a></li>
-      <li><span class="menu-item" aria-disabled="true">{{ icon('person') }} Profile and preferences <span class="soon">Soon</span></span></li>
-      <li><span class="menu-item" aria-disabled="true">{{ icon('theme') }} Appearance <span class="soon">Soon</span></span></li>
+      <li><a class="menu-item" href="/profile" {% if path == '/profile' %}aria-current="page"{% endif %}>{{ icon('person') }} Profile and preferences</a></li>
+      <li>
+        <form class="theme-switch" method="post" action="/profile/theme" data-theme-form>
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="next" value="{{ path }}">
+          <span class="theme-label" id="theme-label">{{ icon('theme') }} Appearance</span>
+          <span class="segmented" role="group" aria-labelledby="theme-label">
+            {% for value, label in (('light', 'Light'), ('dark', 'Dark'), ('system', 'Auto')) %}
+            <button type="submit" name="theme" value="{{ value }}" aria-pressed="{{ 'true' if viewer.theme == value else 'false' }}"{% if value == 'system' %} title="Match this device"{% endif %}>{{ label }}</button>
+            {% endfor %}
+          </span>
+        </form>
+      </li>
       <li>
         <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}">
           <button class="menu-item" type="submit">{{ icon('signout') }} Sign out</button></form>

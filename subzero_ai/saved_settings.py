@@ -52,6 +52,12 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "An explainer is a whole web page, so it needs more room.", 1000, 64000),
         Field("long_chat_tokens", "Suggest a fresh chat after this many tokens", "int",
               "Long chats cost more on every reply.", 10000, 1000000),
+        Field("web_search_enabled", "Claude can search the web when asked", "bool",
+              "Web search and Research in the composer's tools menu. Each search costs about a cent."),
+        Field("web_search_daily_limit", "Web searches per day, for the whole team", "int",
+              "A web search reply uses up to 5, a Research report up to 20. Resets at midnight.", 0, 2000),
+        Field("research_for_students", "Students can ask for Research reports", "bool",
+              "Research runs many searches and writes a long report, so it starts as mentors only."),
     ]),
     "limits": ("Limits and review", [
         Field("limit_pending_per_student", "Waiting messages per student", "int",
@@ -81,6 +87,13 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("retention_days", "Delete chats with no activity for this many days", "int",
               "730 days keeps this season and the next. 0 keeps chats forever.", 0, 3650),
         Field("backup_keep_days", "Keep nightly backups for this many days", "int", "", 1, 365),
+    ]),
+    "code": ("Code", [
+        Field("code_commands", "Commands Claude can ask to run", "lines",
+              "One program name per line, like gradlew. Claude can only ask to run these, from the repository "
+              "folder, and a mentor approves each command before it runs."),
+        Field("code_command_timeout", "Stop a command after this many seconds", "int",
+              "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
     ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),

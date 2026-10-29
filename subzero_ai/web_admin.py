@@ -17,6 +17,7 @@ from starlette.routing import Route
 from . import __version__, saved_settings, setup_flow
 from .backup import list_backups, size_text
 from .config import update_env_file
+from .connectors import BRANCH_RE, REPO_RE, ConnectorError
 from .maintenance import update_available
 from .roles import RECOVERY_USER, is_excluded_account
 from .saved_settings import SLACK_ID_RE
@@ -142,8 +143,10 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
                         "what": what, "change": change})
     backups = [{"name": b.name, "time": f"{b.created:%b} {b.created.day}, {b.created:%I:%M %p}".replace(" 0", " "),
                 "size": size_text(b.size)} for b in list_backups(s.settings)[:5]]
+    connectors = {"repo": s.settings.connector_github_repo, "branch": s.settings.connector_github_branch,
+                  "token_set": bool(s.settings.connector_github_token), "drive": s.settings.connector_drive_links}
     return {"health": health_rows(s), "sections": sections, "prompts": prompts, "history": history,
-            "backups": backups, "backup_folder": str(s.settings.backups_path)}
+            "backups": backups, "backup_folder": str(s.settings.backups_path), "connectors": connectors}
 
 
 @page(require="admin")
@@ -172,6 +175,57 @@ async def save_section(request: Request, viewer: Viewer) -> Response:
     title = "Claude settings" if section == "claude" else title.lower()
     flash(request, f"Saved {title}." if changed else f"Nothing changed in {title}.")
     return RedirectResponse(f"/settings#{section}", status_code=303)
+
+
+GITHUB_URL_RE = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/\s]+/[^/#?\s]+)")
+
+
+@page(require="admin")
+async def save_connectors(request: Request, viewer: Viewer) -> Response:
+    """The GitHub repository and Google Drive links for the composer's connectors. The token goes in config.env
+    with the other secrets and is never shown again."""
+    s = services(request)
+    form = {k: str(v).strip() for k, v in (await request.form()).items() if isinstance(v, str)}
+    repo, branch = form.get("connector_github_repo", ""), form.get("connector_github_branch", "")
+    match = GITHUB_URL_RE.match(repo)
+    if match:
+        repo = match.group(1).removesuffix(".git")
+    token = "" if form.get("remove_token") == "1" else (form.get("connector_github_token") or s.settings.connector_github_token)
+    drive = form.get("connector_drive_links") == "1"
+    problem = ""
+    if any("\n" in value or "\r" in value for value in form.values()):
+        problem = "A value has a line break in it. Paste it again on one line."
+    elif repo and not REPO_RE.fullmatch(repo):
+        problem = "Enter the repository as owner/name, like the part after github.com/ in its address."
+    elif branch and not BRANCH_RE.fullmatch(branch):
+        problem = "That branch name has characters GitHub doesn't allow. Leave it empty for the default branch."
+    elif token and not token.startswith(("github_pat_", "ghp_")):
+        problem = "A GitHub token starts with github_pat_ (fine-grained) or ghp_. Copy it again."
+    elif repo:
+        try:
+            await asyncio.to_thread(s.github.check, repo, branch, token)
+        except ConnectorError as exc:
+            problem = f"Couldn't read {repo}: {exc}"
+    if problem:
+        flash(request, f"Connectors weren't saved. {problem}")
+        return RedirectResponse("/settings#connectors", status_code=303)
+    before = {"repository": s.settings.connector_github_repo, "branch": s.settings.connector_github_branch,
+              "token": "saved" if s.settings.connector_github_token else "none", "drive links": s.settings.connector_drive_links}
+    after = {"repository": repo, "branch": branch, "token": "saved" if token else "none", "drive links": drive}
+    token_changed = token != s.settings.connector_github_token
+    if before == after and not token_changed:
+        flash(request, "Nothing changed in connectors.")
+        return RedirectResponse("/settings#connectors", status_code=303)
+    _save_config(s, {"CONNECTOR_GITHUB_REPO": repo, "CONNECTOR_GITHUB_BRANCH": branch, "CONNECTOR_GITHUB_TOKEN": token,
+                     "CONNECTOR_DRIVE_LINKS": "true" if drive else "false"})
+    s.settings.connector_github_repo, s.settings.connector_github_branch, s.settings.connector_github_token = repo, branch, token
+    s.settings.connector_drive_links = drive
+    changes = {key: {"from": before[key], "to": after[key]} for key in before if before[key] != after[key]}
+    if token_changed and "token" not in changes:
+        changes["token"] = {"from": "saved", "to": "replaced"}
+    s.db.audit("connectors_changed", actor_id=viewer.id, details=changes)
+    flash(request, "Saved connectors." + (f" Everyone can now add files from {repo}." if repo else ""))
+    return RedirectResponse("/settings#connectors", status_code=303)
 
 
 @page(require="admin")
@@ -426,6 +480,7 @@ admin_routes = [
     Route("/settings", settings_page),
     Route("/settings/backup", backup_now, methods=["POST"]),
     Route("/settings/prompts/{layer}", save_prompt, methods=["POST"]),
+    Route("/settings/connectors", save_connectors, methods=["POST"]),
     Route("/settings/{section}", save_section, methods=["POST"]),
     Route("/setup", setup_page),
     Route("/setup/{step}", setup_step, methods=["POST"]),
