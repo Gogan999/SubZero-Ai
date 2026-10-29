@@ -524,6 +524,7 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
 .code-diff .del { background: var(--rejected-bg); color: var(--rejected); }
 .code-diff .hunk { color: var(--held); }
 .code-output summary { cursor: pointer; font-size: .85rem; color: var(--ink-2); margin-top: .3rem; }
+.code-warning { margin: .5rem 0 0; padding: .4rem .6rem; border-radius: 8px; background: var(--pending-bg); color: var(--pending); font-size: .88rem; overflow-wrap: anywhere; }
 .code-review { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .6rem; }
 .code-review form { margin: 0; }
 .code-decline { display: flex; flex: 1; gap: .5rem; min-width: min(100%, 16rem); }

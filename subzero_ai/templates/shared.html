@@ -8,7 +8,7 @@
 {% block main %}
 <section class="thread-col shared">
   {% if preview %}
-  <p class="private-note">Preview of the link for {{ share.audience }} ({{ share.label|lower }}). This is exactly what they see.{% if viewer.is_mentor and share.state == 'pending' %} <a href="/queue#shares">Approve or decline it</a>.{% endif %}</p>
+  <p class="private-note">Preview of the link for {{ share.audience }} ({{ share.label|lower }}). This is exactly what they see. Names typed in the messages still show, so check the text.{% if viewer.is_mentor and share.state == 'pending' %} <a href="/queue#shares">Approve or decline it</a>.{% endif %}</p>
   {% endif %}
   <header class="thread-head">
     <div class="thread-title">

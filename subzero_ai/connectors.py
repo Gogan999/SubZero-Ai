@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 import requests
 
@@ -191,16 +191,27 @@ class Drive:
             url = template.format(id=file_id)
         else:
             label, url, ext = "Drive file", f"https://drive.google.com/uc?export=download&id={file_id}", ""
-        try:
-            resp = self.session_factory().get(url, timeout=TIMEOUT, stream=True, allow_redirects=True,
-                                              headers={"User-Agent": "SubZero-AI"})
-        except requests.RequestException as exc:
-            raise ConnectorError("Couldn't reach Google Drive. Try again in a minute.") from exc
-        host = (urlparse(resp.url).hostname or "").lower()
-        content_type = resp.headers.get("content-type", "")
         not_shared = ConnectorError(f"That {label} isn't shared as \"Anyone with the link\", so it can't be added. "
                                     "Change its sharing in Drive, or download it and attach it instead.")
-        if not any(host == h.lstrip(".") or host.endswith(h) for h in GOOGLE_HOSTS) or "accounts.google" in host:
+        session = self.session_factory()
+        # Follow redirects one at a time, so every hop is checked to be Google's
+        for _ in range(6):
+            host = (urlparse(url).hostname or "").lower()
+            if urlparse(url).scheme != "https" or not _google(host):
+                raise not_shared
+            try:
+                resp = session.get(url, timeout=TIMEOUT, stream=True, allow_redirects=False,
+                                   headers={"User-Agent": "SubZero-AI"})
+            except requests.RequestException as exc:
+                raise ConnectorError("Couldn't reach Google Drive. Try again in a minute.") from exc
+            if resp.status_code not in (301, 302, 303, 307, 308):
+                break
+            url = urljoin(url, resp.headers.get("location", ""))
+        else:
+            raise ConnectorError("Google Drive sent too many redirects. Try again in a minute.")
+        host = (urlparse(url).hostname or "").lower()
+        content_type = resp.headers.get("content-type", "")
+        if "accounts.google" in host:
             raise not_shared
         if resp.status_code in (401, 403, 404) or content_type.startswith("text/html"):
             raise not_shared
@@ -214,6 +225,10 @@ class Drive:
             raise ConnectorError(f"{name} can't be added. Drive links work for Docs, Sheets, Slides, and code, "
                                  "text, PNG or JPG files.")
         return prepare(name, data, max_text_bytes=max_text_bytes)
+
+
+def _google(host: str) -> bool:
+    return any(host == h.lstrip(".") or host.endswith(h) for h in GOOGLE_HOSTS)
 
 
 def _download_name(disposition: str) -> str:

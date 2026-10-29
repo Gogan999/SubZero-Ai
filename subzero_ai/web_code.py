@@ -30,7 +30,7 @@ def step_view(s: Services, row) -> dict[str, Any]:
     view = {"id": row["id"], "kind": row["kind"], "tool": row["tool"], "status": row["status"],
             "time": fmt_time(s.store, row["created_at"]), "reviewer": row["reviewer_name"],
             "note": row["review_note"], "reason": _arg(args, "reason"), "output": row["output"] or "",
-            "html": None, "label": "", "detail": "", "diff": None, "command": None}
+            "html": None, "label": "", "detail": "", "diff": None, "command": None, "runs_changes": []}
     if row["kind"] == "text":
         view["html"] = markdown_html(row["output"] or "")
         return view
@@ -97,6 +97,12 @@ def _session_context(s: Services, row) -> dict[str, Any]:
     steps = [step_view(s, r) for r in s.code.steps(row["id"])]
     workspace = s.code.workspace(row["id"])
     changes = workspace.changes() if workspace.ready() and row["status"] not in LIVE else []
+    if any(step["status"] == "pending" and step["command"] for step in steps):
+        # A build or test run executes the code Claude changed, with the app's own permissions
+        changed = [c["name"] for c in (changes or workspace.changes())]
+        for step in steps:
+            if step["status"] == "pending" and step["command"]:
+                step["runs_changes"] = changed
     return {"session": session_view(s, row), "steps": steps, "changes": changes,
             "can_follow_up": row["status"] in ("done", "stopped", "failed") and workspace.ready()}
 

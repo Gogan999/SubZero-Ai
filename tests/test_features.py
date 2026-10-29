@@ -513,6 +513,11 @@ class ConnectorsTest(FeatureTest):
         resp = self.ava.post("/chats/new", {"text": "x", "drive": "https://evil.example.com/document/d/abcdefghijklmnopqrst"})
         self.assertIn("docs.google.com", resp.json()["error"])
         self.assertFalse(any("evil" in c["url"] for c in self.web.calls), "only Google is ever fetched")
+        self.web.routes["https://docs.google.com/document/d/redirectxxxxxxxxxxx/export?format=txt"] = FakeResponse(
+            302, b"", {"location": "https://evil.example.com/steal"})
+        resp = self.ava.post("/chats/new", {"text": "x", "drive": "https://docs.google.com/document/d/redirectxxxxxxxxxxx/edit"})
+        self.assertIn("Anyone with the link", resp.json()["error"])
+        self.assertFalse(any("evil" in c["url"] for c in self.web.calls), "a redirect off Google isn't followed")
         self.h.services.settings.connector_drive_links = False
         resp = self.ava.post("/chats/new", {"text": "x", "drive": "https://docs.google.com/document/d/abcdefghijklmnopqrst/edit"})
         self.assertIn("switched off", resp.json()["error"])
@@ -604,7 +609,27 @@ class CodeTest(FeatureTest):
         self.assertTrue((work / "NOTES.md").is_file())
         [run] = self.pending(sid)
         self.assertEqual(run["tool"], "run_command")
-        self.act(run["id"], "approve")
+        self.assertIn("code Claude changed in this session (NOTES.md)", self.kim.get(f"/code/{sid}").text)
+        import asyncio
+
+        from subzero_ai import code_runner
+        threads = []
+        original = code_runner.run_program
+
+        def watched(*args):
+            try:
+                asyncio.get_running_loop()
+                threads.append("event loop")
+            except RuntimeError:
+                threads.append("worker")
+            return original(*args)
+
+        code_runner.run_program = watched
+        try:
+            self.act(run["id"], "approve")
+        finally:
+            code_runner.run_program = original
+        self.assertEqual(threads, ["worker"], "a build never blocks the app")
         session = self.code.get(sid)
         self.assertEqual(session["status"], "done")
         ran = self.code.db.one("SELECT * FROM code_steps WHERE id = ?", (run["id"],))
@@ -652,6 +677,26 @@ class CodeTest(FeatureTest):
         broken = self.begin()
         self.assertEqual(self.code.get(broken)["status"], "failed")
 
+    def test_old_copies_are_deleted_and_slow_commands_stopped(self):
+        import time
+
+        from subzero_ai.code_runner import prune_workspaces, run_program
+        sid = self.begin()
+        self.kim.post(f"/code/{sid}/stop", follow_redirects=False)
+        folder = self.code.workspace(sid).root
+        self.assertEqual(prune_workspaces(self.code.db, self.h.services.settings.data_dir), 0, "too recent")
+        self.code.db.execute("UPDATE code_sessions SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (sid,))
+        self.assertEqual(prune_workspaces(self.code.db, self.h.services.settings.data_dir), 1)
+        self.assertFalse(folder.exists())
+        self.assertIn("deleted after 14 days", self.kim.get(f"/code/{sid}").text)
+        self.assertEqual(self.kim.get(f"/code/{sid}/changes.patch").status_code, 404)
+        script = folder.parent / "slow.sh"
+        script.write_text("sleep 30 &\nsleep 30\n")
+        started = time.monotonic()
+        out = run_program(["sh", str(script)], folder.parent, 1)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIn("Stopped after 1 seconds", out)
+
     def test_commands_and_paths_are_fenced_in(self):
         from subzero_ai.code_runner import ToolProblem, Workspace, parse_command
         sid = self.begin()
@@ -670,3 +715,12 @@ class CodeTest(FeatureTest):
         self.assertIn("src/Robot.java:2", space.search(r"kP\s*="))
         with self.assertRaises(ToolProblem):
             space.preview("edit_file", {"path": "src/Robot.java", "old_text": "missing", "new_text": "x"})
+        # Build files run with the app's permissions, so Claude can't change them
+        for name in ("build.gradle", "settings.gradle", "sub/build.gradle.kts", "gradlew", "gradlew.bat",
+                     "gradle.properties", "gradle/wrapper/gradle-wrapper.properties", "buildSrc/A.java",
+                     "vendordeps/Phoenix.json", ".gradle/init.gradle", "tools/run.ps1", "libs/x.jar"):
+            with self.assertRaises(ToolProblem, msg=name):
+                space.preview("write_file", {"path": name, "content": "x"})
+            with self.assertRaises(ToolProblem, msg=name):
+                space.apply("write_file", {"path": name, "content": "x"})
+        self.assertIn("+x", space.preview("write_file", {"path": "src/Gradle.java", "content": "x"}))

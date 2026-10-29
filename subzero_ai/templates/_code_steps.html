@@ -28,6 +28,7 @@
     </p>
     {% if step.reason %}<p class="code-reason">{{ step.reason }}</p>{% endif %}
     {% if step.command %}<pre class="code-command"><code>{{ step.command }}</code></pre>{% endif %}
+    {% if step.runs_changes %}<p class="code-warning" role="note">This runs with the app's own permissions, including code Claude changed in this session ({{ step.runs_changes|join(', ') }}). Check those changes above before you run it.</p>{% endif %}
     {% if step.diff %}<pre class="code-diff"><code>{% for line in step.diff.splitlines() %}<span class="{{ 'add' if line.startswith('+') and not line.startswith('+++') else 'del' if line.startswith('-') and not line.startswith('---') else 'hunk' if line.startswith('@@') else '' }}">{{ line }}</span>
 {% endfor %}</code></pre>{% endif %}
     {% if step.note %}<p class="tag-reason">Note: {{ step.note }}</p>{% endif %}

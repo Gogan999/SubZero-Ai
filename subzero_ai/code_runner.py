@@ -3,8 +3,12 @@
 A mentor gives Claude a task. Claude can look around the copy on its own (list, read and search files), but
 every change to a file and every command waits for a mentor to approve it, with the exact change or command on
 screen. Commands must start with a program an admin allowed in Settings (gradlew by default), run in the copy's
-folder with a time limit and without the app's API keys or tokens in their environment. Nothing is pushed to
-GitHub: when the work is done, a mentor downloads the changes as a patch and applies it themselves.
+folder with a time limit and without the app's API keys or tokens in their environment variables. Nothing is
+pushed to GitHub: when the work is done, a mentor downloads the changes as a patch and applies it themselves.
+
+A command still runs as the app's own account, so it could read files the app can read, such as config.env.
+That's why Claude can't change build files (anything a build runs before the code itself) and why the approval
+card for a command lists the files Claude changed: tests and the robot code run during a build too.
 
 Code is for mentors only. Each session's copy lives in DATA_DIR/code/<session id>: "base" is the repository as
 downloaded and "work" is Claude's copy, so the changes are the difference between the two."""
@@ -20,10 +24,12 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import sqlite3
 import subprocess
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +51,7 @@ MAX_WRITE_BYTES = 500 * 1024
 MAX_OUTPUT_CHARS = 20_000
 MAX_TASK_CHARS = 8000
 MAX_TOKENS = 16000
+KEEP_COPIES_DAYS = 14  # finished sessions' repository copies are deleted after this
 SKIP_DIRS = {".git", ".gradle", "build", "bin", "node_modules", "__pycache__", ".idea", ".vscode"}
 # Only what a build needs from the app's environment. API keys, tokens and the rest stay out.
 SAFE_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME",
@@ -62,8 +69,9 @@ note and adjust; don't ask for the same thing again.
 
 Work in small steps. Read the relevant code before changing it, keep changes as small as the task allows, and
 match the code's existing style. Use edit_file for changes to existing files and write_file only for new files
-or full rewrites. Don't touch credentials, tokens or files outside the task. Commands run from the repository
-folder; only these programs are allowed: {commands}. The computer may be Windows, where the Gradle wrapper is
+or full rewrites. You can't change build files (Gradle scripts and settings, the wrapper, vendordeps, scripts):
+if one needs a change, say exactly what in your summary. Don't touch credentials, tokens or files outside the
+task. Commands run from the repository folder; only these programs are allowed: {commands}. The computer may be Windows, where the Gradle wrapper is
 gradlew.bat (asking for gradlew works on both).
 
 Nothing you do is pushed anywhere. When you're done, say plainly what you changed and why, what you checked,
@@ -120,6 +128,18 @@ class ToolProblem(Exception):
 
 
 # --------------------------------------------------------------------------- workspace
+# Files a build runs or that decide what a build downloads. A command runs as the app's own account, so a
+# changed build script could read the app's keys from disk. Claude can't change these; it can suggest changes
+# in its summary for a mentor to make by hand.
+BUILD_FILE_RE = re.compile(
+    r"(^|/)(gradlew(\.bat)?|[^/]*\.gradle(\.kts)?|gradle\.properties|[^/]*\.(bat|cmd|ps1|sh|exe|jar))$"
+    r"|^(gradle|buildSrc|\.gradle|\.wpilib|vendordeps|\.mvn)(/|$)", re.I)
+
+
+def is_build_file(name: str) -> bool:
+    return bool(BUILD_FILE_RE.search(name))
+
+
 class Workspace:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -232,9 +252,17 @@ class Workspace:
         return "\n".join(hits) or "No matches."
 
     # ---- changes, after a mentor approves them
+    def check_writable(self, target: Path) -> None:
+        name = self.rel(target)
+        if is_build_file(name):
+            raise ToolProblem(f"{name} is a build file, and Code sessions can't change build files, Gradle "
+                              "settings, scripts or vendor dependencies, because a build runs them. Describe the "
+                              "change in your summary so a mentor can make it by hand.")
+
     def preview(self, tool: str, args: dict) -> str:
         """What a change would do, as a diff, for the mentor to approve."""
         target = self.path(args.get("path", ""), must_exist=False)
+        self.check_writable(target)
         old = target.read_text(encoding="utf-8", errors="replace") if target.is_file() else ""
         if tool == "write_file":
             new = str(args.get("content", ""))
@@ -257,6 +285,7 @@ class Workspace:
 
     def apply(self, tool: str, args: dict) -> str:
         target = self.path(args.get("path", ""), must_exist=False)
+        self.check_writable(target)
         if tool == "write_file":
             if target.is_dir():
                 raise ToolProblem(f"{args.get('path')} is a folder.")
@@ -332,21 +361,37 @@ def parse_command(command: str, allowed: tuple[str, ...], work: Path) -> list[st
 
 def run_program(args: list[str], cwd: Path, timeout: int) -> str:
     env = {key: os.environ[key] for key in SAFE_ENV if key in os.environ}
+    # No Gradle daemon: it would outlive the command (for hours) and hold memory on the mini PC
+    env["GRADLE_OPTS"] = "-Dorg.gradle.daemon=false"
     kwargs: dict[str, Any] = {}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     try:
-        done = subprocess.run(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, timeout=timeout, **kwargs)
-    except subprocess.TimeoutExpired as exc:
-        output = (exc.output or b"").decode("utf-8", errors="replace")
-        return _tail(output) + f"\n(Stopped after {timeout} seconds.)"
+        proc = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, **kwargs)
     except OSError as exc:
         raise ToolProblem(f"Couldn't start the command: {exc}") from exc
-    output = done.stdout.decode("utf-8", errors="replace")
-    return _tail(output) + f"\n(Exit code {done.returncode}.)"
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        out, _ = proc.communicate()
+        return _tail(out.decode("utf-8", errors="replace")) + f"\n(Stopped after {timeout} seconds.)"
+    return _tail(out.decode("utf-8", errors="replace")) + f"\n(Exit code {proc.returncode}.)"
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Stop the command and everything it started (on Windows, gradlew.bat's cmd.exe and the JVM under it)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        proc.kill()
 
 
 def _tail(text: str) -> str:
@@ -437,7 +482,12 @@ class CodeRunner:
         if not text or len(text) > MAX_TASK_CHARS:
             raise CodeError("Write what Claude should do next.")
         if json.loads(row["transcript"])[-1]["role"] == "assistant":
-            self._answer_turn(session_id)  # a run that failed between Claude's tool calls and their results
+            # A run that ended between Claude's tool calls and their results. Answer them without running
+            # anything here: commands run only in the background, never while a page request waits.
+            self.db.execute("UPDATE code_steps SET status = 'declined', review_note = 'The session ended before "
+                            "this ran. Ask for it again if it is still needed.' WHERE session_id = ? "
+                            "AND status IN ('approved', 'pending')", (session_id,))
+            self._answer_turn(session_id)
         transcript = json.loads(self.get(session_id)["transcript"])
         if transcript and transcript[-1]["role"] == "user":
             transcript[-1]["content"] = _as_blocks(transcript[-1]["content"]) + [{"type": "text", "text": text}]
@@ -505,7 +555,8 @@ class CodeRunner:
 
     async def _resume(self, session_id: int) -> None:
         """Do the approved steps of the last turn, give Claude every result, and carry on."""
-        if self._answer_turn(session_id) and self.get(session_id)["status"] == "running":
+        # In a worker thread: an approved build can take minutes, and the app must keep answering meanwhile
+        if await asyncio.to_thread(self._answer_turn, session_id) and self.get(session_id)["status"] == "running":
             await self._run(session_id)
 
     def _answer_turn(self, session_id: int) -> bool:
@@ -632,6 +683,24 @@ class CodeRunner:
             await asyncio.to_thread(self._answer_turn, session_id)
         self._set(session_id, status="stopped", error=f"Stopped after {MAX_TURNS} replies so it can't run up costs. "
                                                      "Send a follow-up to let it carry on.")
+
+
+def prune_workspaces(db: Database, data_dir: Path, days: int = KEEP_COPIES_DAYS) -> int:
+    """Delete the repository copies of sessions that finished more than `days` ago (two copies of the repository
+    each, plus build output). The steps and transcript stay, so the session can still be read."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    removed = 0
+    for row in db.all("SELECT id FROM code_sessions WHERE status IN ('done', 'stopped', 'failed') "
+                      "AND updated_at < ?", (cutoff,)):
+        folder = Path(data_dir) / "code" / str(row["id"])
+        if folder.exists():
+            shutil.rmtree(folder, ignore_errors=True)
+            db.execute("INSERT INTO code_steps (session_id, turn, kind, output, status, created_at) "
+                       "VALUES (?, 0, 'note', ?, 'done', ?)",
+                       (row["id"], f"The copy of the repository was deleted after {days} days to save space.",
+                        utcnow()))
+            removed += 1
+    return removed
 
 
 def _as_blocks(content) -> list[dict]:
