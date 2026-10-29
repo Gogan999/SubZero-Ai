@@ -8,6 +8,7 @@ import unittest
 
 from subzero_ai.render import explainer_title
 
+from .test_milestone3 import png_bytes
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 
@@ -153,6 +154,16 @@ class ProjectsTest(FeatureTest):
         self.assertEqual(self.kim.get(f"/projects/{pid}").status_code, 200)
         resp = self.ava.post("/chats/new", {"text": "Hi", "project_id": str(pid)})
         self.assertEqual(resp.status_code, 400)
+
+    def test_project_images_are_capped(self):
+        pid = self.make_project()
+        shots = [("files", (f"shot{i}.png", png_bytes(), "image/png")) for i in range(6)]
+        self.kim.post(f"/projects/{pid}/files", {}, files=shots)
+        self.assertEqual(self.h.services.projects.files(pid), [], "six images are refused together")
+        self.kim.post(f"/projects/{pid}/files", {}, files=shots[:5])
+        self.assertEqual(len(self.h.services.projects.files(pid)), 5)
+        self.kim.post(f"/projects/{pid}/files", {}, files=shots[5:])
+        self.assertEqual(len(self.h.services.projects.files(pid)), 5)
 
     def test_project_files_are_served_safely(self):
         pid = self.make_project()

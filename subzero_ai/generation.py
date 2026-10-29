@@ -204,12 +204,14 @@ class ReplyRunner:
         self.tasks.spawn(self._run(conversation_id, user_message_id, reply_id), name=f"reply-{reply_id}")
         return reply_id
 
-    def history_files(self, conversation_id: int, user_message_id: int) -> dict[int, list[dict]]:
+    def history_files(self, conversation_id: int, user_message_id: int,
+                      project_images: int = 0) -> dict[int, list[dict]]:
         """Attachments for each message. Images and video stills are sent for the newest message, and for
         earlier ones only while the total stays under HISTORY_IMAGES, newest first. Sending every picture on
-        every turn would cost a lot and, past 100 images or 32 MB, the API refuses the whole request."""
+        every turn would cost a lot and, past 100 images or 32 MB, the API refuses the whole request. A project's
+        images go with every reply too, so they come out of the same budget."""
         by_message = self.attachments.for_conversation(conversation_id)
-        budget = HISTORY_IMAGES
+        budget = max(0, HISTORY_IMAGES - project_images)
         out: dict[int, list[dict]] = {}
         for mid in sorted(by_message, reverse=True):
             rows = by_message[mid]
@@ -223,9 +225,11 @@ class ReplyRunner:
     async def _run(self, conversation_id: int, user_message_id: int, reply_id: int) -> None:
         topic = f"conv:{conversation_id}"
         conv = self.store.conversation(conversation_id)
-        files = self.history_files(conversation_id, user_message_id)
-        context = build_context(self.store.messages(conversation_id), user_message_id, files)
         project = self.projects.get(conv["project_id"]) if self.projects and conv["project_id"] else None
+        project_images = (sum(1 for f in self.projects.files(project["id"]) if f["kind"] == "image")
+                          if project is not None else 0)
+        files = self.history_files(conversation_id, user_message_id, project_images)
+        context = build_context(self.store.messages(conversation_id), user_message_id, files)
         extras: list[str] = []
         if project is not None:
             extras.append(self.projects.system_text(project))

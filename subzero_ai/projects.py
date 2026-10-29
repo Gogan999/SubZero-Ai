@@ -22,6 +22,10 @@ MAX_INSTRUCTIONS_CHARS = 8000
 MAX_PROJECT_FILES = 20
 # Everything in a project is sent with every reply in it, so keep the total small enough to stay cheap.
 MAX_PROJECT_TEXT_BYTES = 400 * 1024
+# Images are sent with every reply too, alongside the chat's own pictures and video stills. The API refuses a
+# request over 100 images or 32 MB, so a project keeps a few, small enough to leave room for the chat's.
+MAX_PROJECT_IMAGES = 5
+MAX_PROJECT_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 @dataclass
@@ -128,6 +132,13 @@ class Projects:
         if text_bytes > MAX_PROJECT_TEXT_BYTES:
             raise ProjectError(f"A project's text files can add up to {MAX_PROJECT_TEXT_BYTES // 1024} KB, because "
                                "Claude reads all of them for every reply. Add just the files that matter most.")
+        images = [f for f in existing if f["kind"] == "image"] + [i for i in items if i.kind == "image"]
+        if len(images) > MAX_PROJECT_IMAGES:
+            raise ProjectError(f"A project can hold up to {MAX_PROJECT_IMAGES} images, because Claude gets all of "
+                               "them with every reply. Attach other pictures to the chat message they're about.")
+        if sum(f["size"] if isinstance(f, sqlite3.Row) else f.size for f in images) > MAX_PROJECT_IMAGE_BYTES:
+            raise ProjectError(f"A project's images can add up to {MAX_PROJECT_IMAGE_BYTES // (1024 * 1024)} MB. "
+                               "Use smaller screenshots, or fewer of them.")
         folder = self.files_dir / "projects"
         folder.mkdir(parents=True, exist_ok=True)
         with self.db.transaction() as conn:
