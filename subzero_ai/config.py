@@ -103,6 +103,10 @@ class Settings:
     connector_github_token: str = ""  # only for a private repository: a fine-grained token with read-only Contents
     connector_drive_links: bool = True
 
+    # Code: Claude works in a copy of the GitHub repository above; a mentor approves each change and command
+    code_commands: tuple[str, ...] = ("gradlew",)  # programs Claude may ask to run, by name
+    code_command_timeout: int = 600  # seconds
+
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200
 

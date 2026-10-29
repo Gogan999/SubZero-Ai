@@ -391,9 +391,11 @@ class FlowTest(unittest.TestCase):
         self.assertIn('href="/recents"', page)
         self.assertIn(f'href="/c/{cid}"', page, "the sidebar's Recents lists the student's own chats")
         self.assertIn("1 waiting", page)
-        for path in ("/projects", "/artifacts", "/code"):
+        for path in ("/projects", "/artifacts"):
             self.assertIn(f'href="{path}"', page)
             self.assertEqual(self.ava.get(path).status_code, 200)
+        self.assertNotIn('href="/code"', page, "Code is for mentors")
+        self.assertIn('href="/code"', self.kim.get("/chats").text)
         for key in COMING_SOON:  # the ones not built yet
             self.assertIn("Coming soon", self.ava.get(f"/{key}").text)
         self.assertNotIn('href="/queue"', page, "students don't get mentor tools")

@@ -191,6 +191,43 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_shares_conversation ON shares(conversation_id, id);
     CREATE INDEX idx_shares_status ON shares(status, id);
     """,
+    # Version 10: Code sessions, where Claude works in a copy of the team's repository and a mentor approves
+    # every file change and command
+    """
+    CREATE TABLE code_sessions (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('preparing', 'running', 'waiting', 'done', 'stopped', 'failed')),
+        model TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        ref TEXT NOT NULL DEFAULT '',
+        transcript TEXT NOT NULL DEFAULT '[]',
+        error TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        created_by INTEGER NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE code_steps (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+        turn INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'tool', 'note')),
+        tool TEXT,
+        tool_use_id TEXT,
+        input TEXT,
+        output TEXT,
+        status TEXT NOT NULL CHECK (status IN ('done', 'pending', 'approved', 'declined', 'running', 'error')),
+        reviewed_by INTEGER REFERENCES users(id),
+        review_note TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE INDEX idx_code_steps ON code_steps(session_id, id);
+    """,
 ]
 
 

@@ -51,6 +51,7 @@ from .attachments import (
 )
 from .auth import LoginError, SlackLogin, profile_from_claims
 from .claude import ClaudeClient, FakeClaude
+from .code_runner import CodeRunner
 from .config import Settings, load_settings
 from .connectors import ConnectorError, Drive, GitHub
 from .db import Database
@@ -105,20 +106,9 @@ MODEL_LABELS = {
 # How many of a person's own chats the sidebar lists before "All chats"
 RECENTS = 25
 
-# claude.ai features with a place in the sidebar but not built yet. Each gets a "Coming soon" page that says
-# what it will do, so students aren't left guessing. docs/FEATURES_TODO.md tracks them.
-COMING_SOON = {
-    "code": {
-        "title": "Claude Code",
-        "summary": "Let Claude work in the team's robot code repository: read it, run tests and suggest changes.",
-        "points": [
-            "Ask about the team's actual robot code, not just pasted snippets.",
-            "Claude proposes changes as a pull request that a mentor reviews before anything is merged.",
-            "Runs with mentor approval at every step, the same way chat messages do.",
-        ],
-        "meanwhile": "Attach the code files you're asking about (up to 5) to a normal chat message.",
-    },
-}
+# claude.ai features with a place in the sidebar but not built yet (none right now). Each gets a "Coming soon"
+# page that says what it will do, so students aren't left guessing. docs/FEATURES_TODO.md tracks them.
+COMING_SOON: dict[str, dict] = {}
 
 
 def model_label(model_id: str) -> str:
@@ -135,7 +125,7 @@ def short_text(text: str, limit: int = 60) -> str:
     return cut.rstrip(" ,.;:-") + "…"
 
 
-SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|projects(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|projects(?:/\d+)?|code(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -163,6 +153,7 @@ class Services:
     shares: Shares
     github: GitHub
     drive: Drive
+    code: CodeRunner
     # Explainer titles and sizes per finished reply, for the Artifacts gallery (a finished reply never changes)
     artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
@@ -186,6 +177,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     broker, tasks = Broker(), Tasks()
     attachments = Attachments(db, settings.data_dir / "files")
     projects = Projects(db, settings.data_dir / "files")
+    github = GitHub(settings)
     runner = ReplyRunner(settings=settings, db=db, store=store, claude=claude, broker=broker, tasks=tasks,
                          attachments=attachments, projects=projects)
     approvals = ApprovalService(settings=settings, db=db, store=store, slack=slack, broker=broker, tasks=tasks,
@@ -198,7 +190,8 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
                                      slack=slack, tasks=tasks)
     return Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
                     SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
-                    Shares(db), GitHub(settings), Drive(settings))
+                    Shares(db), github, Drive(settings),
+                    CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks))
 
 
 # --------------------------------------------------------------------------- helpers
@@ -405,7 +398,7 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         "csrf": csrf_token(request),
         "dev_mode": s.settings.dev_login,
         "version": __version__,
-        "pending_count": (len(s.store.pending_messages()) + s.shares.count_pending()
+        "pending_count": (len(s.store.pending_messages()) + s.shares.count_pending() + s.code.count_waiting()
                           if viewer and viewer.is_mentor else 0),
         "setting_alert": viewer is not None and viewer.is_admin and any(
             row.get("alert") for row in _health_alerts(s)),
@@ -1062,8 +1055,10 @@ async def queue_page(request: Request, viewer: Viewer) -> Response:
     window = [{"id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
                "title": m["conversation_title"] or "New chat", "text": short_text(m["content"], 120),
                "time": fmt_time(s.store, m["created_at"])} for m in s.store.window_messages()]
+    code_waiting = [{"id": r["id"], "title": r["title"], "owner": r["owner_name"], "pending": r["pending"]}
+                    for r in s.code.list() if r["status"] == "waiting"]
     return render(request, "queue.html", viewer, items=_queue_items(s), window=window, shares=shares,
-                  flash=request.session.pop("flash", None))
+                  code_waiting=code_waiting, flash=request.session.pop("flash", None))
 
 
 @page(require="mentor")
@@ -1512,6 +1507,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                socket_connect: Callable[[str], Awaitable[Any]] | None = None,
                background: bool = True) -> Starlette:
     from .web_admin import admin_routes, apply_live
+    from .web_code import code_routes
 
     settings = settings or load_settings()
     s = build_services(settings, slack=slack, claude=claude)
@@ -1523,6 +1519,10 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="io"))
         s.db.execute("UPDATE messages SET status = 'error', error = 'The server restarted before Claude finished.' "
                      "WHERE status = 'streaming'")
+        s.db.execute("UPDATE code_steps SET status = 'error', output = 'The server restarted while this was running.' "
+                     "WHERE status = 'running'")
+        s.db.execute("UPDATE code_sessions SET status = 'failed', error = 'The server restarted while Claude was "
+                     "working. Send a follow-up to carry on.' WHERE status IN ('preparing', 'running')")
         await ensure_team_id(s)
         stop = asyncio.Event()
         loops: list[asyncio.Task] = []
@@ -1601,6 +1601,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/queue/events", queue_events),
         Route("/audit", audit_page),
         *admin_routes,
+        *code_routes,
         Route("/about", about_page),
         Route("/healthz", health),
         Route("/assets/code.css", code_css),

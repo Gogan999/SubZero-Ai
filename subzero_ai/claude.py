@@ -225,6 +225,20 @@ class ClaudeClient:
         return await asyncio.get_running_loop().run_in_executor(None, call)
 
 
+    async def tool_turn(self, *, model: str, system: str, messages: list[dict], tools: list[dict], max_tokens: int,
+                        effort: str | None = None) -> dict[str, Any]:
+        """One step of a tool-using conversation (Code sessions): Claude's whole reply, with its tool calls."""
+        body = self.request_body(model=model, system=system, messages=messages, max_tokens=max_tokens, effort=effort)
+        body["tools"] = tools
+
+        def call() -> dict[str, Any]:
+            resp = self._post(body, stream=False)
+            with resp:
+                return resp.json()
+
+        return await asyncio.get_running_loop().run_in_executor(None, call)
+
+
 def _last_user_text(messages: list[dict]) -> str:
     content = messages[-1]["content"] if messages else ""
     if isinstance(content, list):
@@ -354,6 +368,33 @@ class FakeClaude:
         yield StreamEvent("usage", usage={"output_tokens": len(reply) // 4, "stop_reason": "end_turn",
                                           "web_searches": searched or None})
         yield StreamEvent("done")
+
+    async def tool_turn(self, *, model: str, system: str, messages: list[dict], tools: list[dict], max_tokens: int,
+                        effort: str | None = None) -> dict[str, Any]:
+        """A scripted Code session: look around, read a file, propose a new file, run the build, then sum up.
+        Each tool call waits for the previous one's result. Put CODE-ERROR in the task to simulate a failure."""
+        self.calls.append({"model": model, "system": system, "messages": messages, "kind": "tool_turn"})
+        if "CODE-ERROR" in str(messages[0]["content"]):
+            raise ClaudeError("Simulated failure for testing.")
+        step = sum(1 for m in messages if m["role"] == "assistant")
+        script = [
+            ("I'll start by looking at what's in the repository.", "list_files", {"path": ""}),
+            ("Let me read the build file.", "read_file", {"path": "build.gradle"}),
+            ("I'll add a short notes file describing the change.", "write_file",
+             {"path": "NOTES.md", "content": "# Notes\n\nWritten by the offline test version of Claude.\n",
+              "reason": "Record what this session changed."}),
+            ("Now I'll run the build to check nothing broke.", "run_command",
+             {"command": "gradlew build", "reason": "Check the project still builds."}),
+        ]
+        usage = {"input_tokens": len(str(messages)) // 4, "output_tokens": 50}
+        if step < len(script):
+            text, tool, tool_input = script[step]
+            return {"content": [{"type": "text", "text": text},
+                                {"type": "tool_use", "id": f"toolu_fake_{step}", "name": tool, "input": tool_input}],
+                    "stop_reason": "tool_use", "usage": usage}
+        return {"content": [{"type": "text", "text": "Done. I added NOTES.md and ran the build. This is the offline "
+                                                     "test version of Claude, so nothing real was changed."}],
+                "stop_reason": "end_turn", "usage": usage}
 
     async def complete(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
                        effort: str | None = None) -> str:

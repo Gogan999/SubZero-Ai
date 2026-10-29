@@ -14,7 +14,9 @@
         <li><a href="/recents" {% if path.startswith('/recents') %}aria-current="page"{% endif %}>{{ icon('chats') }} Chats</a></li>
         <li><a href="/projects" {% if path.startswith('/projects') %}aria-current="page"{% endif %}>{{ icon('projects') }} Projects</a></li>
         <li><a href="/artifacts" {% if path.startswith('/artifacts') %}aria-current="page"{% endif %}>{{ icon('artifacts') }} Artifacts</a></li>
-        <li><a href="/code" {% if path.startswith('/code') %}aria-current="page"{% endif %}>{{ icon('code') }} Code <span class="soon">Soon</span></a></li>
+        {% if viewer.is_mentor %}
+        <li><a href="/code" {% if path.startswith('/code') %}aria-current="page"{% endif %}>{{ icon('code') }} Code</a></li>
+        {% endif %}
       </ul>
       {% if viewer.is_mentor %}
       <h2 class="side-label">Mentor tools</h2>

@@ -18,9 +18,8 @@ keeps its status tag.
 
 ## Placeholders already on screen
 
-| Feature | Where the placeholder is | What it should do | Notes for building it |
-|---|---|---|---|
-| Claude Code | Sidebar, `/code` | Let Claude read the team's robot code repository, run builds and tests, and propose changes as a pull request. | The biggest item. Needs a sandboxed runner, a narrowly scoped GitHub token, and mentor approval for every step that writes. Probably mentors only at first. |
+None right now: every placeholder has been built (see Done below). If a new one is added, give it a
+row here with what it should do and notes for building it.
 
 The model name in the composer is not a placeholder: students see which model
 answers, and mentors get a picker there (or in the chat header when reading
@@ -59,6 +58,15 @@ Not on screen yet. Add a placeholder only when work on one starts.
 
 ## Done
 
+- Code (`/code`, mentors only): a mentor gives Claude a task in the GitHub repository from Connectors.
+  Claude works in a copy on the mini PC (downloaded as a zip, so git isn't needed). It lists, reads and
+  searches files on its own; every file change (shown as a diff) and every command waits for a mentor to
+  approve or decline it with a note. Commands must start with a program allowed in Settings, Code
+  (gradlew by default), run in the copy's folder with no shell, a time limit, and none of the app's keys or
+  tokens in their environment. Nothing is pushed: the mentor downloads the changes as a patch. Sessions stop
+  after 40 Claude replies per run, and every step is in the audit log. Not a full OS sandbox: an approved
+  command runs as the app's Windows account, which is why each one needs a mentor.
+  Possible next step: open the patch as a pull request with a token that can write.
 - Connectors (composer tools menu, "Add files from"): GitHub browses the one repository an admin sets in
   Settings, Connectors (with a read-only token for a private repository, kept in config.env); Google Drive
   takes a link to a Doc, Sheet, Slides deck or file shared as "Anyone with the link" (there's no Google
@@ -80,7 +88,7 @@ Not on screen yet. Add a placeholder only when work on one starts.
   since the new-chat page has no picker), Slack DMs about reviews on or off, appearance, and for students
   how many messages they have left today.
 - Projects (`/projects`): mentors make a project per mechanism or subsystem with a description, instructions
-  for Claude and up to 20 reference files (code, text, PNG/JPG). Everyone can read them and start chats in the
+  for Claude and up to 20 reference files (code, text, and up to 5 PNG/JPG images). Everyone can read them and start chats in the
   project; Claude gets the instructions after the safety rules and the files before the first message. Only
   mentors change a project, every change is in the audit log, and the review card names the project. Mentors
   can archive a project; its chats keep working.

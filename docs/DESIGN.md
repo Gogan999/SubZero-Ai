@@ -329,6 +329,19 @@ added are disabled with the reason; added ones get `aria-pressed="true"` and
 the `--approved` colors. Picked files join the attached files as
 `.chosen-files` chips.
 
+### Code sessions
+
+A Code session page lists the steps in order (`.code-steps`). The task and a
+mentor's follow-ups are `.code-step.note` boxes (`--frost`); Claude's words are
+plain prose; each tool call is a bordered `.code-step.tool` with a
+`.code-label` (quieter once done) and the reason. A step waiting for approval
+gets the `--pending-edge` border, its diff in `.code-diff` (added lines in the
+approved colors, removed in the rejected colors) or its command in
+`.code-command`, and `.code-review`: a primary approve button and a decline
+form with an optional note. Output sits in a closed `<details
+class="code-output">`. The `.code-status` row shows the status pill and Stop;
+while Claude works the steps redraw every few seconds.
+
 ### Share links
 
 The chat header's Share button (`.button.small` with the share icon) opens the

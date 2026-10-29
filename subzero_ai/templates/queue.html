@@ -8,6 +8,14 @@
   <div data-queue>
     {% include "_queue_items.html" %}
   </div>
+  {% if code_waiting %}
+  <section class="panel" id="code" aria-labelledby="code-title">
+    <h2 id="code-title">Code steps to approve</h2>
+    <ul class="simple-list">
+      {% for c in code_waiting %}<li><a href="/code/{{ c.id }}">{{ c.title }}</a> <span class="field-hint">{{ c.pending }} step{{ 's' if c.pending != 1 else '' }}, started by {{ c.owner }}</span></li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
   {% if shares %}
   <section class="panel" id="shares" aria-labelledby="shares-title">
     <h2 id="shares-title">Share links to approve</h2>

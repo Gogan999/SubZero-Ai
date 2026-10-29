@@ -88,6 +88,13 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "730 days keeps this season and the next. 0 keeps chats forever.", 0, 3650),
         Field("backup_keep_days", "Keep nightly backups for this many days", "int", "", 1, 365),
     ]),
+    "code": ("Code", [
+        Field("code_commands", "Commands Claude can ask to run", "lines",
+              "One program name per line, like gradlew. Claude can only ask to run these, from the repository "
+              "folder, and a mentor approves each command before it runs."),
+        Field("code_command_timeout", "Stop a command after this many seconds", "int",
+              "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
+    ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),
         Field("admin_slack_ids", "Admins' Slack member IDs", "ids",

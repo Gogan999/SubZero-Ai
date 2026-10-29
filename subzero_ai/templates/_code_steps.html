@@ -1,0 +1,73 @@
+<div class="code-status" data-code-status="{{ session.status }}" {% if session.live %}data-code-live{% endif %}>
+  <span class="pill {{ session.kind }}">{{ session.label }}</span>
+  {% if session.live %}<span class="typing">Claude is working…</span>{% endif %}
+  {% if session.tokens %}<span class="fine">{{ '{:,}'.format(session.tokens) }} tokens so far</span>{% endif %}
+  {% if session.status in ('preparing', 'running', 'waiting') %}
+  <form method="post" action="/code/{{ session.id }}/stop">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="button small quiet" type="submit" data-confirm="Stop this session? Steps waiting for approval are declined.">Stop</button>
+  </form>
+  {% endif %}
+</div>
+{% if session.error %}<p class="form-error" role="alert">{{ session.error }}</p>{% endif %}
+<ol class="code-steps">
+  <li class="code-step note"><p class="code-label">Task</p><div class="plain">{{ session.task }}</div></li>
+  {% for step in steps %}
+  {% if step.kind == 'text' %}
+  <li class="code-step claude"><div class="prose">{{ step.html|safe }}</div></li>
+  {% elif step.kind == 'note' %}
+  <li class="code-step note">{% if step.label %}<p class="code-label">{{ step.label }}</p>{% endif %}<div class="plain">{{ step.output }}</div></li>
+  {% else %}
+  <li class="code-step tool {{ step.status }}" id="step{{ step.id }}">
+    <p class="code-label">
+      {{ step.label }}
+      {% if step.status == 'pending' %}<span class="pill pending">Needs approval</span>
+      {% elif step.status == 'declined' %}<span class="pill bad">Declined{% if step.reviewer %} by {{ step.reviewer }}{% endif %}</span>
+      {% elif step.status == 'error' %}<span class="pill bad">Didn't work</span>
+      {% elif step.reviewer %}<span class="pill ok">Approved by {{ step.reviewer }}</span>{% endif %}
+    </p>
+    {% if step.reason %}<p class="code-reason">{{ step.reason }}</p>{% endif %}
+    {% if step.command %}<pre class="code-command"><code>{{ step.command }}</code></pre>{% endif %}
+    {% if step.diff %}<pre class="code-diff"><code>{% for line in step.diff.splitlines() %}<span class="{{ 'add' if line.startswith('+') and not line.startswith('+++') else 'del' if line.startswith('-') and not line.startswith('---') else 'hunk' if line.startswith('@@') else '' }}">{{ line }}</span>
+{% endfor %}</code></pre>{% endif %}
+    {% if step.note %}<p class="tag-reason">Note: {{ step.note }}</p>{% endif %}
+    {% if step.status == 'pending' %}
+    <div class="code-review">
+      <form method="post" action="/code/steps/{{ step.id }}/approve">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button small primary" type="submit">{{ 'Run it' if step.tool == 'run_command' else 'Approve change' }}</button>
+      </form>
+      <form method="post" action="/code/steps/{{ step.id }}/decline" class="code-decline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label class="visually-hidden" for="decline-{{ step.id }}">Note for Claude</label>
+        <input id="decline-{{ step.id }}" name="note" maxlength="500" placeholder="Why not, or what to do instead (optional)">
+        <button class="button small quiet" type="submit">Decline</button>
+      </form>
+    </div>
+    {% elif step.output and step.status in ('done', 'error') and not step.diff %}
+    <details class="code-output"><summary>{{ 'Output' if step.tool == 'run_command' else 'Details' }}</summary><pre><code>{{ step.output }}</code></pre></details>
+    {% endif %}
+  </li>
+  {% endif %}
+  {% endfor %}
+</ol>
+{% if changes %}
+<section class="panel" aria-labelledby="changes-title">
+  <h2 id="changes-title">Changes</h2>
+  <ul class="simple-list">
+    {% for c in changes %}<li><span class="mono">{{ c.name }}</span> <span class="field-hint">{{ c.kind }}</span></li>{% endfor %}
+  </ul>
+  <p class="field-hint">Apply the patch in your copy of the repository with <span class="mono">git apply code-session-{{ session.id }}.patch</span>, then test on the robot before committing.</p>
+  <div class="form-actions"><a class="button" href="/code/{{ session.id }}/changes.patch" download>Download patch</a></div>
+</section>
+{% endif %}
+{% if can_follow_up %}
+<form class="panel" method="post" action="/code/{{ session.id }}/follow-up">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="field">
+    <label for="follow-up">Ask Claude to do more</label>
+    <textarea id="follow-up" name="text" rows="3" maxlength="8000" required placeholder="Also add a unit test for the new limit."></textarea>
+  </div>
+  <div class="form-actions"><button class="button primary" type="submit">Send</button></div>
+</form>
+{% endif %}

@@ -619,6 +619,22 @@
     addFiles(form, Array.from(event.dataTransfer.files));
   });
 
+  // Code sessions: redraw the steps every few seconds while Claude works, and stop once it waits or finishes
+  function pollCode() {
+    const box = document.querySelector("[data-code-steps]");
+    if (!box?.querySelector("[data-code-live]")) return;
+    setTimeout(async () => {
+      try {
+        const res = await fetch(box.dataset.url, { credentials: "same-origin" });
+        if (res.ok) box.innerHTML = await res.text();
+      } catch {
+        // try again on the next round
+      }
+      pollCode();
+    }, 2500);
+  }
+  pollCode();
+
   // Composer tools: the ones switched on show as chips next to the tools button, so it's clear what's on
   function updateToolChips(form) {
     const chips = form?.querySelector("[data-tool-chips]");

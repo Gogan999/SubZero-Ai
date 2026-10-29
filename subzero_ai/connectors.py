@@ -107,6 +107,22 @@ class GitHub:
         """Raises ConnectorError unless the repository can be read with these details."""
         self._get("", repo=repo, branch=branch, token=token)
 
+    def download_zip(self, limit: int) -> bytes:
+        """The whole repository at the configured branch, as GitHub's zip archive (no git needed)."""
+        url = f"{self.API}/repos/{self.settings.connector_github_repo}/zipball/{quote(self.settings.connector_github_branch, safe='/')}"
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+                   "User-Agent": "SubZero-AI"}
+        if self.settings.connector_github_token:
+            headers["Authorization"] = f"Bearer {self.settings.connector_github_token}"
+        try:
+            resp = self.session_factory().get(url.rstrip("/"), headers=headers, timeout=120, stream=True)
+        except requests.RequestException as exc:
+            raise ConnectorError("Couldn't reach GitHub. Try again in a minute.") from exc
+        if resp.status_code >= 400:
+            raise ConnectorError(f"GitHub couldn't send the repository ({resp.status_code}). An admin should check "
+                                 "the repository and token in Settings, Connectors.")
+        return _read_limited(resp, limit, "The repository")
+
     def list(self, path: str = "") -> list[Entry]:
         path = clean_path(path)
         body = self._get(path).json()

@@ -539,3 +539,134 @@ class ConnectorsTest(FeatureTest):
         self.assertEqual(len(audit), 1)
         self.assertNotIn("secret123", audit[0]["details"])
         self.assertEqual(self.kim.post("/settings/connectors", {"connector_github_repo": ""}).status_code, 403)
+
+
+def repo_zip() -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("team-robot-code-abc123/build.gradle", "plugins { id 'java' }\n")
+        z.writestr("team-robot-code-abc123/src/Robot.java", "public class Robot {\n  int kP = 5;\n}\n")
+        z.writestr("team-robot-code-abc123/../evil.txt", "outside")
+        script = zipfile.ZipInfo("team-robot-code-abc123/gradlew")
+        script.external_attr = 0o755 << 16
+        z.writestr(script, "#!/bin/sh\necho BUILD SUCCESSFUL \"$@\"\n")
+    return buf.getvalue()
+
+
+class CodeTest(FeatureTest):
+    def setUp(self):
+        self.h = Harness(connector_github_repo="team/robot-code")
+        self.ava = self.h.login(STUDENT)
+        self.kim = self.h.login(MENTOR)
+        self.web = FakeWeb({"https://api.github.com/repos/team/robot-code/zipball": FakeResponse(200, repo_zip())})
+        self.h.services.github.session_factory = self.web
+        self.code = self.h.services.code
+
+    def begin(self, task="Add a notes file and run the build."):
+        resp = self.kim.post("/code", {"task": task}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303, resp.text)
+        self.h.idle()
+        return int(resp.headers["location"].rsplit("/", 1)[1])
+
+    def pending(self, sid):
+        return [s for s in self.code.steps(sid) if s["status"] == "pending"]
+
+    def act(self, step_id, kind, note=""):
+        self.kim.post(f"/code/steps/{step_id}/{kind}", {"note": note}, follow_redirects=False)
+        self.h.idle()
+
+    def test_mentors_only(self):
+        self.assertEqual(self.ava.get("/code").status_code, 403)
+        self.assertEqual(self.ava.post("/code", {"task": "x"}).status_code, 403)
+        self.h.services.settings.connector_github_repo = ""
+        self.assertIn("Connect the repository first", self.kim.get("/code").text)
+
+    def test_every_change_and_command_waits_for_a_mentor(self):
+        sid = self.begin()
+        session = self.code.get(sid)
+        self.assertEqual(session["status"], "waiting")
+        work = self.code.workspace(sid).work
+        self.assertTrue((work / "src" / "Robot.java").is_file())
+        self.assertFalse((work.parent / "evil.txt").exists(), "zip paths can't climb out")
+        done = [s["tool"] for s in self.code.steps(sid) if s["kind"] == "tool" and s["status"] == "done"]
+        self.assertEqual(done, ["list_files", "read_file"], "reading needs no approval")
+        [write] = self.pending(sid)
+        self.assertEqual(write["tool"], "write_file")
+        self.assertFalse((work / "NOTES.md").exists(), "nothing is written before approval")
+        page = self.kim.get(f"/code/{sid}").text
+        self.assertIn("Wants to write NOTES.md", page)
+        self.assertIn("+# Notes", page)
+        self.assertIn("Approve change", page)
+
+        self.act(write["id"], "approve")
+        self.assertTrue((work / "NOTES.md").is_file())
+        [run] = self.pending(sid)
+        self.assertEqual(run["tool"], "run_command")
+        self.act(run["id"], "approve")
+        session = self.code.get(sid)
+        self.assertEqual(session["status"], "done")
+        ran = self.code.db.one("SELECT * FROM code_steps WHERE id = ?", (run["id"],))
+        self.assertIn("BUILD SUCCESSFUL build", ran["output"])
+        self.assertIn("Exit code 0", ran["output"])
+
+        patch = self.kim.get(f"/code/{sid}/changes.patch")
+        self.assertEqual(patch.status_code, 200)
+        self.assertIn("+++ b/NOTES.md", patch.text)
+        self.assertNotIn("Robot.java", patch.text)
+        actions = [r["action"] for r in self.h.services.store.audit_entries()]
+        for action in ("code_session_started", "code_step_approved", "code_patch_downloaded"):
+            self.assertIn(action, actions)
+        # A follow-up carries on in the same copy
+        self.kim.post(f"/code/{sid}/follow-up", {"text": "Thanks, that is all."}, follow_redirects=False)
+        self.h.idle()
+        self.assertEqual(self.code.get(sid)["status"], "done")
+        self.assertIn("Thanks, that is all.", self.kim.get(f"/code/{sid}").text)
+
+    def test_declined_step_goes_back_to_claude(self):
+        sid = self.begin()
+        [write] = self.pending(sid)
+        self.act(write["id"], "decline", "Don't add files at the root.")
+        work = self.code.workspace(sid).work
+        self.assertFalse((work / "NOTES.md").exists())
+        transcript = json.loads(self.code.get(sid)["transcript"])
+        last = next(block for m in transcript if m["role"] == "user" and isinstance(m["content"], list)
+                    for block in m["content"] if block.get("tool_use_id") == write["tool_use_id"])
+        self.assertTrue(last["is_error"])
+        self.assertIn("Don't add files at the root.", last["content"])
+        self.assertEqual(self.code.db.one("SELECT status FROM code_steps WHERE id = ?", (write["id"],))["status"],
+                         "declined")
+        self.act(write["id"], "approve")  # already handled: nothing changes
+        self.assertFalse((work / "NOTES.md").exists())
+
+    def test_stop_and_failures(self):
+        sid = self.begin()
+        self.kim.post(f"/code/{sid}/stop", follow_redirects=False)
+        self.assertEqual(self.code.get(sid)["status"], "stopped")
+        self.assertEqual(self.pending(sid), [])
+        failed = self.begin("CODE-ERROR please")
+        self.assertEqual(self.code.get(failed)["status"], "failed")
+        self.assertIn("Simulated failure", self.kim.get(f"/code/{failed}").text)
+        self.web.routes.clear()
+        broken = self.begin()
+        self.assertEqual(self.code.get(broken)["status"], "failed")
+
+    def test_commands_and_paths_are_fenced_in(self):
+        from subzero_ai.code_runner import ToolProblem, Workspace, parse_command
+        sid = self.begin()
+        work = self.code.workspace(sid).work
+        self.assertEqual(parse_command("gradlew build", ("gradlew",), work)[1:], ["build"])
+        self.assertEqual(parse_command("./gradlew test", ("gradlew",), work)[1:], ["test"])
+        for bad in ("rm -rf /", "gradlew build; rm -rf /", "gradlew build && curl x", "../gradlew build",
+                    "python -c 1", "gradlew $(whoami)"):
+            with self.assertRaises(ToolProblem, msg=bad):
+                parse_command(bad, ("gradlew",), work)
+        space = Workspace(work.parent)
+        for bad in ("../base/build.gradle", "/etc/passwd", "src/../../x"):
+            with self.assertRaises(ToolProblem, msg=bad):
+                space.path(bad)
+        self.assertIn("kP = 5", space.read_file("src/Robot.java"))
+        self.assertIn("src/Robot.java:2", space.search(r"kP\s*="))
+        with self.assertRaises(ToolProblem):
+            space.preview("edit_file", {"path": "src/Robot.java", "old_text": "missing", "new_text": "x"})
