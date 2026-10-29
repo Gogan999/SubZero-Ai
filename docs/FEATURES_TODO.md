@@ -21,7 +21,6 @@ keeps its status tag.
 | Feature | Where the placeholder is | What it should do | Notes for building it |
 |---|---|---|---|
 | Claude Code | Sidebar, `/code` | Let Claude read the team's robot code repository, run builds and tests, and propose changes as a pull request. | The biggest item. Needs a sandboxed runner, a narrowly scoped GitHub token, and mentor approval for every step that writes. Probably mentors only at first. |
-| Connectors (GitHub, Drive) | Composer tools menu | Pull files from the team's GitHub or Google Drive into a message instead of attaching them. | OAuth per service. Pulled files show on the review card like attachments. |
 
 The model name in the composer is not a placeholder: students see which model
 answers, and mentors get a picker there (or in the chat header when reading
@@ -60,6 +59,11 @@ Not on screen yet. Add a placeholder only when work on one starts.
 
 ## Done
 
+- Connectors (composer tools menu, "Add files from"): GitHub browses the one repository an admin sets in
+  Settings, Connectors (with a read-only token for a private repository, kept in config.env); Google Drive
+  takes a link to a Doc, Sheet, Slides deck or file shared as "Anyone with the link" (there's no Google
+  sign-in, so private files can't be added). Files are fetched when the message is sent and stored like
+  attachments, so they show on the review card and count toward the 5-file limit.
 - Share (`/c/<id>/share`): the chat's student or a mentor makes a read-only link and says who it's for, such as
   "my parents". A student's link waits for a mentor, who previews it and approves or declines it in Review
   (with a note in #claude-approvals); a mentor's link works at once. The link shows the chat as it was when

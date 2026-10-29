@@ -317,6 +317,18 @@ line). A project page is `.project-layout`: the project's composer
 instructions, files and, for mentors, the upload form and an "Edit project"
 disclosure. Archiving uses `.button.reject` with `data-confirm`.
 
+### Connector dialogs
+
+"Add files from" in the composer's tools menu opens a modal `<dialog
+class="connector-dialog">`: a `.connector-head` with the title and a close
+`.icon-button`, then the body and `.form-actions`. The GitHub picker has
+`.connector-crumbs` (`.link-button`s, the current folder in bold) over a
+bordered `.connector-list` of 44px `.connector-entry` rows: folder or file
+icon, name, and a `.connector-meta` size on the right. Files that can't be
+added are disabled with the reason; added ones get `aria-pressed="true"` and
+the `--approved` colors. Picked files join the attached files as
+`.chosen-files` chips.
+
 ### Share links
 
 The chat header's Share button (`.button.small` with the share icon) opens the

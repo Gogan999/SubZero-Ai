@@ -485,6 +485,28 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
   .health-detail { grid-column: 1 / -1; }
 }
 
+/* Connectors --------------------------------------------------------------------------- */
+.connector-dialog { width: min(560px, calc(100vw - 2rem)); max-height: min(640px, calc(100vh - 2rem)); padding: 1rem 1.1rem; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); color: var(--ink); }
+.connector-dialog[open] { display: flex; flex-direction: column; gap: .6rem; }
+.connector-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.connector-dialog .fine, .connector-dialog .form-actions { margin: 0; }
+.connector-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.connector-head h2 { margin: 0; font-size: 1.15rem; }
+.connector-crumbs { font-size: .9rem; overflow-wrap: anywhere; }
+.link-button { border: 0; background: none; padding: 0; font: inherit; color: var(--brand); text-decoration: underline; cursor: pointer; }
+.link-button[aria-current] { color: var(--ink); text-decoration: none; font-weight: 650; }
+.connector-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; border: 1px solid var(--rule); border-radius: 8px; min-height: 8rem; }
+.connector-list[aria-busy="true"] { opacity: .6; }
+.connector-list > li + li { border-top: 1px solid var(--rule); }
+.connector-list > li.fine { padding: .6rem .75rem; }
+.connector-entry { display: flex; align-items: center; gap: .6rem; width: 100%; min-height: 44px; padding: .4rem .75rem; border: 0; background: none; color: var(--ink); font: inherit; font-size: .92rem; text-align: left; cursor: pointer; }
+.connector-entry:hover:not(:disabled) { background: var(--frost); }
+.connector-entry:disabled { color: var(--ink-2); cursor: default; }
+.connector-entry[aria-pressed="true"] { background: var(--approved-bg); }
+.connector-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.connector-meta { font-size: .8rem; color: var(--ink-2); white-space: nowrap; }
+.connector-entry[aria-pressed="true"] .connector-meta { color: var(--approved); font-weight: 650; }
+
 /* Share links ------------------------------------------------------------------------- */
 .share-links { list-style: none; margin: .75rem 0 0; padding: 0; display: grid; gap: .75rem; }
 .share-link { border: 1px solid var(--rule); border-radius: 10px; padding: .75rem .9rem; display: grid; gap: .5rem; min-width: 0; }

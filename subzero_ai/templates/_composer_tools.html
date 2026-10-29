@@ -27,10 +27,49 @@
         <label class="menu-item toggle"><input type="radio" name="style" value="{{ value }}" data-tool="{{ label }}"> <span>{{ label }}</span></label>
         {% endfor %}
       </fieldset>
-      <ul>
-        <li><span class="menu-item" aria-disabled="true">{{ icon('plug') }} Connectors (GitHub, Drive) <span class="soon">Soon</span></span></li>
-      </ul>
+      {% if settings.connector_github_repo or settings.connector_drive_links %}
+      <fieldset class="menu-group">
+        <legend>{{ icon('plug') }} Add files from</legend>
+        {% if settings.connector_github_repo %}
+        <button class="menu-item toggle" type="button" data-open-connector="github">{{ icon('branch') }} <span>GitHub<span class="menu-hint">{{ settings.connector_github_repo }}</span></span></button>
+        {% endif %}
+        {% if settings.connector_drive_links %}
+        <button class="menu-item toggle" type="button" data-open-connector="drive">{{ icon('drive') }} <span>Google Drive<span class="menu-hint">A Doc, Sheet or file shared by link</span></span></button>
+        {% endif %}
+      </fieldset>
+      {% endif %}
     </div>
   </details>
+  {% if settings.connector_github_repo %}
+  <dialog class="connector-dialog" data-connector-dialog="github" data-repo="{{ settings.connector_github_repo }}" aria-labelledby="github-dialog-title">
+    <div class="connector-head">
+      <h2 id="github-dialog-title">Add from GitHub</h2>
+      <button class="icon-button" type="button" data-close-dialog aria-label="Close">{{ icon('close') }}</button>
+    </div>
+    <p class="fine">Pick code, text or image files from <span class="mono">{{ settings.connector_github_repo }}</span>. They're added to your message like attachments{% if not viewer.is_mentor %}, and a mentor sees them when reviewing it{% endif %}.</p>
+    <nav class="connector-crumbs" aria-label="Folder" data-gh-crumbs></nav>
+    <ul class="connector-list" data-gh-list aria-busy="false"></ul>
+    <p class="form-error" role="alert" data-connector-error hidden></p>
+    <div class="form-actions"><button class="button" type="button" data-close-dialog>Done</button></div>
+  </dialog>
+  {% endif %}
+  {% if settings.connector_drive_links %}
+  <dialog class="connector-dialog" data-connector-dialog="drive" aria-labelledby="drive-dialog-title">
+    <div class="connector-head">
+      <h2 id="drive-dialog-title">Add from Google Drive</h2>
+      <button class="icon-button" type="button" data-close-dialog aria-label="Close">{{ icon('close') }}</button>
+    </div>
+    <div class="field">
+      <label for="drive-link">Link to a Doc, Sheet, Slides deck or Drive file</label>
+      <input id="drive-link" type="url" inputmode="url" autocomplete="off" placeholder="https://docs.google.com/…" data-drive-link aria-describedby="drive-link-hint">
+      <p class="field-hint" id="drive-link-hint">In Drive, use Share and set it to "Anyone with the link", then Copy link. Docs and Slides come in as text, and a Sheet as a CSV of its first tab.</p>
+    </div>
+    <p class="form-error" role="alert" data-connector-error hidden></p>
+    <div class="form-actions">
+      <button class="button primary" type="button" data-add-drive>Add link</button>
+      <button class="button quiet" type="button" data-close-dialog>Cancel</button>
+    </div>
+  </dialog>
+  {% endif %}
   <ul class="tool-chips" data-tool-chips aria-label="Tools on for this message" hidden></ul>
 </div>

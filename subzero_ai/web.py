@@ -52,6 +52,7 @@ from .attachments import (
 from .auth import LoginError, SlackLogin, profile_from_claims
 from .claude import ClaudeClient, FakeClaude
 from .config import Settings, load_settings
+from .connectors import ConnectorError, Drive, GitHub
 from .db import Database
 from .generation import STYLES, ReplyRunner, clean_options, load_options, options_labels
 from .health import Health
@@ -160,6 +161,8 @@ class Services:
     nightly: Nightly
     projects: Projects
     shares: Shares
+    github: GitHub
+    drive: Drive
     # Explainer titles and sizes per finished reply, for the Artifacts gallery (a finished reply never changes)
     artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
@@ -195,7 +198,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
                                      slack=slack, tasks=tasks)
     return Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
                     SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
-                    Shares(db))
+                    Shares(db), GitHub(settings), Drive(settings))
 
 
 # --------------------------------------------------------------------------- helpers
@@ -283,6 +286,28 @@ async def read_uploads(form, settings: Settings) -> list[Prepared]:
         return await _with_frames(form, prepared)
     finally:
         await form.close()  # delete the temporary copies of the uploads
+
+
+async def connector_files(s: Services, form, already: int) -> list[Prepared]:
+    """Files picked from the team's GitHub repository or pasted as Google Drive links, fetched now and stored
+    like attachments, so mentors see them on the review card. Raises AttachmentError."""
+    paths = [str(p) for p in form.getlist("github") if str(p).strip()]
+    links = [str(link) for link in form.getlist("drive") if str(link).strip()]
+    if not paths and not links:
+        return []
+    if paths and not s.github.configured:
+        raise ConnectorError("GitHub isn't set up. An admin can add the team's repository in Settings.")
+    if links and not s.drive.enabled:
+        raise ConnectorError("Adding Google Drive links is switched off. Download the file and attach it instead.")
+    if already + len(paths) + len(links) > MAX_FILES:
+        raise AttachmentError(f"You can attach up to {MAX_FILES} files to one message.")
+    limit = s.settings.max_text_file_kb * 1024
+    items = []
+    for path in dict.fromkeys(paths):
+        items.append(await asyncio.to_thread(s.github.fetch, path, max_text_bytes=limit))
+    for link in dict.fromkeys(links):
+        items.append(await asyncio.to_thread(s.drive.fetch, link, max_text_bytes=limit))
+    return items
 
 
 async def _with_frames(form, prepared: list[Prepared]) -> list[Prepared]:
@@ -970,6 +995,7 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
         project_id = project["id"]
     try:
         files = await read_uploads(form, s.settings)
+        files += await connector_files(s, form, len(files))
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam, files=files,
@@ -986,6 +1012,7 @@ async def send_message(request: Request, viewer: Viewer) -> Response:
     form = await request.form()
     try:
         files = await read_uploads(form, s.settings)
+        files += await connector_files(s, form, len(files))
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), conversation_id=request.path_params["cid"],
@@ -1081,6 +1108,24 @@ async def explainer_page(request: Request, viewer: Viewer) -> Response:
         name = f"explainer-{conv['id']}-{msg['id']}-{index + 1}.html"
         headers["Content-Disposition"] = f'attachment; filename="{name}"'
     return HTMLResponse(page_html, headers=headers)
+
+
+@page()
+async def github_browse(request: Request, viewer: Viewer) -> Response:
+    """One folder of the team's GitHub repository, for the composer's "Add from GitHub" picker."""
+    s = services(request)
+    if not s.github.configured:
+        return JSONResponse({"ok": False, "error": "GitHub isn't set up. An admin can add the team's repository "
+                                                   "in Settings."}, status_code=404)
+    path = request.query_params.get("path", "")
+    try:
+        entries = await asyncio.to_thread(s.github.list, path)
+    except ConnectorError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "repo": s.settings.connector_github_repo, "path": path.strip("/"),
+                         "entries": [{"name": e.name, "path": e.path, "kind": e.kind,
+                                      "size": size_label(e.size) if e.kind == "file" else "",
+                                      "supported": e.supported} for e in entries]})
 
 
 # --------------------------------------------------------------------------- share links
@@ -1540,6 +1585,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/c/{cid:int}/events", conversation_events),
         Route("/c/{cid:int}/model", set_model, methods=["POST"]),
         Route("/c/{cid:int}/x/{mid:int}/{n:int}", explainer_page),
+        Route("/connectors/github", github_browse),
         Route("/c/{cid:int}/share", share_page),
         Route("/c/{cid:int}/share", share_create, methods=["POST"]),
         Route("/shares/{sid:int}/preview", share_preview),

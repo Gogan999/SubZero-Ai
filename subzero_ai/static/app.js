@@ -250,6 +250,7 @@
       textarea.value = "";
       autosize(textarea);
       setChosen(form, []);
+      setRemotes(form, []);
       if (result.message_id) refreshMessage(result.message_id);
     }
   });
@@ -285,21 +286,201 @@
     const transfer = new DataTransfer();
     files.forEach((file) => transfer.items.add(file));
     input.files = transfer.files;
+    renderChosen(form);
+  }
+
+  function chip(label, key, index) {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = label;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.dataset[key] = String(index);
+    remove.setAttribute("aria-label", `Remove ${label}`);
+    remove.textContent = "×";
+    item.append(name, remove);
+    return item;
+  }
+
+  function renderChosen(form) {
     const list = form.querySelector("[data-chosen]");
-    list.replaceChildren(...files.map((file, i) => {
+    const files = chosen(form), added = remoteList(form);
+    list.replaceChildren(
+      ...files.map((file, i) => chip(`${file.name} (${sizeLabel(file.size)})`, "removeFile", i)),
+      ...added.map((item, i) => chip(item.label, "removeRemote", i)));
+    list.hidden = files.length + added.length === 0;
+  }
+
+  // ------------------------------------------------------------- connectors
+  // Files from the team's GitHub repository or a Google Drive link. They're sent as "github" and "drive" values,
+  // fetched on the server when the message is sent, and listed with the attached files until then.
+  const remotes = new WeakMap(); // form -> [{source, value, label}]
+
+  function remoteList(form) {
+    return remotes.get(form) || [];
+  }
+
+  function setRemotes(form, items) {
+    remotes.set(form, items);
+    renderChosen(form);
+  }
+
+  function addRemote(form, item, dialog) {
+    const input = form.querySelector("[data-files]");
+    const most = Number(input?.dataset.maxFiles) || 5;
+    const added = remoteList(form);
+    if (added.some((r) => r.source === item.source && r.value === item.value)) return true;
+    if (chosen(form).length + added.length >= most) {
+      connectorError(dialog, `You can add up to ${most} files to one message.`);
+      return false;
+    }
+    setRemotes(form, [...added, item]);
+    return true;
+  }
+
+  function connectorError(dialog, message) {
+    const el = dialog.querySelector("[data-connector-error]");
+    el.textContent = message;
+    el.hidden = !message;
+  }
+
+  const FOLDER_ICON = '<svg class="icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6V15a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V7.5a1 1 0 0 0-1-1H10L8.3 4.5H3.5a1 1 0 0 0-1 1z"/></svg>';
+  const FILE_ICON = '<svg class="icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h6.5L15.5 6.5v10a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1zM11.5 2.5v4h4"/></svg>';
+
+  async function browseGitHub(dialog, path) {
+    const list = dialog.querySelector("[data-gh-list]");
+    list.setAttribute("aria-busy", "true");
+    connectorError(dialog, "");
+    let result;
+    try {
+      const res = await fetch(`/connectors/github?path=${encodeURIComponent(path)}`,
+        { credentials: "same-origin", headers: { "Accept": "application/json" } });
+      result = await res.json();
+    } catch {
+      result = { ok: false, error: "Couldn't reach the server. Check your connection and try again." };
+    }
+    list.setAttribute("aria-busy", "false");
+    if (!result.ok) return connectorError(dialog, result.error);
+    dialog.dataset.path = result.path;
+    const crumbs = dialog.querySelector("[data-gh-crumbs]");
+    const parts = result.path ? result.path.split("/") : [];
+    const crumb = (label, target) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "link-button";
+      button.dataset.ghPath = target;
+      button.textContent = label;
+      return button;
+    };
+    crumbs.replaceChildren(crumb(result.repo.split("/").pop(), ""),
+      ...parts.flatMap((part, i) => [document.createTextNode(" / "), crumb(part, parts.slice(0, i + 1).join("/"))]));
+    crumbs.lastElementChild.setAttribute("aria-current", "location");
+    const form = dialog.closest("form");
+    const added = new Set(remoteList(form).filter((r) => r.source === "github").map((r) => r.value));
+    list.replaceChildren(...result.entries.map((entry) => {
       const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "connector-entry";
+      button.innerHTML = entry.kind === "dir" ? FOLDER_ICON : FILE_ICON;
       const name = document.createElement("span");
-      name.textContent = `${file.name} (${sizeLabel(file.size)})`;
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.dataset.removeFile = String(i);
-      remove.setAttribute("aria-label", `Remove ${file.name}`);
-      remove.textContent = "×";
-      item.append(name, remove);
+      name.className = "connector-name";
+      name.textContent = entry.name;
+      const meta = document.createElement("span");
+      meta.className = "connector-meta";
+      if (entry.kind === "dir") {
+        button.dataset.ghPath = entry.path;
+        button.setAttribute("aria-label", `Open folder ${entry.name}`);
+      } else if (!entry.supported) {
+        button.disabled = true;
+        meta.textContent = "Can't add this kind of file";
+      } else {
+        button.dataset.ghFile = entry.path;
+        button.setAttribute("aria-pressed", String(added.has(entry.path)));
+        meta.textContent = added.has(entry.path) ? "Added" : entry.size;
+      }
+      button.append(name, meta);
+      item.append(button);
       return item;
     }));
-    list.hidden = files.length === 0;
+    if (!result.entries.length) {
+      const empty = document.createElement("li");
+      empty.className = "fine";
+      empty.textContent = "This folder is empty.";
+      list.append(empty);
+    }
   }
+
+  function driveLabel(link) {
+    if (/docs\.google\.com\/document\//.test(link)) return "Google Doc";
+    if (/docs\.google\.com\/spreadsheets\//.test(link)) return "Google Sheet";
+    if (/docs\.google\.com\/presentation\//.test(link)) return "Google Slides";
+    return "Drive file";
+  }
+
+  function addDriveLink(dialog) {
+    const field = dialog.querySelector("[data-drive-link]");
+    const link = field.value.trim();
+    if (!/^https:\/\/(docs|drive)\.google\.com\//.test(link)) {
+      connectorError(dialog, "Paste a link that starts with https://docs.google.com or https://drive.google.com.");
+      field.focus();
+      return;
+    }
+    const form = dialog.closest("form");
+    const count = remoteList(form).filter((r) => r.source === "drive").length + 1;
+    if (addRemote(form, { source: "drive", value: link, label: `${driveLabel(link)} ${count > 1 ? count : ""}`.trim() }, dialog)) {
+      field.value = "";
+      connectorError(dialog, "");
+      dialog.close();
+    }
+  }
+
+  document.addEventListener("click", (event) => {
+    const open = event.target.closest("[data-open-connector]");
+    if (open) {
+      const form = open.closest("form");
+      const dialog = form.querySelector(`[data-connector-dialog="${open.dataset.openConnector}"]`);
+      open.closest("details")?.removeAttribute("open");
+      connectorError(dialog, "");
+      dialog.showModal();
+      if (open.dataset.openConnector === "github") browseGitHub(dialog, dialog.dataset.path || "");
+      else dialog.querySelector("[data-drive-link]")?.focus();
+      return;
+    }
+    const dialog = event.target.closest("[data-connector-dialog]");
+    if (!dialog) {
+      const removeRemote = event.target.closest("[data-remove-remote]");
+      if (removeRemote) {
+        const form = removeRemote.closest("form");
+        setRemotes(form, remoteList(form).filter((_, i) => i !== Number(removeRemote.dataset.removeRemote)));
+      }
+      return;
+    }
+    if (event.target.closest("[data-close-dialog]")) return dialog.close();
+    if (event.target.closest("[data-add-drive]")) return addDriveLink(dialog);
+    const folder = event.target.closest("[data-gh-path]");
+    if (folder) return browseGitHub(dialog, folder.dataset.ghPath);
+    const file = event.target.closest("[data-gh-file]");
+    if (file) {
+      const form = dialog.closest("form");
+      const path = file.dataset.ghFile;
+      const added = remoteList(form).some((r) => r.source === "github" && r.value === path);
+      if (added) {
+        setRemotes(form, remoteList(form).filter((r) => !(r.source === "github" && r.value === path)));
+      } else if (!addRemote(form, { source: "github", value: path, label: path.split("/").pop() }, dialog)) {
+        return;
+      }
+      file.setAttribute("aria-pressed", String(!added));
+      file.querySelector(".connector-meta").textContent = added ? "Removed" : "Added";
+    }
+  });
+
+  // Enter in the Drive link field adds the link instead of sending the message
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || !event.target.matches?.("[data-drive-link]")) return;
+    event.preventDefault();
+    addDriveLink(event.target.closest("[data-connector-dialog]"));
+  }, true);
 
   function sizeLabel(bytes) {
     if (bytes < 1024) return `${bytes} bytes`;
@@ -322,7 +503,7 @@
       else if (picked.reduce((sum, f) => sum + f.size, file.size) > maxTotal) {
         problem = `These files add up to more than ${Math.round(maxTotal / 1024 / 1024)} MB. Send fewer or smaller ones.`;
       }
-      else if (picked.length >= maxFiles) problem = `You can attach up to ${maxFiles} files to one message.`;
+      else if (picked.length + remoteList(form).length >= maxFiles) problem = `You can attach up to ${maxFiles} files to one message.`;
       else picked.push(file);
     }
     setChosen(form, picked);
@@ -397,6 +578,7 @@
     for (const file of chosen(form).filter(isVideo)) {
       (await stills(file, most)).forEach((frame) => data.append("frames", frame));
     }
+    remoteList(form).forEach((item) => data.append(item.source, item.value));
     return data;
   }
 

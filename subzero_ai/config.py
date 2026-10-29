@@ -97,6 +97,12 @@ class Settings:
     screener_enabled: bool = True  # a small model checks each message in the window; anything it flags waits
     model_screener: str = "claude-haiku-5-5"
 
+    # Connectors: add files to a message from the team's GitHub repository or a shared Google Drive link
+    connector_github_repo: str = ""  # owner/name
+    connector_github_branch: str = ""  # empty means the repository's default branch
+    connector_github_token: str = ""  # only for a private repository: a fine-grained token with read-only Contents
+    connector_drive_links: bool = True
+
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200
 

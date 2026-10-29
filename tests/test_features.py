@@ -3,11 +3,12 @@ the rules for who can see what."""
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from subzero_ai.render import explainer_title
 
-from .helpers import MENTOR, STUDENT, STUDENT_2, Harness
+from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 
 class FeatureTest(unittest.TestCase):
@@ -393,3 +394,137 @@ class ShareTest(FeatureTest):
         self.assertIn("sandbox", resp.headers["content-security-policy"])
         self.assertEqual(self.anon(f"/s/{token}/x/{reply_id}/1").status_code, 404)
         self.assertEqual(self.anon(f"/s/wrong/x/{reply_id}/0").status_code, 404)
+
+
+class FakeResponse:
+    def __init__(self, status=200, body=b"", headers=None, url="https://api.github.com/"):
+        self.status_code, self.body, self.url = status, body, url
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+
+    def json(self):
+        return json.loads(self.body)
+
+    def iter_content(self, size):
+        for i in range(0, len(self.body), size):
+            yield self.body[i:i + size]
+
+
+class FakeWeb:
+    """Stands in for requests.Session: answers by URL, and records what was asked."""
+
+    def __init__(self, routes):
+        self.routes, self.calls = routes, []
+
+    def __call__(self):
+        return self
+
+    def get(self, url, params=None, headers=None, **kwargs):
+        self.calls.append({"url": url, "params": params, "headers": headers or {}})
+        answer = self.routes.get(url)
+        return answer() if callable(answer) else (answer or FakeResponse(404, b"{}", url=url))
+
+
+REPO_ROOT = [{"name": "src", "path": "src", "type": "dir", "size": 0},
+             {"name": "build.gradle", "path": "build.gradle", "type": "file", "size": 1200},
+             {"name": "robot.bin", "path": "robot.bin", "type": "file", "size": 99}]
+API = "https://api.github.com/repos/team/robot-code/contents/"
+
+
+class ConnectorsTest(FeatureTest):
+    def setUp(self):
+        self.h = Harness(connector_github_repo="team/robot-code")
+        self.ava = self.h.login(STUDENT)
+        self.kim = self.h.login(MENTOR)
+        self.web = FakeWeb({
+            API: FakeResponse(200, json.dumps(REPO_ROOT).encode()),
+            API + "src": FakeResponse(200, json.dumps([{"name": "Robot.java", "path": "src/Robot.java", "type": "file",
+                                                        "size": 40}]).encode()),
+            API + "src/Robot.java": FakeResponse(200, b"public class Robot {}\n"),
+            "https://docs.google.com/document/d/abcdefghijklmnopqrst/export?format=txt": FakeResponse(
+                200, b"Intake design notes", {"content-type": "text/plain",
+                                              "content-disposition": 'attachment; filename="Intake notes.txt"'},
+                url="https://docs.google.com/document/d/abcdefghijklmnopqrst/export?format=txt"),
+            "https://docs.google.com/document/d/privatexxxxxxxxxxxxx/export?format=txt": FakeResponse(
+                200, b"<html>Sign in</html>", {"content-type": "text/html"},
+                url="https://accounts.google.com/ServiceLogin"),
+        })
+        self.h.services.github.session_factory = self.web
+        self.h.services.drive.session_factory = self.web
+
+    def files_of(self, message_id):
+        return self.h.services.attachments.for_message(message_id)
+
+    def test_menu_offers_the_connectors_that_are_set_up(self):
+        page = self.ava.get("/chats").text
+        self.assertIn('data-open-connector="github"', page)
+        self.assertIn('data-open-connector="drive"', page)
+        self.assertNotIn("Connectors (GitHub, Drive)", page)
+        self.h.services.settings.connector_github_repo = ""
+        self.h.services.settings.connector_drive_links = False
+        page = self.ava.get("/chats").text
+        self.assertNotIn("data-open-connector", page)
+        self.assertNotIn("Soon</span></span>", page)
+
+    def test_browse_the_repository(self):
+        body = self.ava.get("/connectors/github").json()
+        self.assertTrue(body["ok"])
+        self.assertEqual([e["name"] for e in body["entries"]], ["src", "build.gradle", "robot.bin"], "folders first")
+        self.assertEqual([e["supported"] for e in body["entries"]], [True, True, False])
+        self.assertEqual(self.ava.get("/connectors/github?path=src").json()["entries"][0]["path"], "src/Robot.java")
+        bad = self.ava.get("/connectors/github?path=../secrets")
+        self.assertEqual(bad.status_code, 400)
+        self.assertNotIn("Authorization", self.web.calls[0]["headers"], "a public repository needs no token")
+        self.h.services.settings.connector_github_token = "github_pat_abc"
+        self.ava.get("/connectors/github")
+        self.assertEqual(self.web.calls[-1]["headers"]["Authorization"], "Bearer github_pat_abc")
+
+    def test_github_file_is_attached_and_reviewed(self):
+        mid, _ = self.start("Why doesn't my robot class compile?", github="src/Robot.java")
+        self.assertEqual(self.h.message(mid)["status"], "pending")
+        files = self.files_of(mid)
+        self.assertEqual([f["name"] for f in files], ["robot-code/src/Robot.java"])
+        self.assertEqual(self.h.services.attachments.read(files[0]), b"public class Robot {}\n")
+        resp = self.ava.post("/chats/new", {"text": "x", "github": "robot.bin"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("can't be added", resp.json()["error"])
+        resp = self.ava.post("/chats/new", {"text": "x", "github": "missing.java"})
+        self.assertIn("isn't there", resp.json()["error"])
+        resp = self.ava.post("/chats/new", {"text": "x", "github": [f"src/{i}.java" for i in range(6)]})
+        self.assertIn("up to 5 files", resp.json()["error"])
+
+    def test_drive_links(self):
+        mid, _ = self.start("Summarize these notes",
+                            drive="https://docs.google.com/document/d/abcdefghijklmnopqrst/edit?usp=sharing")
+        files = self.files_of(mid)
+        self.assertEqual([f["name"] for f in files], ["Intake notes.txt"])
+        resp = self.ava.post("/chats/new", {"text": "x", "drive": "https://docs.google.com/document/d/privatexxxxxxxxxxxxx/edit"})
+        self.assertIn("Anyone with the link", resp.json()["error"])
+        resp = self.ava.post("/chats/new", {"text": "x", "drive": "https://evil.example.com/document/d/abcdefghijklmnopqrst"})
+        self.assertIn("docs.google.com", resp.json()["error"])
+        self.assertFalse(any("evil" in c["url"] for c in self.web.calls), "only Google is ever fetched")
+        self.h.services.settings.connector_drive_links = False
+        resp = self.ava.post("/chats/new", {"text": "x", "drive": "https://docs.google.com/document/d/abcdefghijklmnopqrst/edit"})
+        self.assertIn("switched off", resp.json()["error"])
+
+    def test_admin_sets_up_github(self):
+        coach = self.h.login(ADMIN)
+        self.h.services.settings.config_path.parent.mkdir(parents=True, exist_ok=True)
+        resp = coach.post("/settings/connectors", {"connector_github_repo": "not a repo", "connector_drive_links": "1"},
+                          follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(self.h.services.settings.connector_github_repo, "team/robot-code", "nothing saved")
+        self.web.routes["https://api.github.com/repos/team/other/contents/"] = FakeResponse(200, b"[]")
+        coach.post("/settings/connectors", {"connector_github_repo": "https://github.com/team/other.git",
+                                             "connector_github_token": "github_pat_secret123"}, follow_redirects=False)
+        settings = self.h.services.settings
+        self.assertEqual((settings.connector_github_repo, settings.connector_github_token, settings.connector_drive_links),
+                         ("team/other", "github_pat_secret123", False))
+        config = settings.config_path.read_text()
+        self.assertIn("CONNECTOR_GITHUB_REPO=team/other", config)
+        page = coach.get("/settings").text
+        self.assertNotIn("github_pat_secret123", page)
+        self.assertIn("Saved</span>", page)
+        audit = [r for r in self.h.services.store.audit_entries() if r["action"] == "connectors_changed"]
+        self.assertEqual(len(audit), 1)
+        self.assertNotIn("secret123", audit[0]["details"])
+        self.assertEqual(self.kim.post("/settings/connectors", {"connector_github_repo": ""}).status_code, 403)
