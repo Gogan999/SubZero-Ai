@@ -2,7 +2,7 @@
 
 A claude.ai-style chat for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
-This is version 0.5.0: all four milestones of the build plan, plus optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)).
+This is version 0.6.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), and messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)).
 
 ## What's in this version
 
@@ -90,8 +90,11 @@ The **Create Slack app** button and `slack-manifest.yaml` set all of these up fo
 | --- | --- | --- |
 | `chat:write` | Posts approval cards in #claude-approvals, updates them after a mentor decides, and sends DMs and private notes. | `chat.postMessage`, `chat.update`, `chat.postEphemeral` |
 | `im:write` | Opens a DM with a student or admin (approval results, health alerts). | `conversations.open` |
+| `im:history` | Reads the messages people send the bot in a DM (the `message.im` event), so they can ask the AI questions from Slack. | `message.im` event |
 | `groups:read` | Lists the private channels the bot was invited to (so the setup page can offer #claude-approvals) and reads that channel's members to know who the mentors are. Without it you get "missing_scope" after inviting the bot to the channel. | `conversations.list`, `conversations.members` |
 | `users:read` | Looks up names and profile pictures, and spots deactivated, guest, and bot accounts. | `users.info` |
+
+**Event subscriptions** (bot events): `message.im`, delivered over Socket Mode like button clicks. The app's **Messages** tab must also be on and not read-only (`messages_tab_read_only_enabled: false` in the manifest).
 
 **User token scopes** (Sign in with Slack): `openid`, `email`, `profile`. These let a student sign in and give the app their Slack ID, name, email, and workspace. The app never keeps the user token.
 
@@ -99,12 +102,25 @@ The **Create Slack app** button and `slack-manifest.yaml` set all of these up fo
 
 No scope is needed for `auth.test` (checking the token) or `views.open` (the reject-reason form).
 
+**After updating the manifest (or adding a scope), an admin must reinstall the app** to switch on messaging the bot: paste the new `slack-manifest.yaml` under **App Manifest**, save, and then reinstall. Until then the bot just ignores DMs.
+
 **After adding a scope**, Slack doesn't apply it until the app is reinstalled:
 
 1. Open the app at [api.slack.com/apps](https://api.slack.com/apps), go to **OAuth & Permissions**, and add the scope under **Bot Token Scopes** (or **User Token Scopes**).
 2. Click **Reinstall to Workspace** at the top of that page (Slack shows a yellow banner asking for it) and allow.
 3. The bot token usually stays the same, but copy the **Bot User OAuth Token** again to be sure. If it changed, paste it on the Settings page or the setup page (or in `SLACK_BOT_TOKEN` in config.env) and restart SubZero AI.
 4. Run **check-settings.cmd** to confirm Slack is working.
+
+## Messaging the bot in Slack
+
+You can ask the AI a question straight from Slack: open the bot (SubZero AI) under **Apps** and send it a message.
+
+- **A mentor still checks it.** Your message goes through the same approval as a message on the website. The bot says "A mentor will check this before the AI answers" and posts the AI's reply in the same Slack thread once it is approved. If a mentor doesn't approve it, the bot tells you why in the thread, and only you see that.
+- **One chat per Slack thread.** A new message to the bot starts a new chat. Reply in that message's thread to keep talking in the same chat. A reply in a thread the bot didn't start won't work, so send a new message instead.
+- **Files go on the website.** The bot can't take pictures or files in Slack yet. Attach them on the website.
+- **Interactive explainers too.** The bot sends a link to the website when a reply has one.
+- **The chat is on the website too.** Chats started in Slack show up in the chat list like any other, where the team can see approved ones.
+- **Turning it off.** An admin can turn this off with **Let people message the bot in Slack** on the Settings page (or `SLACK_DMS=0` in config.env).
 
 ## Running it
 

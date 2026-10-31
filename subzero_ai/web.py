@@ -76,6 +76,7 @@ from .render import (
 )
 from .roles import DEV_USERS, RECOVERY_USER, Directory, is_excluded_account
 from .slack_api import FakeSlack, SlackWebApi
+from .slack_dm import SlackDMs
 from .slack_handlers import SlackInteractions
 from .socket_mode import SocketModeClient, WebsocketsTransport
 from .store import (
@@ -182,6 +183,7 @@ class Services:
     model_info: dict[str, dict] = field(default_factory=dict)
     # Model safety checks in progress: model id -> when it started (the background task itself is in `tasks`)
     model_checks_running: dict[str, str] = field(default_factory=dict)
+    dms: SlackDMs | None = None  # messaging the bot in Slack (None without Slack)
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
@@ -222,6 +224,12 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
                    Shares(db), github, Drive(settings),
                    CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks))
     runner.capabilities_of = svc.capabilities
+    if slack is not None:
+        dms = SlackDMs(settings=settings, store=store, approvals=approvals, directory=directory, slack=slack,
+                       tasks=tasks)
+        interactions.dms = svc.dms = dms
+        runner.on_reply, runner.on_reply_done = dms.on_reply, dms.on_reply_done
+        approvals.on_decided = dms.on_decided
     return svc
 
 

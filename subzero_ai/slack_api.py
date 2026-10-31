@@ -68,7 +68,8 @@ class SlackWebApi:
         return {"channel": body["channel"], "ts": body["ts"]}
 
     async def update_message(self, channel: str, ts: str, text: str, blocks: list | None = None) -> None:
-        await self.call("chat.update", channel=channel, ts=ts, text=text, blocks=blocks or [])
+        # blocks=None is left out of the request, so Slack keeps the message's blocks as they were
+        await self.call("chat.update", channel=channel, ts=ts, text=text, blocks=blocks)
 
     async def post_ephemeral(self, channel: str, user: str, text: str) -> None:
         await self.call("chat.postEphemeral", channel=channel, user=user, text=text)

@@ -206,6 +206,9 @@ class ReplyRunner:
             model, resolve_backend(settings))
         self.on_alert: Callable[[int, int], Awaitable[None]] | None = None
         self.on_result: Callable[[bool, str], None] | None = None  # tells the health checks how the call went
+        # Slack DMs: (conversation id, user message id, reply id) when a reply starts and again when it is saved
+        self.on_reply: Callable[[int, int, int], Awaitable[None]] | None = None
+        self.on_reply_done: Callable[[int, int, int], Awaitable[None]] | None = None
         # Text streamed so far for replies in progress, so someone who opens the chat mid-reply sees all of it.
         self._live: dict[int, list[str]] = {}
 
@@ -221,8 +224,20 @@ class ReplyRunner:
                 conn, conversation_id=conversation_id, author_id=None, role="assistant", content="",
                 status=STREAMING, reply_to=user_message_id, model=conv["model"])
         self.broker.publish(f"conv:{conversation_id}", {"type": "changed", "id": reply_id})
+        if self.on_reply is not None:
+            self.tasks.spawn(self._hook(self.on_reply, conversation_id, user_message_id, reply_id),
+                             name=f"reply-start-{reply_id}")
         self.tasks.spawn(self._run(conversation_id, user_message_id, reply_id), name=f"reply-{reply_id}")
         return reply_id
+
+    @staticmethod
+    async def _hook(hook: Callable[[int, int, int], Awaitable[None]], conversation_id: int, user_message_id: int,
+                    reply_id: int) -> None:
+        """Run a reply hook. A failing hook is logged and never breaks the reply."""
+        try:
+            await hook(conversation_id, user_message_id, reply_id)
+        except Exception:
+            log.exception("A reply hook failed for reply %s", reply_id)
 
     def history_files(self, conversation_id: int, user_message_id: int,
                       project_images: int = 0) -> dict[int, list[dict]]:
@@ -356,6 +371,8 @@ class ReplyRunner:
         self.broker.publish(topic, {"type": "done", "id": reply_id})
         if self.on_result is not None:
             self.on_result(status == COMPLETE, error)
+        if self.on_reply_done is not None:
+            await self._hook(self.on_reply_done, conversation_id, user_message_id, reply_id)
         if status == COMPLETE and not conv["title"]:
             await self._make_title(conversation_id)
 

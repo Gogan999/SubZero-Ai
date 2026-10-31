@@ -115,6 +115,7 @@ class Settings:
     slack_approvals_channel: str = ""
     admin_slack_ids: frozenset[str] = frozenset()
     allow_slack_guests: bool = False  # guest accounts may be parents, sponsors, alumni, or other teams
+    slack_dms_enabled: bool = True  # team members can message the bot in Slack (config.env key SLACK_DMS)
 
     # Approval rules
     mentors_need_approval: bool = False
@@ -207,6 +208,8 @@ _CONVERTERS = {
 }
 
 
+# Settings whose config.env key isn't just the upper-cased name
+ENV_NAMES = {"slack_dms_enabled": "SLACK_DMS"}
 MODEL_SETTINGS = ("model_default", "model_hard", "model_titles", "model_screener")
 MODEL_ID_SETTINGS = MODEL_SETTINGS + ("model_check_judge",)  # every setting that holds a model id
 
@@ -276,7 +279,7 @@ def load_settings(env_file: str | os.PathLike | None = None, *, search_cwd: bool
     for f in fields(Settings):
         if f.name in ("data_dir", "config_file"):
             continue
-        key = f.name.upper()
+        key = ENV_NAMES.get(f.name, f.name.upper())
         raw = os.environ.get(key, file_values.get(key))
         if raw is None:
             continue

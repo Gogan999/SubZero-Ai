@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -73,6 +74,9 @@ class ApprovalService:
         self.broker = broker
         self.tasks = tasks
         self.runner = runner
+        # Posts a decision for a message that came in through a Slack DM and returns True if it did, so the usual
+        # DM isn't sent as well. Slack DMs register this.
+        self.on_decided: Callable[[int], Awaitable[bool]] | None = None
 
     # ------------------------------------------------------------------ helpers
     def link(self, conversation_id: int) -> str:
@@ -101,7 +105,9 @@ class ApprovalService:
     async def submit(self, viewer: Viewer, text: str, conversation_id: int | None = None,
                      subteam: str | None = None, files: list[Prepared] | tuple = (),
                      explainer: bool = False, project_id: int | None = None,
-                     options: dict | None = None) -> Outcome:
+                     options: dict | None = None, on_saved: Callable[[int, int], None] | None = None) -> Outcome:
+        """on_saved(conversation_id, message_id), if given, is called right after the message is saved and
+        before anything else happens to it (the reply starting, the Slack card)."""
         text = clean_text(text)
         # There's no explainer switch any more: asking for one in words is how a student requests it
         explainer = explainer or asks_for_explainer(text)
@@ -115,10 +121,12 @@ class ApprovalService:
             return Outcome(False, "invalid", f"That message is over {MAX_MESSAGE_CHARS:,} characters. "
                                              "Shorten it or split it into parts.")
         if conversation_id is None:
-            return await self._submit(viewer, text, None, subteam, files, explainer, project_id, options or {})
+            return await self._submit(viewer, text, None, subteam, files, explainer, project_id, options or {},
+                                      on_saved)
         lock = self._chat_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            return await self._submit(viewer, text, conversation_id, subteam, files, explainer, None, options or {})
+            return await self._submit(viewer, text, conversation_id, subteam, files, explainer, None, options or {},
+                                      on_saved)
 
     def window_applies(self, viewer: Viewer, conversation_id: int | None, files=()) -> bool:
         """Whether this message can skip review because a mentor approved the chat a few minutes ago.
@@ -128,7 +136,8 @@ class ApprovalService:
                 and self.store.window_open(conversation_id, self.settings.approval_window_minutes))
 
     async def _submit(self, viewer: Viewer, text: str, conversation_id: int | None, subteam: str | None,
-                      files, explainer: bool, project_id: int | None, options: dict) -> Outcome:
+                      files, explainer: bool, project_id: int | None, options: dict,
+                      on_saved: Callable[[int, int], None] | None = None) -> Outcome:
         needs_review = (not viewer.is_mentor) or self.settings.mentors_need_approval
 
         if conversation_id is not None:
@@ -207,6 +216,11 @@ class ApprovalService:
                               target_id=message_id, details={"conversation": conversation_id, "reason": screen_note},
                               conn=conn)
 
+        if on_saved is not None:
+            try:
+                on_saved(conversation_id, message_id)
+            except Exception:  # the message is saved; a failing caller hook must not stop review or the reply
+                log.exception("A submit hook failed for message %s", message_id)
         self._publish(conversation_id, {"type": "changed", "id": message_id})
         if status == PENDING:
             self._queue_changed()
@@ -378,6 +392,12 @@ class ApprovalService:
                                                 slack_cards.card_fallback_text(msg["author_name"], outcome), blocks)
             except Exception:
                 log.exception("Couldn't update the Slack card for message %s", message_id)
+        if outcome in (APPROVED, EDITED, REJECTED) and self.on_decided is not None:
+            try:
+                if await self.on_decided(message_id):
+                    return
+            except Exception:
+                log.exception("Couldn't post the decision for message %s in Slack", message_id)
         if outcome in (APPROVED, EDITED, REJECTED) and self.slack is not None and msg["author_notify_dm"]:
             text = slack_cards.dm_text(outcome, title=conv["title"], link=link, mentor_name=msg["reviewer_name"],
                                        reason=msg["review_note"])

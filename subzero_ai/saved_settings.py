@@ -83,6 +83,8 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("reminder_minutes", "Remind mentors after this many minutes", "int",
               "Posts one reminder in the card's Slack thread.", 10, 1440),
         Field("mentors_need_approval", "Mentors' messages also wait for another mentor", "bool"),
+        Field("slack_dms_enabled", "Let people message the bot in Slack", "bool",
+              "Messages sent to the bot in Slack wait for a mentor exactly like messages on the website."),
         Field("show_pending_to_team", "Other students can see messages that are waiting", "bool"),
         Field("show_rejected_to_team", "Other students can see rejected messages and the reason", "bool"),
     ]),

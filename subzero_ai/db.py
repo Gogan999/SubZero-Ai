@@ -251,6 +251,25 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_model_checks_model ON model_checks (model, checked_at);
     """,
+    # Version 13: messages sent to the bot in Slack. Each Slack thread is one chat; each Slack message is
+    # remembered so a repeated delivery isn't submitted twice.
+    """
+    CREATE TABLE slack_threads (
+        conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL,
+        thread_ts TEXT NOT NULL,
+        UNIQUE (channel, thread_ts)
+    );
+
+    CREATE TABLE slack_dm_messages (
+        channel TEXT NOT NULL,
+        ts TEXT NOT NULL,
+        message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (channel, ts)
+    );
+    CREATE INDEX idx_slack_dm_messages_message ON slack_dm_messages (message_id);
+    """,
 ]
 
 
