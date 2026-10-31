@@ -184,6 +184,10 @@ class Services:
     # Model safety checks in progress: model id -> when it started (the background task itself is in `tasks`)
     model_checks_running: dict[str, str] = field(default_factory=dict)
     dms: SlackDMs | None = None  # messaging the bot in Slack (None without Slack)
+    # config.env settings saved on the Settings page that apply after a restart: name -> saved value ("" for secrets)
+    pending_restart: dict[str, str] = field(default_factory=dict)
+    checks_running: str = ""  # when the Settings page's Run checks job started ("" when none is running)
+    slack_workspace: str = ""  # the Slack workspace's name, once the Settings page has asked Slack
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient

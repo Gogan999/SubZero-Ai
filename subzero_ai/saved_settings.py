@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .ai_backend import resolve_backend
-from .config import MODEL_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
+from .config import MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
 from .db import Database, utcnow
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
 from .model_check import requirement_problem
@@ -60,6 +60,9 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("model_hard", "Hard-problem model", "model",
               "Mentors can switch a chat to this model. It costs about twice as much."),
         Field("model_titles", "Title model", "model", "Writes the short titles in the chat list."),
+        Field("model_check_judge", "Safety check judge", "model",
+              "Grades the answers in the Model safety check. It has to be a Claude model, since it decides which "
+              "other models are safe enough for students."),
         Field("effort_default", "Everyday effort", "effort", "Higher effort gives more careful answers and costs more."),
         Field("effort_high", "Effort for explainers and files", "effort",
               "Used for interactive explainers and messages with files attached, which are usually code reviews."),
@@ -200,6 +203,12 @@ def check_model(raw: str, providers, backend: str) -> tuple[str, str]:
     return model, ""
 
 
+def judge_ok(model: str) -> bool:
+    """The safety check's judge decides which models students can use, so it must be a Claude model."""
+    provider, _, name = normalize_model_id(model).partition("/")
+    return provider in ("anthropic", "claude-bridge") and name.startswith("claude-")
+
+
 # The settings a model can only be newly set for after passing the Model safety check (True: the screener part)
 CHECKED_MODEL_SETTINGS = {"model_default": False, "model_hard": False, "model_screener": True}
 
@@ -242,11 +251,15 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 continue
             values[f.name] = number
         elif f.kind == "model":
+            if f.name == "model_check_judge" and f.name not in form:
+                continue  # added in 0.7: a form from before then leaves it alone
             model, problem = check_model(raw, providers, backend)
             if not problem and db is not None and f.name in CHECKED_MODEL_SETTINGS:
                 unchanged = settings is not None and model == normalize_model_id(getattr(settings, f.name))
                 if not unchanged:
                     problem = requirement_problem(db, model, screener=CHECKED_MODEL_SETTINGS[f.name])
+            if not problem and f.name == "model_check_judge" and not judge_ok(model):
+                problem = "The judge has to be a Claude model, like anthropic/claude-sonnet-5-5."
             if problem:
                 errors[f.name] = problem
             else:
@@ -281,7 +294,7 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
     if "ai_providers" in values and settings is not None:
         # A provider can't be turned off while a model setting still uses it
         in_form = {f.name for f in fields}
-        for name in MODEL_SETTINGS:
+        for name in MODEL_ID_SETTINGS:
             if name in in_form:
                 model = values.get(name, "")  # empty when it failed its own check, which is reported already
             else:

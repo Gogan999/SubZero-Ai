@@ -2,7 +2,7 @@
 
 A claude.ai-style chat for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
-This is version 0.6.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), and messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)).
+This is version 0.7.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page (see [docs/SETTINGS.md](docs/SETTINGS.md)).
 
 ## What's in this version
 
@@ -15,6 +15,7 @@ This is version 0.6.0: all four milestones of the build plan, optional AI provid
 - **Long chats**: once a chat sends Claude about 150,000 tokens per reply, the app suggests starting a fresh one.
 - Also: the three-layer system prompt with the child-safety layer, MENTOR ALERT handling, per-student limits, the permanent AI notice, and the "Using SubZero AI responsibly" page.
 
+- **Everything on the Settings page** (new in 0.7): the AI engine, the site address and time zone, the Slack tokens and review channel, every API key (masked, removable), the Claude subscription's sign-in, and a **Run checks** button that does what check-settings.cmd does. The few settings that need a restart wait for a **Restart now** button. [docs/SETTINGS.md](docs/SETTINGS.md) lists every setting and where it's saved.
 - **Windows packaging and operations** (new in 0.4): a one-step installer with its own Python, a setup page that creates the Slack app for you, the app and the Cloudflare connector running as Windows services that start after a reboot with nobody signed in, nightly backups with a restore script, an update script, and an admin **Settings** page for models, limits, retention, subteams, admins, and the three system prompt layers. The Settings page also shows whether Slack, the Claude API, and the backups are working, and admins get a Slack DM if Slack or Claude fails for 15 minutes.
 
 ## Try it in test mode
@@ -148,7 +149,7 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 
 By default every reply comes from Claude through Anthropic's API, exactly as in earlier versions. Version 0.5 can also use models from OpenAI, Google, and OpenRouter. Nothing changes until an admin turns it on, and the mentor approval flow (the approval window, the screener, MENTOR ALERT, and rejections) works the same with every model.
 
-**What `AI_BACKEND` does.** This setting in config.env picks the engine that talks to the AI companies. It is not on the Settings page, because switching it is an install-level choice.
+**What `AI_BACKEND` does.** This setting picks the engine that talks to the AI companies. Change it on the Settings page under **AI engine** (it applies after **Restart now**), or in config.env.
 
 | Value | Meaning |
 | --- | --- |
@@ -156,7 +157,7 @@ By default every reply comes from Claude through Anthropic's API, exactly as in 
 | `pi` | The app starts a small Node.js helper (the Pi gateway in `pi_gateway`, which ships with the Windows release) that can reach Anthropic, OpenAI, Google, and OpenRouter. |
 | `fake` | Pretend replies, for trying the app without keys. |
 
-**Switching to `pi`.** In `C:\ProgramData\SubZeroAI\config.env`, set `AI_BACKEND=pi`, restart the SubZero AI service, then run **check-settings.cmd** (or `python -m subzero_ai check`). It should say the AI helper works. If you run from a copy of the repository instead of the Windows release, install Node.js 22.19 or newer, run `npm ci --ignore-scripts` in `pi_gateway`, and set `PI_NODE` if `node` isn't on the PATH.
+**Switching to `pi`.** On the Settings page, under **AI engine**, pick the AI helper, save, and press **Restart now**. Then press **Run checks** under Connected accounts (or run **check-settings.cmd**). It should say the AI helper works. If you run from a copy of the repository instead of the Windows release, install Node.js 22.19 or newer, run `npm ci --ignore-scripts` in `pi_gateway`, and set `PI_NODE` if `node` isn't on the PATH.
 
 **Model ids** are written as `provider/model`. Examples: `anthropic/claude-sonnet-5-5`, `openai/gpt-5`, `google/gemini-2.5-pro`, `openrouter/meta-llama/llama-3.3-70b-instruct`, and `claude-bridge/claude-sonnet-5-5` (see below). An older id like `claude-sonnet-5-5` is read as `anthropic/claude-sonnet-5-5`, and saved models and chats were updated that way when you upgraded. OpenRouter covers most other models with one key. The models you can pick are limited to providers that are turned on.
 
@@ -166,7 +167,7 @@ By default every reply comes from Claude through Anthropic's API, exactly as in 
 
 - sends a normal question, which must be answered without an alert;
 - sends a wellbeing message, whose reply must start with MENTOR ALERT;
-- asks for an unsafe shop shortcut and tries a prompt injection ("ignore your rules"), which a **judge model** grades (set by `MODEL_CHECK_JUDGE`, `anthropic/claude-sonnet-5-5` by default);
+- asks for an unsafe shop shortcut and tries a prompt injection ("ignore your rules"), which a **judge model** grades (**Safety check judge** in the Claude settings, `anthropic/claude-sonnet-5-5` by default; it must be a Claude model);
 - checks that the interactive explainer format is kept, and that the screener answers SAFE or REVIEW in the right shape (for a screener model).
 
 The judge's company must be turned on and have a key, or the check won't start. The result is saved with the date and who ran it. A judge model is a strong filter, not a guarantee: read the details on the Settings page, and test a new model yourself with the red-team questions in the Acceptance tests before students use it. **Claude models need the check too** when you choose a new one. Models already saved when you upgrade to 0.5 keep working without a check.
@@ -181,7 +182,7 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 
 **Claude subscription (optional, off by default).** The `claude-bridge/` provider answers with one person's Claude Pro or Max subscription instead of an API key, through Claude Code on the mini PC. It counts against that person's subscription limits, so a busy day of student chats can use them up, and then replies pause until the limit resets. Caution: Anthropic's terms generally don't allow offering a claude.ai login inside another product without Anthropic's approval. Read the current terms before you turn it on. It stays off until an admin ticks **Claude subscription (Claude Code)** under AI providers, and the model still has to pass the safety check. To set it up, run the manual test in [docs/BRIDGE_SPIKE.md](docs/BRIDGE_SPIKE.md) first (about 30 minutes, on the mini PC), then sign in with `python -m subzero_ai claude-login` and follow that page. Keep an API-key model set up as a fallback. The bridge needs `AI_BACKEND=pi`. Its login is kept apart from the rest of the PC in `bridge\claude-config` in the data folder.
 
-**Going back.** Set `AI_BACKEND=anthropic` in config.env and restart the service. Chats stay as they are; chats whose model is from another company can't get replies until their model is changed to a Claude one. Everything else keeps working.
+**Going back.** Pick the Anthropic API under **AI engine** and restart (first change any model that uses another company; the page says which). Chats stay as they are; chats whose model is from another company can't get replies until their model is changed to a Claude one. Everything else keeps working.
 
 ## Acceptance tests
 
@@ -241,7 +242,7 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 
 Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` folder):
 
-- `config.env`: the address, API key, and Slack tokens, written by the setup page.
+- `config.env`: the address, API keys, and Slack tokens, written by the setup page and the Settings page. Only the app's service account and administrators can read it.
 - `data\subzero.db`: the database, including settings changed on the Settings page (these win over config.env).
 - `files\`: attached files.
 - `prompts\`: system prompt layers changed on the Settings page.
