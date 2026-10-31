@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 
+from .backends import add_variants
 from .helpers import STUDENT, Harness
 
 MENTOR_SLACK = "UMENTOR1"
@@ -127,6 +128,11 @@ class SlackInteractionsTest(unittest.TestCase):
         self.assertIsNone(self.h.call(self.dispatch, {"type": "interactive", "payload": {"type": "shortcut"}}))
         self.assertIsNone(self.h.call(self.dispatch, block_action("approve", "not-a-number")))
         self.assertEqual(self.h.message(self.mid)["status"], "pending")
+
+
+# The same tests again on the other AI backends (tests/backends.py). Tests that inject behavior by subclassing
+# FakeClaude stay fake-only.
+add_variants(globals(), SlackInteractionsTest)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ from subzero_ai.config import load_settings
 from subzero_ai.slack_api import FakeSlack
 from subzero_ai.web import create_app
 
+from .backends import client_for_active_backend
+
 CSRF_RE = re.compile(r'<meta name="csrf-token" content="([^"]+)"')
 
 STUDENT = "DEV-student-ava"
@@ -76,7 +78,8 @@ class Harness:
         self.slack = slack if slack is not None else (FakeSlack() if use_slack else None)
         # ai_backend="pi" lets build_services make the real client; the others get the offline stand-in
         if claude is None and self.settings.ai_backend != "pi":
-            claude = FakeClaude(delay=0)
+            # Test classes that run against another backend (tests/backends.py) supply their own client
+            claude = client_for_active_backend() or FakeClaude(delay=0)
         self.claude = claude
         self.app = create_app(self.settings, slack=self.slack, claude=self.claude, background=False)
         self.services = self.app.state.services

@@ -88,7 +88,7 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 
 ## Features (build order)
 
-Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4 commit c9fdc6d; F4b **done** (approved, D29-D30); F4b commit eab9ec4; F4c **done** (approved round 3, D31-D33); F4c commit f605155; F5 **done in code** (approved round 4, D34-D35; mini-PC spike in docs/BRIDGE_SPIKE.md still to run by Logan); F5 commit ca02932; F6 **done** (approved round 2, D36-D37; zip 254.6 MB, 12,829 files; PowerShell untested on Windows); F7 **in progress**; F8 **not started**.
+Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4 commit c9fdc6d; F4b **done** (approved, D29-D30); F4b commit eab9ec4; F4c **done** (approved round 3, D31-D33); F4c commit f605155; F5 **done in code** (approved round 4, D34-D35; mini-PC spike in docs/BRIDGE_SPIKE.md still to run by Logan); F5 commit ca02932; F6 **done** (approved round 2, D36-D37; zip 254.6 MB, 12,829 files; PowerShell untested on Windows); F7 **done** (approved round 1, D38; 561 tests, ~56 s); cleanup pass + F8 **in progress**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
 - Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's
@@ -298,4 +298,6 @@ See `DECISIONS.md` (D1-D12).
 - F4c: in FAKE_CLAUDE/test mode a safety check can't pass (no judge), so changing the default/hard/screener model in dev needs a real backend or a seeded model_checks row.
 - F5: bridge replies are serialized (one at a time across the whole app); students queue behind each other.
 - F5: node_modules grows to ~500 MB here; the Windows Claude Code binary is ~320 MiB. F6 must decide how to ship it.
+- F7-M3: add a chunk-size knob to the anthropic/pi fakes and one split-[MENTOR ALERT] test per variant.
+- F7-M1: fakes drop search/sources events and pi records web_searches=0; comment it.
 - F1-M4 (no change needed now): setup step doesn't clear in-memory `fake_claude`; pre-existing, takes effect after restart.

@@ -11,6 +11,7 @@ from subzero_ai.claude import FakeClaude, StreamEvent
 
 from subzero_ai.web import COMING_SOON
 
+from .backends import add_variants
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 
@@ -610,6 +611,15 @@ class ReplyProblemsTest(unittest.TestCase):
         self.h.client.__exit__(None, None, None)
         self.h.client.__enter__()
         self.assertEqual(self.h.services.store.message(reply["id"])["status"], "error")
+
+
+# The same tests again on the other AI backends (tests/backends.py). Tests that inject behavior by subclassing
+# FakeClaude stay fake-only.
+add_variants(globals(), FlowTest, ReplyProblemsTest, fake_only={
+    "FlowTest": {"test_claude_html_is_not_rendered"},
+    "ReplyProblemsTest": {"test_failed_reply_can_be_retried_without_new_approval",
+                          "test_alert_marker_split_across_chunks"},
+})
 
 
 if __name__ == "__main__":

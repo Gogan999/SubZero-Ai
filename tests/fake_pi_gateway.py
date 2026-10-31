@@ -1,5 +1,9 @@
 """A stand-in for pi_gateway/gateway.mjs that speaks the same JSON-lines protocol. What each request does is
-chosen by its model name (fake/echo, fake/slow, ...). No Node, no network."""
+chosen by its model name (fake/echo, fake/slow, ...). No Node, no network.
+
+With FAKE_PI_MODE=claude, every request is instead answered by FakeClaude's scripted logic (the same replies, magic
+words and screener verdicts as the offline app), whatever the model. FAKE_PI_CALLS names a file where each request is
+appended as one JSON line, in the shape of FakeClaude.calls."""
 
 from __future__ import annotations
 
@@ -48,13 +52,62 @@ def fail(rid: str, code: str, message: str) -> None:
     emit(id=rid, kind="error", code=code, error=message)
 
 
+def record_call(req: dict) -> None:
+    """Note a request in FAKE_PI_CALLS, in the shape FakeClaude.calls uses. Called in arrival order."""
+    path = os.environ.get("FAKE_PI_CALLS")
+    if not path or req["op"] not in ("stream", "complete", "tool_turn"):
+        return
+    call = {"model": req.get("model"), "system": req.get("system"), "messages": req.get("messages")}
+    if req["op"] == "stream":
+        call.update(max_tokens=req.get("max_tokens"), effort=req.get("effort"), system_extra=req.get("system_extra"),
+                    web_searches=0)
+    else:
+        call["kind"] = req["op"]
+    with state_lock, open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(call) + "\n")
+
+
+def handle_as_claude(rid: str, req: dict) -> None:
+    """Answer with FakeClaude's logic over the gateway protocol."""
+    import asyncio
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from subzero_ai.claude import ClaudeError, FakeClaude
+
+    fake = FakeClaude(delay=0)
+    args = dict(model=req["model"], system=req.get("system", ""), messages=req.get("messages", []),
+                max_tokens=req.get("max_tokens", 0), effort=req.get("effort"))
+    try:
+        if req["op"] == "stream":
+            async def run() -> None:
+                async for event in fake.stream(system_extra=req.get("system_extra"), **args):
+                    if event.kind == "text":
+                        emit(id=rid, kind="text", text=event.text)
+                    elif event.kind == "usage":
+                        emit(id=rid, kind="usage", usage=event.usage)
+                    elif event.kind == "error":
+                        return fail(rid, "provider", event.error)
+            asyncio.run(run())
+        elif req["op"] == "complete":
+            emit(id=rid, kind="text", text=asyncio.run(fake.complete(**args)))
+            emit(id=rid, kind="usage", usage=usage())
+        else:
+            message = asyncio.run(fake.tool_turn(tools=req.get("tools", []), **args))
+            emit(id=rid, kind="message", message=message)
+            emit(id=rid, kind="usage", usage=usage())
+    except ClaudeError as exc:
+        fail(rid, "provider", str(exc))
+
+
 def handle(req: dict) -> None:
     rid, model = req["id"], str(req.get("model", ""))
     name = model.split("/", 1)[-1]
     event = aborts[rid]
     try:
         text = last_user_text(req)
-        if name == "echo":
+        if os.environ.get("FAKE_PI_MODE") == "claude":
+            handle_as_claude(rid, req)
+        elif name == "echo":
             reply(rid, req, text)
         elif name == "safe":
             reply(rid, req, "SAFE")
@@ -138,6 +191,8 @@ def main() -> None:
             emit(id=rid, kind="done")
         else:
             aborts[rid] = threading.Event()
+            if os.environ.get("FAKE_PI_MODE") == "claude":
+                record_call(req)
             threading.Thread(target=handle, args=(req,), daemon=True).start()
     os._exit(0)  # stdin closed: leave at once, even with handler threads still running
 
