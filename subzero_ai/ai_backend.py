@@ -29,26 +29,31 @@ class AIBackend(Protocol):
 
 @dataclass(frozen=True)
 class Capabilities:
-    """What a model can do. The app turns features off when a model can't."""
+    """What a model can do. The app turns features off when a model can't. `code` (Code sessions) is true only for
+    Claude models."""
 
     web_search: bool
     tools: bool
     thinking: bool
     images: bool
+    code: bool
 
 
-_ALL = Capabilities(web_search=True, tools=True, thinking=True, images=True)
-_NONE = Capabilities(web_search=False, tools=False, thinking=False, images=False)
+_ALL = Capabilities(web_search=True, tools=True, thinking=True, images=True, code=True)
+_NONE = Capabilities(web_search=False, tools=False, thinking=False, images=False, code=False)
 
 
-def capabilities_for(model: str, backend: str = "anthropic") -> Capabilities:
-    """Claude models (bare or anthropic/-prefixed ids) can do everything; unknown models nothing.
-    The pi backend has no web search."""
+def capabilities_for(model: str, backend: str = "anthropic", info: dict | None = None) -> Capabilities:
+    """Claude models (bare or anthropic/-prefixed ids) can do everything, except web search on the pi backend.
+    Other models can read images and think only when the gateway's model info (`images`, `reasoning`) says so;
+    unknown ones can do nothing."""
     name = model.strip().lower()
     if name.startswith("anthropic/"):
         name = name[len("anthropic/"):]
     if not name.startswith("claude-"):
-        return _NONE
+        if not info:
+            return _NONE
+        return replace(_NONE, images=bool(info.get("images")), thinking=bool(info.get("reasoning")))
     return replace(_ALL, web_search=False) if backend == "pi" else _ALL
 
 

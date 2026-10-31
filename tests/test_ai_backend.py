@@ -78,19 +78,19 @@ class UnavailableClientTest(unittest.TestCase):
 
 class CapabilitiesTest(unittest.TestCase):
     def test_claude_ids(self):
-        everything = Capabilities(True, True, True, True)
+        everything = Capabilities(True, True, True, True, True)
         self.assertEqual(capabilities_for("claude-sonnet-5-5"), everything)
         self.assertEqual(capabilities_for("anthropic/claude-opus-5-5"), everything)
 
     def test_other_models(self):
-        nothing = Capabilities(False, False, False, False)
+        nothing = Capabilities(False, False, False, False, False)
         self.assertEqual(capabilities_for("openai/gpt-x"), nothing)
         self.assertEqual(capabilities_for(""), nothing)
 
     def test_pi_backend_has_no_web_search(self):
-        self.assertEqual(capabilities_for("claude-sonnet-5-5", "pi"), Capabilities(False, True, True, True))
-        self.assertEqual(capabilities_for("claude-sonnet-5-5", "anthropic"), Capabilities(True, True, True, True))
-        self.assertEqual(capabilities_for("openai/gpt-x", "pi"), Capabilities(False, False, False, False))
+        self.assertEqual(capabilities_for("claude-sonnet-5-5", "pi"), Capabilities(False, True, True, True, True))
+        self.assertEqual(capabilities_for("claude-sonnet-5-5", "anthropic"), Capabilities(True, True, True, True, True))
+        self.assertEqual(capabilities_for("openai/gpt-x", "pi"), Capabilities(False, False, False, False, False))
 
     def test_frozen(self):
         with self.assertRaises(Exception):

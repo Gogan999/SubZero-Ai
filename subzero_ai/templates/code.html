@@ -6,7 +6,12 @@
   <h1>Code</h1>
   <p class="lede">Give Claude a task in the team's robot code. It works in a copy of the repository on this computer: it can read and search on its own, but a mentor approves every file change and every command first. Nothing is pushed to GitHub. When it's done, download the changes as a patch.</p>
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
-  {% if available %}
+  {% if available and not models %}
+  <section class="panel">
+    <h2>Pick a Claude model first</h2>
+    <p class="field-hint">Code sessions need a Claude model. An admin can pick one in {% if viewer.is_admin %}<a href="/settings">Settings</a>{% else %}Settings{% endif %}.</p>
+  </section>
+  {% elif available %}
   <section class="panel" aria-labelledby="new-code-title">
     <h2 id="new-code-title">New session</h2>
     <form method="post" action="/code">

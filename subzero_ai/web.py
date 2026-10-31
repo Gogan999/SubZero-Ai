@@ -36,6 +36,7 @@ from . import __version__, saved_settings, setup_flow
 from .approvals import ApprovalService, Outcome
 from .attachments import (
     ACCEPT,
+    TEXT_ACCEPT,
     FRAME_MAX_BYTES,
     MAX_FILE_BYTES,
     MAX_FILES,
@@ -50,7 +51,7 @@ from .attachments import (
     size_label,
 )
 from .auth import LoginError, SlackLogin, profile_from_claims
-from .ai_backend import make_client
+from .ai_backend import Capabilities, capabilities_for, make_client, resolve_backend
 from .claude import ClaudeClient
 from .code_runner import CodeRunner
 from .config import Settings, load_settings, normalize_model_id
@@ -120,6 +121,7 @@ async def _load_model_names(s: Services) -> None:
     try:
         models = await list_models(list(s.settings.ai_providers))
         s.model_names.update({str(m["id"]): str(m["name"]) for m in models if m.get("id") and m.get("name")})
+        s.model_info.update({str(m["id"]): dict(m) for m in models if m.get("id")})
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -176,9 +178,15 @@ class Services:
     artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Model names from the Pi gateway, by provider/model id, for labels (filled once at startup, may stay empty)
     model_names: dict[str, str] = field(default_factory=dict)
+    # The gateway's full record per model id (`images`, `reasoning`, ...), for what each non-Claude model can do
+    model_info: dict[str, dict] = field(default_factory=dict)
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
+
+    def capabilities(self, model: str) -> Capabilities:
+        """What this model can do with the backend in use: the one place templates and routes ask."""
+        return capabilities_for(model, resolve_backend(self.settings), self.model_info.get(normalize_model_id(model)))
 
 
 def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
@@ -207,10 +215,12 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     directory = Directory(settings, slack)
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
-    return Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
-                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
-                    Shares(db), github, Drive(settings),
-                    CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks))
+    svc = Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
+                   SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
+                   Shares(db), github, Drive(settings),
+                   CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks))
+    runner.capabilities_of = svc.capabilities
+    return svc
 
 
 # --------------------------------------------------------------------------- helpers
@@ -273,8 +283,23 @@ def tool_options(s: Services, viewer: Viewer, form) -> dict:
                          search_on=s.settings.web_search_enabled)
 
 
-def upload_context() -> dict[str, Any]:
-    return {"accept": ACCEPT, "max_files": MAX_FILES, "max_file_bytes": MAX_FILE_BYTES,
+def feature_refusal(caps: Capabilities, form, files: list[Prepared]) -> str:
+    """Why this message can't go to the chat's model, in plain words, or "" when it can."""
+    if form.get("search") == "1" and not caps.web_search:
+        return "Web search isn't available with this chat's model."
+    if form.get("research") == "1" and not caps.web_search:
+        return "Research isn't available with this chat's model."
+    if form.get("think") == "1" and not caps.thinking:
+        return "Extended thinking isn't available with this chat's model."
+    if not caps.images and any(f.kind in ("image", "frame") for f in files):
+        return "This chat's model can't read images. Attach text files instead."
+    return ""
+
+
+def upload_context(caps: Capabilities) -> dict[str, Any]:
+    """What the composer needs: the file limits and, for the chat's model, what it can do (`caps`)."""
+    return {"caps": caps, "accept": ACCEPT if caps.images else TEXT_ACCEPT, "max_files": MAX_FILES,
+            "max_file_bytes": MAX_FILE_BYTES,
             "max_message_bytes": MAX_MESSAGE_BYTES, "max_frames": MAX_FRAMES_PER_VIDEO,
             "styles": [(key, label) for key, (label, _) in STYLES.items()]}
 
@@ -684,7 +709,7 @@ async def chats(request: Request, viewer: Viewer) -> Response:
         return RedirectResponse(f"/recents?{request.url.query}", status_code=303)
     return render(request, "chats.html", viewer, current_id=None, subteams=s.settings.subteams,
                   greeting=greeting(s, viewer), model_name=model_label(s.settings.model_default, s.model_names),
-                  **upload_context())
+                  **upload_context(s.capabilities(s.settings.model_default)))
 
 
 @page()
@@ -863,7 +888,8 @@ async def project_page(request: Request, viewer: Viewer) -> Response:
     return render(request, "project.html", viewer, project=project, files=files, max_project_files=MAX_PROJECT_FILES,
                   chats=conversation_list(s, viewer, "team", "", project_id=project["id"]),
                   flash=request.session.pop("flash", None), error=request.session.pop("project_error", None),
-                  model_name=model_label(s.settings.model_default, s.model_names), **upload_context())
+                  model_name=model_label(s.settings.model_default, s.model_names),
+                  **upload_context(s.capabilities(s.settings.model_default)))
 
 
 def _project_action(kind: str):
@@ -955,7 +981,7 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
     return render(request, "conversation.html", viewer, conv=conv, messages=messages, own=own, title=title,
                   can_send=own, waiting=waiting, replying=replying, composer_hint=hint, needs_review=needs_review,
                   model_options=models, model_name=model_label(conv["model"], s.model_names), current_id=conv["id"],
-                  long_chat=long_chat, **upload_context())
+                  long_chat=long_chat, **upload_context(s.capabilities(conv["model"])))
 
 
 @page()
@@ -1011,6 +1037,9 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
         files += await connector_files(s, form, len(files))
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
+    refusal = feature_refusal(s.capabilities(s.settings.model_default), form, files)
+    if refusal:
+        return JSONResponse({"ok": False, "error": refusal, "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam, files=files,
                                        explainer=form.get("explainer") == "1", project_id=project_id,
                                        options=tool_options(s, viewer, form))
@@ -1028,6 +1057,10 @@ async def send_message(request: Request, viewer: Viewer) -> Response:
         files += await connector_files(s, form, len(files))
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
+    conv = s.store.conversation(request.path_params["cid"])
+    refusal = feature_refusal(s.capabilities(conv["model"]), form, files) if conv else ""
+    if refusal:
+        return JSONResponse({"ok": False, "error": refusal, "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), conversation_id=request.path_params["cid"],
                                        files=files, explainer=form.get("explainer") == "1",
                                        options=tool_options(s, viewer, form))

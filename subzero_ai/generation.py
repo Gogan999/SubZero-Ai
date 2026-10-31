@@ -8,6 +8,7 @@ import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from .ai_backend import Capabilities, capabilities_for, resolve_backend
 from .attachments import Attachments
 from .config import Settings
 from .db import Database, utcnow
@@ -59,6 +60,22 @@ RESEARCH_REQUEST = (
 SEARCH_UNAVAILABLE = (
     "The student asked Claude to search the web, but web search is turned off or the team has used today's "
     "searches. Say so in one sentence, then answer from what you already know.")
+
+
+NO_IMAGES_NOTE = "[An image was attached here, but this model can't see images.]"
+
+
+def hide_images(blocks: list[dict]) -> list[dict]:
+    """The same content blocks with pictures swapped for a short note (one note for a run of pictures), for
+    models that can't read images."""
+    out: list[dict] = []
+    for b in blocks:
+        if b.get("type") == "image":
+            b = {"type": "text", "text": NO_IMAGES_NOTE}
+            if out and out[-1] == b:
+                continue
+        out.append(b)
+    return out
 
 
 def clean_options(form, *, can_research: bool, search_on: bool) -> dict:
@@ -184,6 +201,9 @@ class ReplyRunner:
         self.claude = claude
         self.broker = broker
         self.tasks = tasks
+        # model id -> Capabilities; build_services swaps in one that knows the gateway's model info
+        self.capabilities_of: Callable[[str], Capabilities] = lambda model: capabilities_for(
+            model, resolve_backend(settings))
         self.on_alert: Callable[[int, int], Awaitable[None]] | None = None
         self.on_result: Callable[[bool, str], None] | None = None  # tells the health checks how the call went
         # Text streamed so far for replies in progress, so someone who opens the chat mid-reply sees all of it.
@@ -228,15 +248,24 @@ class ReplyRunner:
         project = self.projects.get(conv["project_id"]) if self.projects and conv["project_id"] else None
         project_images = (sum(1 for f in self.projects.files(project["id"]) if f["kind"] == "image")
                           if project is not None else 0)
+        caps = self.capabilities_of(conv["model"])
         files = self.history_files(conversation_id, user_message_id, project_images)
+        if not caps.images:
+            files = {mid: hide_images(blocks) for mid, blocks in files.items()}
         context = build_context(self.store.messages(conversation_id), user_message_id, files)
         extras: list[str] = []
         if project is not None:
             extras.append(self.projects.system_text(project))
-            context = with_project_files(context, self.projects.claude_blocks(project["id"]))
+            project_blocks = self.projects.claude_blocks(project["id"])
+            context = with_project_files(context, project_blocks if caps.images else hide_images(project_blocks))
         asked = self.store.message(user_message_id)
         wants_explainer = bool(asked and asked["wants_explainer"])
         options = load_options(asked["options"] if asked else None)
+        # The model may have changed since the message was queued (a mentor can switch it): drop what it can't do
+        for key, ok in (("search", caps.web_search), ("research", caps.web_search), ("think", caps.thinking)):
+            if options.get(key) and not ok:
+                log.info("Dropping %s from reply %s: model %s can't do it", key, reply_id, conv["model"])
+                options.pop(key)
         # Explainers and questions with files attached (usually code reviews) get more effort, and explainers
         # get room for a whole web page. Everyday questions stay at the default, which costs less.
         if wants_explainer:

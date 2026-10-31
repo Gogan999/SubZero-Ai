@@ -70,11 +70,19 @@ def session_view(s: Services, row) -> dict[str, Any]:
             "pending": row["pending"] if "pending" in row.keys() else 0}
 
 
+NO_CODE_MODEL = "Code sessions need a Claude model. An admin can pick one in Settings."
+
+
+def code_models(s: Services) -> list[tuple[str, str]]:
+    """The default and hard models that can run Code sessions (Claude models only), with their labels."""
+    return [(m, model_label(m, s.model_names)) for m in dict.fromkeys(
+        normalize_model_id(m) for m in (s.settings.model_default, s.settings.model_hard)) if s.capabilities(m).code]
+
+
 @page(require="mentor")
 async def code_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
-    models = [(m, model_label(m, s.model_names)) for m in dict.fromkeys(
-        normalize_model_id(m) for m in (s.settings.model_default, s.settings.model_hard))]
+    models = code_models(s)
     return render(request, "code.html", viewer, sessions=[session_view(s, r) for r in s.code.list()],
                   available=s.code.available, models=models, commands=s.settings.code_commands,
                   error=request.session.pop("code_error", None))
@@ -84,9 +92,13 @@ async def code_page(request: Request, viewer: Viewer) -> Response:
 async def code_start(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
+    allowed = [m for m, _ in code_models(s)]
+    if not allowed:
+        request.session["code_error"] = NO_CODE_MODEL
+        return RedirectResponse("/code", status_code=303)
     model = normalize_model_id(form.get("model", ""))
-    if model not in (normalize_model_id(s.settings.model_default), normalize_model_id(s.settings.model_hard)):
-        model = normalize_model_id(s.settings.model_default)
+    if model not in allowed:
+        model = allowed[0]
     try:
         session_id = s.code.start(viewer, str(form.get("task", "")), model)
     except CodeError as exc:
