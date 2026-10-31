@@ -130,7 +130,7 @@ class Settings:
     always_review_slack_ids: frozenset[str] = frozenset()  # students who never get the approval window
     screener_enabled: bool = True  # a small model checks each message in the window; anything it flags waits
     model_screener: str = "anthropic/claude-haiku-5-5"
-    # The model that grades the Model safety check's open-ended cases (refusals). Not a saved setting.
+    # The model that grades the Model safety check's open-ended cases (refusals). Must be a Claude model.
     model_check_judge: str = "anthropic/claude-sonnet-5-5"
 
     # Connectors: add files to a message from the team's GitHub repository or a shared Google Drive link
@@ -246,6 +246,8 @@ def update_env_file(path: Path, updates: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     temp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(temp, 0o600)  # it holds API keys and tokens (on Windows the data folder's permissions cover it)
     os.replace(temp, path)
 
 

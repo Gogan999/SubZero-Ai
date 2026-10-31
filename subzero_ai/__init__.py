@@ -1,3 +1,3 @@
 """SubZero AI: a mentor-approved Claude chat for a high school robotics team."""
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

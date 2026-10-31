@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Restarting · {{ settings.app_name }}{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="20;url=/settings">{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <h1>Restarting</h1>
+  <p class="lede" role="status">{{ settings.app_name }} is restarting to use the new settings. This page goes back to Settings in about 20 seconds.</p>
+  <p class="field-hint">Anyone in the middle of a reply sees it stop. They can press Retry once the site is back. If Settings doesn't come back within a minute, check the SubZeroAI service on the mini PC and the log in the logs folder.</p>
+  <p><a class="button" href="/settings">Back to Settings</a></p>
+</section>
+{% endblock %}

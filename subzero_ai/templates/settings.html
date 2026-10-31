@@ -45,22 +45,84 @@
   </div>
   {% endif %}
 {% endmacro %}
+{% macro env_row(item, section) %}
+  {% set f = item.field %}
+  {% set fid = 'env-' ~ f.name %}
+  {% set described = [] %}{% if f.help or item.locked %}{% set _ = described.append('h-' ~ fid) %}{% endif %}{% if item.error %}{% set _ = described.append('e-' ~ fid) %}{% endif %}
+  {% set aria %}{% if described %}aria-describedby="{{ described|join(' ') }}"{% endif %} {% if item.error %}aria-invalid="true"{% endif %} {% if item.locked %}disabled{% endif %}{% endset %}
+  {% set status %}{% if f.restart %} <span class="pill {{ 'unknown' if item.pending else 'plain' }}">{{ 'Saved, restart to use' if item.pending else 'Needs a restart' }}</span>{% endif %}{% endset %}
+  {% set notes %}
+    {% if item.locked %}<p class="field-hint" id="h-{{ fid }}">Set by the {{ f.env }} environment variable on the mini PC, which wins over this page. Change it there.</p>
+    {% elif f.help %}<p class="field-hint" id="h-{{ fid }}">{{ f.help }}</p>{% endif %}
+    {% if item.error %}<p class="field-error" id="e-{{ fid }}">{{ item.error }}</p>{% endif %}
+  {% endset %}
+  {% if f.kind == 'bool' %}
+  <div class="field check">
+    <input type="checkbox" id="{{ fid }}" name="{{ f.name }}" value="1" {% if item.value in ('1', 'on') %}checked{% endif %} {{ aria }}>
+    <label for="{{ fid }}">{{ f.label }}{{ status }}</label>
+    {{ notes }}
+  </div>
+  {% else %}
+  <div class="field">
+    <label for="{{ fid }}">{{ f.label }}{% if f.kind == 'secret' %} <span class="pill {{ 'ok' if item.set else 'unknown' }}">{{ 'Saved' if item.set else 'Not set' }}</span>{% if item.hint %} <span class="field-hint">{{ item.hint }}</span>{% endif %}{% endif %}{{ status }}</label>
+    {% if f.kind == 'choice' %}
+    <select id="{{ fid }}" name="{{ f.name }}" {{ aria }}>
+      {% for value, label in f.choices %}<option value="{{ value }}" {% if item.value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+    {% elif f.kind == 'secret' %}
+    <input id="{{ fid }}" name="{{ f.name }}" type="password" autocomplete="off" spellcheck="false" placeholder="{{ 'Leave empty to keep the saved one' if item.set else 'Paste it here' }}" {{ aria }}>
+    {% else %}
+    <input id="{{ fid }}" name="{{ f.name }}" type="text" value="{{ item.value }}" spellcheck="false" autocapitalize="off" autocomplete="off"
+      {% if f.kind == 'int' %}inputmode="numeric"{% elif f.kind in ('url', 'base-url') %}inputmode="url"{% endif %} {{ aria }}>
+    {% endif %}
+    {{ notes }}
+  </div>
+  {% endif %}
+{% endmacro %}
+{% macro env_panel(sec) %}
+  <section class="panel" id="env-{{ sec.key }}" aria-labelledby="env-{{ sec.key }}-title">
+    <h2 id="env-{{ sec.key }}-title">{{ sec.title }}</h2>
+    <p class="field-hint">{{ sec.intro }} Saved in config.env on the mini PC.{% if sec.key == 'slack' %} Tokens and secrets are never shown again. A box left empty keeps the saved one.{% endif %}</p>
+    <form method="post" action="/settings/env/{{ sec.key }}" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        {% for item in sec.fields %}{{ env_row(item, sec.key) }}{% endfor %}
+      </div>
+      {{ caller() if caller else '' }}
+      <div class="form-actions"><button class="button primary" type="submit">Save {{ sec.name }}</button></div>
+    </form>
+  </section>
+{% endmacro %}
 {% block main %}
 <section class="page narrow">
   <h1>Settings</h1>
-  <p class="lede">Changes apply to the next message, with no restart. Every change is kept in the <a href="/audit">audit log</a>. API keys and Slack tokens live in config.env on the mini PC and are never shown here.</p>
+  <p class="lede">Every setting, API key and connected account is here. Most changes apply to the next message. The few marked "Needs a restart" wait until you press Restart. Every change is kept in the <a href="/audit">audit log</a>. API keys and tokens are saved in config.env on the mini PC and are never shown here again.</p>
   <nav aria-label="Settings sections">
     <ul class="settings-nav">
       <li><a href="#health">Health and backups</a></li>
+      <li><a href="#accounts">Connected accounts</a></li>
       {% for sec in sections %}<li><a href="#{{ sec.key }}">{{ sec.title }}</a></li>{% endfor %}
+      <li><a href="#env-engine">AI engine</a></li>
       <li><a href="#ai-keys">API keys</a></li>
       <li><a href="#model-check">Model safety check</a></li>
+      <li><a href="#env-slack">Slack connection</a></li>
       <li><a href="#connectors">Connectors</a></li>
+      <li><a href="#env-site">Site and server</a></li>
       <li><a href="#prompts">System prompt</a></li>
       <li><a href="#history">Change history</a></li>
     </ul>
   </nav>
   {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  {% if pending %}
+  <section class="panel" id="restart" aria-labelledby="restart-title">
+    <h2 id="restart-title">Restart to finish saving</h2>
+    <p class="field-hint">These are saved but not in use yet: {{ pending|join(', ') }}. Restarting takes about 15 seconds. Anyone waiting on a reply sees it stop and can press Retry.</p>
+    <form method="post" action="/settings/restart" class="form-actions">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button primary" type="submit" data-confirm="Restart {{ settings.app_name }} now? Replies in progress stop.">Restart now</button>
+    </form>
+  </section>
+  {% endif %}
 
   <section class="panel" id="health" aria-labelledby="health-title">
     <h2 id="health-title">Health and backups</h2>
@@ -89,6 +151,43 @@
     </form>
   </section>
 
+
+  <section class="panel" id="accounts" aria-labelledby="accounts-title">
+    <h2 id="accounts-title">Connected accounts</h2>
+    <ul class="health">
+      {% for row in accounts %}
+      <li>
+        <span class="health-label">{{ row.label }}</span>
+        <span class="pill {{ row.kind }}">{{ row.state }}</span>
+        <span class="health-detail">{{ row.detail }} <a href="{{ row.link }}">Change</a></span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% for row in accounts if row.bridge and row.signed_in %}
+    <form method="post" action="/settings/bridge/sign-out" class="form-actions" id="bridge">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button quiet" type="submit" data-confirm="Sign out of the Claude subscription? Its models stop working until someone signs in again on the mini PC.">Sign out of the Claude subscription</button>
+    </form>
+    {% endfor %}
+    <h3>Check everything</h3>
+    <p class="field-hint">Runs the same checks as check-settings.cmd: the Slack tokens and review channel, each AI company's key with a tiny request (a fraction of a cent), the AI helper, and the safety check results. It tests the settings in use now, so restart first if you're waiting on one.</p>
+    <form method="post" action="/settings/checks" class="form-actions">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button" type="submit" {% if checks.running %}disabled{% endif %}>{{ 'Checks running…' if checks.running else 'Run checks' }}</button>
+    </form>
+    {% if checks.last %}
+    <p class="field-hint">Last run {{ checks.last.time }} by {{ checks.last.by }}: {% if checks.last.fails %}{{ checks.last.fails }} problem{{ 's' if checks.last.fails != 1 else '' }} to fix.{% else %}everything needed is working.{% endif %}</p>
+    <ul class="health">
+      {% for r in checks.last.results %}
+      <li>
+        <span class="pill {{ 'ok' if r.status == 'OK' else 'bad' if r.status == 'FAIL' else 'unknown' }}">{{ 'Working' if r.status == 'OK' else 'Problem' if r.status == 'FAIL' else 'Warning' }}</span>
+        <span class="health-detail">{{ r.title }}{% if r.detail %}. <span class="field-hint">{{ r.detail }}</span>{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
   {% for sec in sections %}
   <section class="panel" id="{{ sec.key }}" aria-labelledby="{{ sec.key }}-title">
     <h2 id="{{ sec.key }}-title">{{ sec.title }}</h2>
@@ -102,18 +201,27 @@
   </section>
   {% endfor %}
 
+{% set env = {} %}{% for sec in env_sections %}{% set _ = env.update({sec.key: sec}) %}{% endfor %}
+  {{ env_panel(env.engine) }}
+
   <section class="panel" id="ai-keys" aria-labelledby="ai-keys-title">
     <h2 id="ai-keys-title">API keys</h2>
-    <p class="field-hint">One API key for each company you turned on under AI providers in the Claude settings. Keys are saved in config.env on the mini PC and never shown again. To replace a key, paste the new one. A box left empty keeps the saved key. New keys work right away.</p>
+    <p class="field-hint">One API key for each company you turned on under AI providers in the Claude settings. Keys are saved in config.env on the mini PC and never shown again, only their last four characters so you can tell which one is saved. To replace a key, paste the new one. A box left empty keeps the saved key. New keys work right away. The Claude subscription doesn't use a key: see Connected accounts.</p>
     <form method="post" action="/settings/ai-keys" novalidate>
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="fields">
         {% for k in ai_keys %}
         <div class="field">
-          <label for="key-{{ k.id }}">{{ k.label }} API key <span class="pill {{ 'ok' if k.set else 'unknown' }}">{{ 'Saved' if k.set else 'Not set' }}</span></label>
-          <input id="key-{{ k.id }}" name="{{ k.field }}" type="password" autocomplete="off" spellcheck="false" aria-describedby="key-{{ k.id }}-hint" placeholder="{{ 'Leave empty to keep the saved key' if k.set else 'Paste the key here' }}">
-          <p class="field-hint" id="key-{{ k.id }}-hint">{{ k.help }}</p>
+          <label for="key-{{ k.id }}">{{ k.label }} API key <span class="pill {{ 'ok' if k.set else 'unknown' }}">{{ 'Saved' if k.set else 'Not set' }}</span>{% if k.hint %} <span class="field-hint">{{ k.hint }}</span>{% endif %}</label>
+          <input id="key-{{ k.id }}" name="{{ k.field }}" type="password" autocomplete="off" spellcheck="false" aria-describedby="key-{{ k.id }}-hint" placeholder="{{ 'Leave empty to keep the saved key' if k.set else 'Paste the key here' }}" {% if k.locked or not k.on %}disabled{% endif %}>
+          <p class="field-hint" id="key-{{ k.id }}-hint">{% if k.locked %}Set by an environment variable on the mini PC, which wins over this page. Change it there.{% elif not k.on %}{{ k.label }} is turned off. You can remove its saved key.{% else %}{{ k.help }}{% endif %}</p>
         </div>
+        {% if k.set and not k.locked %}
+        <div class="field check">
+          <input type="checkbox" id="remove-key-{{ k.id }}" name="remove_{{ k.id }}" value="1">
+          <label for="remove-key-{{ k.id }}">Remove the saved {{ k.label }} key</label>
+        </div>
+        {% endif %}
         {% endfor %}
       </div>
       <div class="form-actions"><button class="button primary" type="submit">Save keys</button></div>
@@ -155,6 +263,8 @@
     {% endif %}
   </section>
 
+  {{ env_panel(env.slack) }}
+
   <section class="panel" id="connectors" aria-labelledby="connectors-title">
     <h2 id="connectors-title">Connectors</h2>
     <p class="field-hint">Let people add files to a message from the composer's tools menu instead of attaching them. The files go on the review card like attachments, so mentors still see everything before Claude does.</p>
@@ -190,6 +300,14 @@
       <div class="form-actions"><button class="button primary" type="submit">Save connectors</button></div>
     </form>
   </section>
+
+  {% call env_panel(env.site) %}
+      <h3>Kept in config.env only</h3>
+      <p class="field-hint">These are changed by editing {{ config_path }} on the mini PC, then restarting.</p>
+      <ul class="simple-list">
+        {% for name, why in file_only %}<li><span class="mono">{{ name }}</span> <span class="field-hint">{{ why }}</span></li>{% endfor %}
+      </ul>
+  {% endcall %}
 
   <section class="panel" id="prompts" aria-labelledby="prompts-title">
     <h2 id="prompts-title">System prompt</h2>
