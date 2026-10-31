@@ -1,9 +1,10 @@
 # Plan: move AI access onto the Pi harness
 
-Status: **approved by Logan 2026-10-31; build not started.** Build in a fresh session so the `researcher`/`implementer`/`reviewer` agents load, under `.claude/WORKFLOW.md`. Start at F1 (from PR #8's head if #8 is still open).
+Status: **approved by Logan 2026-10-31; build running (thread "Build the Pi harness backend").** Build in a fresh session so the `researcher`/`implementer`/`reviewer` agents load, under `.claude/WORKFLOW.md`. Start at F1 (from PR #8's head if #8 is still open).
 
-- Branch: `claude/project-thread-ntchvl`
-- Starting commit: `afcc835` (main, "Merge pull request #9"), clean working tree, 226 tests passing.
+- Branch: `claude/project-thread-lcsb78` (build). Planning was on `claude/project-thread-ntchvl` (PR #10, merged).
+- Starting commit: `9a36654` = PR #8's head `4eb3601` merged with main `aaf4aa1`, clean tree, 260 tests passing. PR #8 then merged (main `47f59c0`, same tree), merged in as `07cc76d`.
+- Subagents: the custom agent files don't load in this cloud session, so each role runs as the general agent pinned to its model (researcher=Haiku, implementer/reviewer=Sonnet) with the role file as its instructions (D14).
 - Runs under the delegated workflow in `.claude/WORKFLOW.md` (opt-in, see the root `CLAUDE.md`).
 - **Sequencing:** PR #8 (projects, composer tools, Code sessions; branch `claude/project-thread-cg9ea7`) is still
   open and widens the AI client interface. Build F1 on top of main *after* PR #8 merges, so the seam covers
@@ -87,7 +88,7 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 
 ## Features (build order)
 
-Each is sized for one implementer pass. Status: all **not started**.
+Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4 commit c9fdc6d; F4b **done** (approved, D29-D30); F4b commit eab9ec4; F4c **done** (approved round 3, D31-D33); F4c commit f605155; F5 **done in code** (approved round 4, D34-D35; mini-PC spike in docs/BRIDGE_SPIKE.md still to run by Logan); F5 commit ca02932; F6 **done** (approved round 2, D36-D37; zip 254.6 MB, 12,829 files; PowerShell untested on Windows); F7 **done** (approved round 1, D38; 561 tests, ~56 s); cleanup pass + F8 **in progress**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
 - Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's
@@ -276,4 +277,27 @@ See `DECISIONS.md` (D1-D12).
 
 ## Minor findings
 
-None yet.
+- F1-M1: `tests/test_ai_backend.py` protocol test only checks the methods exist; compare `inspect.signature` across ClaudeClient, FakeClaude, UnavailableClient and AIBackend.
+- F1-M2: blank `AI_BACKEND=` counts as unknown and FAILs; treat empty/whitespace as `anthropic`, with a test.
+- F1-M3: UnavailableClient's message reaches students; give students "The AI isn't set up right now. Tell a mentor." and keep the config.env detail for `check`/logs.
+- F2-M3: pi-ai reads some env directly (AWS, Azure, Google ADC, PI_CACHE_RETENTION); bedrock/azure/vertex unsupported for now, documented in pi_gateway/README.md.
+- F2-M5: CLAUDE.md test count is stale (226); update at the end.
+- F2-M6: a user turn mixing tool_result and text/image becomes two consecutive user messages in pi-ai's body; optionally merge (tool results first).
+- F3-M1: ping()/list_models() return before done, so a needless abort is sent; read to done.
+- F3-M2: proc.aborted never trimmed; drop ids on done.
+- F3-M3: _on_exit doesn't close the Popen pipes (ResourceWarnings in tests).
+- F3-M4: stdin writes are sync on the event loop; a stalled gateway + big image could block the app (accept or use an executor for large payloads).
+- F3-M5: provider error text reaches students verbatim; truncate (~200 chars) and soften.
+- F3-M6: a wedged gateway that ignores aborts is never recycled; kill/restart after N consecutive idle timeouts.
+- F3-M7 / F4 input: the gateway's env (keys) is fixed when PiClient is built; F4 must refresh keys after an admin saves one (restart the gateway), and the setup page's key check still uses ClaudeClient.
+- F4-M4: a model whose provider isn't in ai_providers (hand-edited config.env) gets a generic probe failure in `check`, not "No API key".
+- F4-M6: setup page's key probe uses ClaudeClient with model_default; fails oddly if MODEL_DEFAULT is non-anthropic.
+- F4b-M1: project-page image uploads aren't refused for non-image models (hidden at reply time); maybe a note on the project page.
+- F4b-M2: a dropped option may still show as "Web search" on the review card / message label.
+- F4b-M5: a video's stills each get their own "can't see images" note (text blocks sit between them).
+- F4c: in FAKE_CLAUDE/test mode a safety check can't pass (no judge), so changing the default/hard/screener model in dev needs a real backend or a seeded model_checks row.
+- F5: bridge replies are serialized (one at a time across the whole app); students queue behind each other.
+- F5: node_modules grows to ~500 MB here; the Windows Claude Code binary is ~320 MiB. F6 must decide how to ship it.
+- F7-M3: add a chunk-size knob to the anthropic/pi fakes and one split-[MENTOR ALERT] test per variant.
+- F7-M1: fakes drop search/sources events and pi records web_searches=0; comment it.
+- F1-M4 (no change needed now): setup step doesn't clear in-memory `fake_claude`; pre-existing, takes effect after restart.

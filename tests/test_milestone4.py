@@ -70,7 +70,7 @@ class SettingsValuesTest(TempDirTest):
             "effort_default": "extreme", "effort_high": "high", "max_tokens_chat": "8,000",
             "max_tokens_explainer": "10", "long_chat_tokens": "150000"})
         self.assertIn("Fable", errors["model_default"])
-        self.assertIn("model ID", errors["model_hard"])
+        self.assertIn("provider/model", errors["model_hard"])
         self.assertIn("effort_default", errors)
         self.assertIn("max_tokens_explainer", errors)
         self.assertEqual(values["max_tokens_chat"], 8000)
@@ -134,7 +134,7 @@ class SettingsPageTest(unittest.TestCase):
                                headers=HTML)
         self.assertEqual(resp.status_code, 400)
         self.assertIn("kept off", resp.text)
-        self.assertEqual(self.h.settings.model_default, "claude-sonnet-5-5")
+        self.assertEqual(self.h.settings.model_default, "anthropic/claude-sonnet-5-5")
         # The error is tied to its field for screen readers
         field = re.search(r'<input id="f-model_default"[^>]*>', resp.text).group(0)
         self.assertIn('aria-describedby="h-model_default e-model_default"', field)
@@ -662,6 +662,52 @@ class PackagingTest(unittest.TestCase):
                 text = script.read_text(encoding="utf-8")
                 self.assertTrue(text.isascii(), f"{script.name} must be ASCII for Windows PowerShell 5.1")
                 self.assertNotRegex(text, r"5690|SubZero Robotics")
+
+    def test_node_is_pinned_and_shipped(self):
+        url, digest = self.build.DOWNLOADS["node"]
+        self.assertIn(f"v{self.build.NODE_VERSION}/node-v{self.build.NODE_VERSION}-win-x64.zip", url)
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        common = (ROOT / "packaging" / "windows" / "scripts" / "common.ps1").read_text(encoding="utf-8")
+        self.assertRegex(common, r'\$AppParts = @\([^)]*"node"')
+
+    def test_long_zip_paths_are_found(self):
+        limit = self.build.PATH_LIMIT - self.build.PATH_PREFIX
+        ok, bad = "a" * limit, "b" * (limit + 1)
+        self.assertEqual(self.build.long_zip_paths([ok, "short"]), [])
+        longer = "c" * (limit + 30)
+        self.assertEqual(self.build.long_zip_paths([ok, bad, longer]),
+                         [(len(longer) + self.build.PATH_PREFIX, longer), (len(bad) + self.build.PATH_PREFIX, bad)])
+        self.assertEqual(self.build.long_zip_paths([bad], prefix=10, limit=250), [])
+
+    def test_update_prefix_is_the_worst_case(self):
+        self.assertTrue(self.build.UPDATE_PREFIX.startswith("C:\\Users\\" + "u" * 30 + "\\AppData\\Local\\Temp\\SZ-"))
+        self.assertTrue(self.build.UPDATE_PREFIX.endswith("\\u\\"))
+        update = (ROOT / "packaging" / "windows" / "scripts" / "update.ps1").read_text(encoding="utf-8")
+        self.assertIn('("SZ-" +', update)
+        self.assertIn('Join-Path $work "u"', update)
+
+    def test_copy_app_files_only_skips_optional_parts(self):
+        text = (ROOT / "packaging" / "windows" / "scripts" / "common.ps1").read_text(encoding="utf-8")
+        self.assertIn('$OptionalParts = @("node")', text)
+        self.assertIn("The release is missing '$part'.", text)
+
+    def test_prune_removes_only_unneeded_files(self):
+        import tempfile
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        root = tmp / "node_modules"
+        keep = ["pi-claude-bridge/src/index.ts", "pi-claude-bridge/LICENSE", "a/LICENCE", "a/NOTICE", "a/COPYING",
+                "a/README.md", "a/CHANGELOG.md", "a/docs/guide.md", "a/examples/x.js", "a/index.js", "a/types.d.json"]
+        drop = ["a/index.d.ts", "a/index.d.mts", "a/index.d.cts", "a/index.js.map", "a/styles.css.map",
+                ".bin/tsc", "a/node_modules/.bin/x.cmd"]
+        for name in keep + drop:
+            f = root / name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("x")
+        self.assertEqual(self.build.prune_node_modules(root), len(drop))
+        self.assertEqual([n for n in keep if not (root / n).is_file()], [])
+        self.assertEqual([n for n in drop if (root / n).exists()], [])
+        self.assertFalse((root / "a" / "node_modules" / ".bin").exists())
 
     def test_cmd_files_explain_running_from_inside_the_zip(self):
         # Opening a .cmd from inside the zip in Explorer copies just that file to a temp folder, so the

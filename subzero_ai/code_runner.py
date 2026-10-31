@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .ai_backend import capabilities_for, resolve_backend
 from .claude import ClaudeError
 from .config import Settings
 from .connectors import ConnectorError, GitHub
@@ -452,6 +453,8 @@ class CodeRunner:
             raise CodeError("Code is for mentors.")
         if not self.available:
             raise CodeError("Code needs the team's GitHub repository. An admin can add it in Settings, Connectors.")
+        if not capabilities_for(model, resolve_backend(self.settings)).code:
+            raise CodeError("Code sessions need a Claude model. An admin can pick one in Settings.")
         task = (task or "").replace("\r\n", "\n").strip()
         if not task:
             raise CodeError("Describe what Claude should do.")

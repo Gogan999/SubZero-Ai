@@ -18,6 +18,7 @@ TEXT_EXTENSIONS = {".java", ".py", ".cpp", ".h", ".json", ".gradle", ".yaml", ".
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
 ACCEPT = ",".join(sorted(TEXT_EXTENSIONS | IMAGE_EXTENSIONS | set(VIDEO_TYPES)))
+TEXT_ACCEPT = ",".join(sorted(TEXT_EXTENSIONS))  # for models that can't read images or video
 
 MAX_FILES = 5
 MAX_FILE_BYTES = 50 * 1024 * 1024

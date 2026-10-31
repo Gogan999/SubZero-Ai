@@ -14,14 +14,26 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .config import Settings, convert
+from .ai_backend import resolve_backend
+from .config import MODEL_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
 from .db import Database, utcnow
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
+from .model_check import requirement_problem
 
 log = logging.getLogger("subzero.settings")
 
 EFFORTS = ("low", "medium", "high")
-MODEL_RE = re.compile(r"claude-[a-z0-9][a-z0-9.\-]*")
+# provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
+MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
+PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "google": "Google (Gemini)",
+                   "openrouter": "OpenRouter", "claude-bridge": "Claude subscription (Claude Code)"}
+# A note shown under a provider's checkbox
+PROVIDER_HELP = {
+    "claude-bridge": ("Replies use the logged-in Claude subscription's limits. When they run out, students get an "
+                      "error until it resets, so keep an API-key model as the hard-problem fallback. It has to pass "
+                      "the safety check like any model. Someone must log in once with "
+                      "python -m subzero_ai claude-login. Needs AI_BACKEND=pi."),
+}
 SLACK_ID_RE = re.compile(r"[UW][A-Z0-9]{2,}")
 # These cost more and need 30-day data retention at Anthropic, so the plan keeps them off.
 BLOCKED_MODEL_WORDS = ("fable", "mythos")
@@ -31,7 +43,7 @@ BLOCKED_MODEL_WORDS = ("fable", "mythos")
 class Field:
     name: str
     label: str
-    kind: str  # model, effort, int, bool, lines, ids
+    kind: str  # model, effort, int, bool, lines, ids, providers
     help: str = ""
     minimum: int = 0
     maximum: int = 0
@@ -40,7 +52,11 @@ class Field:
 
 SECTIONS: dict[str, tuple[str, list[Field]]] = {
     "claude": ("Claude", [
-        Field("model_default", "Default model", "model", "Every new chat uses this model."),
+        Field("ai_providers", "AI providers", "providers",
+              "Companies whose models can be used. Add each one's API key under API keys below. Anything besides "
+              "Anthropic also needs the AI helper (set in config.env)."),
+        Field("model_default", "Default model", "model",
+              "Every new chat uses this model. Write it as provider/model, like anthropic/claude-sonnet-5-5."),
         Field("model_hard", "Hard-problem model", "model",
               "Mentors can switch a chat to this model. It costs about twice as much."),
         Field("model_titles", "Title model", "model", "Writes the short titles in the chat list."),
@@ -120,7 +136,7 @@ def serialize(name: str, value: Any) -> str:
     kind = FIELDS[name].kind
     if kind == "bool":
         return "1" if value else "0"
-    if kind == "lines":
+    if kind in ("lines", "providers"):
         return "\n".join(value)
     if kind == "ids":
         return "\n".join(sorted(value))
@@ -142,11 +158,74 @@ def load_into(settings: Settings, db: Database) -> None:
             log.warning("Ignoring a saved setting that couldn't be read: %s", row["key"])
 
 
-def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "") -> tuple[dict[str, Any], dict[str, str]]:
-    """Check one section's form. Returns (values, errors), keyed by setting name."""
+def form_text(form: Mapping[str, Any], name: str) -> str:
+    """A form value as text. A field with several values (checkboxes) comes back one per line."""
+    getlist = getattr(form, "getlist", None)
+    if getlist is not None:
+        return "\n".join(str(v) for v in getlist(name))
+    return str(form.get(name, "") or "")
+
+
+def check_providers(raw: str) -> tuple[tuple[str, ...], str]:
+    """Turn the submitted provider list into (providers in a fixed order, error)."""
+    items = [part.lower() for part in re.split(r"[\s,]+", raw) if part]
+    unknown = [item for item in items if item not in PROVIDERS]
+    if unknown:
+        return (), f"{unknown[0]} isn't a provider we support. Choose from {', '.join(PROVIDERS)}."
+    chosen = tuple(p for p in PROVIDERS if p in items)
+    if not chosen:
+        return (), "Turn on at least one provider."
+    return chosen, ""
+
+
+def check_model(raw: str, providers, backend: str) -> tuple[str, str]:
+    """Check one model id. Returns (normalized id, error)."""
+    model = normalize_model_id(raw)
+    match = MODEL_RE.fullmatch(model)
+    if not match:
+        return "", "Use provider/model, like anthropic/claude-sonnet-5-5."
+    provider = match.group(1)
+    if any(word in model.lower() for word in BLOCKED_MODEL_WORDS):
+        return "", ("Fable and Mythos models are kept off: they cost more and Anthropic keeps their "
+                    "data for 30 days.")
+    if provider not in PROVIDERS:
+        return "", f"{provider} isn't a provider we support. Use {', '.join(PROVIDERS)}."
+    if provider not in providers:
+        return "", f"{PROVIDER_LABELS[provider]} isn't turned on. Turn it on under AI providers first."
+    if backend == "anthropic" and provider != "anthropic":
+        return "", ("Only anthropic/ models work with AI_BACKEND=anthropic. Set AI_BACKEND=pi in config.env to use "
+                    "other companies.")
+    return model, ""
+
+
+# The settings a model can only be newly set for after passing the Model safety check (True: the screener part)
+CHECKED_MODEL_SETTINGS = {"model_default": False, "model_hard": False, "model_screener": True}
+
+
+def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
+             settings: Settings | None = None, db: Database | None = None) -> tuple[dict[str, Any], dict[str, str]]:
+    """Check one section's form. Returns (values, errors), keyed by setting name.
+    Pass the current settings so models are checked against the providers that are on and the AI backend.
+    Pass the database to also require the Model safety check for a changed default, hard-problem or screener
+    model (a value that isn't changing is left alone)."""
     values: dict[str, Any] = {}
     errors: dict[str, str] = {}
-    for f in SECTIONS[section][1]:
+    fields = SECTIONS[section][1]
+    providers: tuple[str, ...] = tuple(settings.ai_providers) if settings is not None else ("anthropic",)
+    backend = resolve_backend(settings) if settings is not None else "anthropic"
+    if any(f.name == "ai_providers" for f in fields) and "ai_providers" in form:  # absent means unchanged
+        chosen, problem = check_providers(form_text(form, "ai_providers"))
+        if problem:
+            errors["ai_providers"] = problem
+        else:
+            providers = values["ai_providers"] = chosen
+            if ("claude-bridge" in chosen and settings is not None and "claude-bridge" not in settings.ai_providers
+                    and backend != "pi"):
+                errors["ai_providers"] = ("The Claude subscription needs the AI helper. Set AI_BACKEND=pi in "
+                                          "config.env and restart, then turn it on.")
+                del values["ai_providers"]
+                providers = tuple(settings.ai_providers)
+    for f in fields:
         raw = str(form.get(f.name, "") or "").strip()
         if f.kind == "bool":
             values[f.name] = raw in ("1", "on", "true")
@@ -161,13 +240,17 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "")
                 continue
             values[f.name] = number
         elif f.kind == "model":
-            if not MODEL_RE.fullmatch(raw):
-                errors[f.name] = "Enter a Claude model ID, like claude-sonnet-5-5."
-            elif any(word in raw for word in BLOCKED_MODEL_WORDS):
-                errors[f.name] = ("Fable and Mythos models are kept off: they cost more and Anthropic keeps their "
-                                  "data for 30 days.")
+            model, problem = check_model(raw, providers, backend)
+            if not problem and db is not None and f.name in CHECKED_MODEL_SETTINGS:
+                unchanged = settings is not None and model == normalize_model_id(getattr(settings, f.name))
+                if not unchanged:
+                    problem = requirement_problem(db, model, screener=CHECKED_MODEL_SETTINGS[f.name])
+            if problem:
+                errors[f.name] = problem
             else:
-                values[f.name] = raw
+                values[f.name] = model
+        elif f.kind == "providers":
+            continue  # checked above
         elif f.kind == "effort":
             if raw not in EFFORTS:
                 errors[f.name] = "Pick low, medium, or high."
@@ -193,6 +276,21 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "")
                 errors[f.name] = "You can't remove yourself. Ask another admin to do it."
             else:
                 values[f.name] = frozenset(items)
+    if "ai_providers" in values and settings is not None:
+        # A provider can't be turned off while a model setting still uses it
+        in_form = {f.name for f in fields}
+        for name in MODEL_SETTINGS:
+            if name in in_form:
+                model = values.get(name, "")  # empty when it failed its own check, which is reported already
+            else:
+                model = getattr(settings, name)
+            provider = model.split("/", 1)[0] if "/" in model else ""
+            if provider and provider not in values["ai_providers"]:
+                errors["ai_providers"] = (f"{PROVIDER_LABELS.get(provider, provider)} is still used by "
+                                          f"{FIELDS[name].label.lower()}. Change that model first.")
+                break
+        if "ai_providers" in errors:
+            del values["ai_providers"]
     return values, errors
 
 

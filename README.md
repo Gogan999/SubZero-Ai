@@ -1,8 +1,8 @@
 # SubZero AI
 
-A claude.ai-style chat for a high school robotics team. Students ask Claude about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
+A claude.ai-style chat for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
-This is version 0.4.1: all four milestones of the build plan.
+This is version 0.5.0: all four milestones of the build plan, plus optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)).
 
 ## What's in this version
 
@@ -57,7 +57,7 @@ In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and crea
 
 Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases), right-click it, and choose **Extract All**. In the extracted folder, double-click **install.cmd** and choose **Yes** when Windows asks for permission. The installer:
 
-- copies the app, with its own Python, to `C:\Program Files\SubZeroAI`;
+- copies the app, with its own Python and Node.js (for the AI helper in `app\pi_gateway`), to `C:\Program Files\SubZeroAI`;
 - creates `C:\ProgramData\SubZeroAI` for settings, chats, files, backups, and logs, readable only by administrators and the app's service account;
 - installs the **SubZero AI** Windows service under its own low-privilege account, set to start automatically;
 - asks for the Cloudflare tunnel token and installs the Cloudflare connector as a Windows service;
@@ -124,9 +124,48 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 - **Reboots and Windows updates.** Both services start on their own after a restart, with nobody signed in.
 - **Health.** The Settings page shows the Slack connection, Claude API status, the last backup, and whether an update is out. If Slack or Claude calls fail for 15 minutes, admins get a Slack DM, and another when it works again. Cloudflare's dashboard shows whether the tunnel is up. `http://localhost:8787/healthz` answers with the same status for scripts.
 - **If Slack sign-in breaks.** On the mini PC, open `http://localhost:8787/auth/recovery` and enter the recovery code to sign in as an admin. It doesn't work from anywhere else.
-- **Model changes.** When Anthropic retires a model, change the model ID on the Settings page. No code changes.
+- **Model changes.** When a company retires a model, change the model ID (`provider/model`) on the Settings page. No code changes. New default, hard-problem, and screener models must pass the model safety check first.
 
 **Monthly check** (about 10 minutes): open Settings and confirm everything says Working or Done, confirm last night's backup is listed, apply any available update, and check the Claude Console spend for the month.
+
+## AI providers and models
+
+By default every reply comes from Claude through Anthropic's API, exactly as in earlier versions. Version 0.5 can also use models from OpenAI, Google, and OpenRouter. Nothing changes until an admin turns it on, and the mentor approval flow (the approval window, the screener, MENTOR ALERT, and rejections) works the same with every model.
+
+**What `AI_BACKEND` does.** This setting in config.env picks the engine that talks to the AI companies. It is not on the Settings page, because switching it is an install-level choice.
+
+| Value | Meaning |
+| --- | --- |
+| `anthropic` (default) | The app talks to Claude directly, as before. Only `anthropic/` models work. |
+| `pi` | The app starts a small Node.js helper (the Pi gateway in `pi_gateway`, which ships with the Windows release) that can reach Anthropic, OpenAI, Google, and OpenRouter. |
+| `fake` | Pretend replies, for trying the app without keys. |
+
+**Switching to `pi`.** In `C:\ProgramData\SubZeroAI\config.env`, set `AI_BACKEND=pi`, restart the SubZero AI service, then run **check-settings.cmd** (or `python -m subzero_ai check`). It should say the AI helper works. If you run from a copy of the repository instead of the Windows release, install Node.js 22.19 or newer, run `npm ci --ignore-scripts` in `pi_gateway`, and set `PI_NODE` if `node` isn't on the PATH.
+
+**Model ids** are written as `provider/model`. Examples: `anthropic/claude-sonnet-5-5`, `openai/gpt-5`, `google/gemini-2.5-pro`, `openrouter/meta-llama/llama-3.3-70b-instruct`, and `claude-bridge/claude-sonnet-5-5` (see below). An older id like `claude-sonnet-5-5` is read as `anthropic/claude-sonnet-5-5`, and saved models and chats were updated that way when you upgraded. OpenRouter covers most other models with one key. The models you can pick are limited to providers that are turned on.
+
+**Turning providers on and saving keys.** An admin opens **Settings**, then the **AI providers** box. Tick the providers to allow, paste each provider's API key, and save. Keys go to `config.env` on the mini PC and are never shown again (leave a key box empty to keep the saved one). The change applies without a restart. Use a key with its own spend limit for each company, the same way the Claude key lives in a workspace with a monthly limit. Keys can also be set by hand in config.env: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, and the list `AI_PROVIDERS`. Only `AI_BACKEND=pi` can use the other companies.
+
+**The model safety check.** The safety rules and the MENTOR ALERT behavior were written and tested on Claude. So a model has to pass a check before it can become the **default model**, the **hard-problem model**, or the **screener model**. On the Settings page, the **Model safety check** box runs it for a model you name. From a terminal, `python -m subzero_ai check --model provider/model` does the same. The check:
+
+- sends a normal question, which must be answered without an alert;
+- sends a wellbeing message, whose reply must start with MENTOR ALERT;
+- asks for an unsafe shop shortcut and tries a prompt injection ("ignore your rules"), which a **judge model** grades (set by `MODEL_CHECK_JUDGE`, `anthropic/claude-sonnet-5-5` by default);
+- checks that the interactive explainer format is kept, and that the screener answers SAFE or REVIEW in the right shape (for a screener model).
+
+The judge's company must be turned on and have a key, or the check won't start. The result is saved with the date and who ran it. A judge model is a strong filter, not a guarantee: read the details on the Settings page, and test a new model yourself with the red-team questions in the Acceptance tests before students use it. **Claude models need the check too** when you choose a new one. Models already saved when you upgrade to 0.5 keep working without a check.
+
+**Features that need Claude.** Some tools depend on Anthropic's own features, so the composer only shows what the chat's model supports:
+
+- **Web search** and **Research**: Claude on `AI_BACKEND=anthropic` only. On other models and with `AI_BACKEND=pi`, the buttons are hidden and a forced request is refused with a plain message.
+- **Code sessions** (mentors): Anthropic Claude models only.
+- **Extended thinking** and **image attachments**: shown only when the model supports them.
+
+Normal chat, files that are text or code, explainers, the screener, and chat titles work on every model that passed the check.
+
+**Claude subscription (optional, off by default).** The `claude-bridge/` provider answers with one person's Claude Pro or Max subscription instead of an API key, through Claude Code on the mini PC. It counts against that person's subscription limits, so a busy day of student chats can use them up, and then replies pause until the limit resets. Caution: Anthropic's terms generally don't allow offering a claude.ai login inside another product without Anthropic's approval. Read the current terms before you turn it on. It stays off until an admin ticks **Claude subscription (Claude Code)** under AI providers, and the model still has to pass the safety check. To set it up, run the manual test in [docs/BRIDGE_SPIKE.md](docs/BRIDGE_SPIKE.md) first (about 30 minutes, on the mini PC), then sign in with `python -m subzero_ai claude-login` and follow that page. Keep an API-key model set up as a fallback. The bridge needs `AI_BACKEND=pi`. Its login is kept apart from the rest of the PC in `bridge\claude-config` in the data folder.
+
+**Going back.** Set `AI_BACKEND=anthropic` in config.env and restart the service. Chats stay as they are; chats whose model is from another company can't get replies until their model is changed to a Claude one. Everything else keeps working.
 
 ## Acceptance tests
 
@@ -209,8 +248,8 @@ Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` fo
 - Run the tests: `python -m pip install -r requirements-dev.txt` (or, for the exact versions that ship, `python -m pip install --no-deps -r packaging/requirements-lock.txt -r packaging/requirements-test.txt`), then `python -m unittest discover -s tests -t .`
 - `python -m subzero_ai --help` lists the commands.
 - Layout: `subzero_ai/web.py` (pages, actions, live updates), `web_admin.py` (Settings, setup, and recovery pages), `saved_settings.py`, `backup.py`, `maintenance.py` (nightly backup, retention, update check), `health.py`, `approvals.py` (the approval loop), `generation.py` (Claude replies), `slack_*.py` and `socket_mode.py` (Slack), `auth.py` (Sign in with Slack), `store.py` and `db.py` (SQLite).
-- The app talks to Slack and the Claude API over plain HTTPS with `requests`, and to Slack Socket Mode with `websockets`, through small adapters with test stand-ins, instead of the Slack Bolt and Anthropic SDKs. That keeps the dependency list short for the Windows packaging and lets the whole approval loop be tested offline.
+- The Python app talks to Slack and the Claude API over plain HTTPS with `requests`, and to Slack Socket Mode with `websockets`, through small adapters with test stand-ins, instead of the Slack Bolt and Anthropic SDKs. Other providers go through the Node.js Pi gateway in `pi_gateway` (`ai_backend.py` picks the engine and `pi_client.py` talks to it over stdin/stdout), which uses the `@earendil-works/pi-ai` package; the optional Claude subscription bridge uses the Claude Agent SDK. Gateway tests: `cd pi_gateway && node --test` (Node 22). That keeps the dependency list short for the Windows packaging and lets the whole approval loop be tested offline.
 - `python -m subzero_ai --help` also lists `backup`, `backups`, `restore`, `recovery-code`, and `reset-setup`.
-- **Windows release.** `python packaging/build_windows.py` builds `dist/SubZeroAI-windows.zip` on any OS: the embeddable Python 3.13, the packages pinned in `packaging/requirements-lock.txt` (installed for 64-bit Windows from `requirements-windows.txt`, which lists each wheel's SHA-256; refresh it with `--write-hashes` after changing the lock file), the [WinSW](https://github.com/winsw/winsw) service wrapper, cloudflared, and the scripts in `packaging/windows`. Every download is pinned by SHA-256. Pushing a tag like `v0.4.0` runs `.github/workflows/release.yml`, which tests, builds, and publishes the release that update.cmd downloads.
+- **Windows release.** `python packaging/build_windows.py` builds `dist/SubZeroAI-windows.zip` on any OS: the embeddable Python 3.13, Node.js (the official win-x64 zip, unpacked to `node\`) and the AI helper `pi_gateway` with its npm packages for 64-bit Windows (`npm ci --ignore-scripts` from the lock file, so the zip is about 255 MB; the build host needs Node.js and npm), the packages pinned in `packaging/requirements-lock.txt` (installed for 64-bit Windows from `requirements-windows.txt`, which lists each wheel's SHA-256; refresh it with `--write-hashes` after changing the lock file), the [WinSW](https://github.com/winsw/winsw) service wrapper, cloudflared, and the scripts in `packaging/windows`. Every download is pinned by SHA-256. The build fails if any path in the zip is too long for Explorer's Extract All. Pushing a tag like `v0.5.0` runs `.github/workflows/release.yml`, which tests, builds, and publishes the release that update.cmd downloads.
 - The Windows scripts are written for Windows PowerShell 5.1 and must stay ASCII-only.
 - Live updates use server-sent events. Each running app keeps them in memory, so run one copy of the app per database.

@@ -228,6 +228,29 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_code_steps ON code_steps(session_id, id);
     """,
+    # Version 11: model ids are provider/model, so bare claude-... ids become anthropic/claude-...
+    """
+    UPDATE conversations SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
+    UPDATE messages SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
+    UPDATE code_sessions SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
+    UPDATE settings SET value = 'anthropic/' || value
+        WHERE key IN ('model_default', 'model_hard', 'model_titles', 'model_screener') AND value LIKE 'claude-%';
+    """,
+    # Version 12: results of the Model safety check an admin runs before a model can be used
+    """
+    CREATE TABLE model_checks (
+        id INTEGER PRIMARY KEY,
+        model TEXT NOT NULL,
+        chat_passed INTEGER NOT NULL,
+        screener_passed INTEGER NOT NULL,
+        details TEXT NOT NULL,  -- JSON list of {case, passed, detail}; never the model's full replies
+        judge_model TEXT,
+        check_version INTEGER NOT NULL,
+        actor TEXT,
+        checked_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_model_checks_model ON model_checks (model, checked_at);
+    """,
 ]
 
 

@@ -14,17 +14,21 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import __version__, saved_settings, setup_flow
+from . import __version__, model_check, saved_settings, setup_flow
+from .ai_backend import resolve_backend
 from .backup import list_backups, size_text
-from .config import update_env_file
+from .config import PROVIDERS, update_env_file
 from .connectors import BRANCH_RE, REPO_RE, ConnectorError
+from .db import utcnow
 from .maintenance import update_available
+from .pi_client import KEY_SETTINGS, provider_keys, settings_bridge_env
 from .roles import RECOVERY_USER, is_excluded_account
 from .saved_settings import SLACK_ID_RE
 from .store import Viewer
 from .web import (
     Services,
     _finish_login,
+    _load_model_names,
     check_csrf,
     error_page,
     fmt_time,
@@ -110,6 +114,17 @@ def _names_for(s: Services, slack_ids) -> str:
     return ", ".join(names)
 
 
+KEY_HELP = {
+    "anthropic": "Create the key inside the SubZero AI workspace at platform.claude.com (Settings, API keys). "
+                 "It starts with sk-ant-.",
+    "openai": "Make a key at platform.openai.com, under API keys.",
+    "google": "Make a key at aistudio.google.com, with Get API key.",
+    "openrouter": "Make a key at openrouter.ai, under Keys.",
+}
+KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY",
+           "openrouter": "OPENROUTER_API_KEY"}
+
+
 def settings_context(s: Services, errors: dict[str, str] | None = None,
                      submitted: dict[str, str] | None = None) -> dict[str, Any]:
     sections = []
@@ -122,6 +137,10 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
             item = {"field": f, "value": value, "error": (errors or {}).get(f.name)}
             if f.kind == "ids":
                 item["people"] = _names_for(s, getattr(s.settings, f.name))
+            elif f.kind == "providers":
+                on = set(value.split())
+                item["choices"] = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "on": p in on,
+                                    "help": saved_settings.PROVIDER_HELP.get(p, "")} for p in PROVIDERS]
             items.append(item)
         sections.append({"key": key, "title": title, "fields": items})
     prompts = []
@@ -145,8 +164,25 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
                 "size": size_text(b.size)} for b in list_backups(s.settings)[:5]]
     connectors = {"repo": s.settings.connector_github_repo, "branch": s.settings.connector_github_branch,
                   "token_set": bool(s.settings.connector_github_token), "drive": s.settings.connector_drive_links}
-    return {"health": health_rows(s), "sections": sections, "prompts": prompts, "history": history,
+    ai_keys = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "field": KEY_SETTINGS[p],
+                "set": bool(getattr(s.settings, KEY_SETTINGS[p])), "help": KEY_HELP[p]}
+               for p in PROVIDERS if p in s.settings.ai_providers and p in KEY_SETTINGS]
+    return {"health": health_rows(s), "sections": sections, "ai_keys": ai_keys, "safety": safety_context(s),
+            "prompts": prompts, "history": history,
             "backups": backups, "backup_folder": str(s.settings.backups_path), "connectors": connectors}
+
+
+def safety_context(s: Services) -> dict[str, Any]:
+    """The Model safety check box: the latest result per model and the checks running now."""
+    rows = []
+    for r in model_check.latest_results(s.db):
+        rows.append({**r, "time": fmt_time(s.store, r["checked_at"]), "running": r["model"] in s.model_checks_running,
+                     "failed": [{"name": model_check.CASE_LABELS.get(c["case"], c["case"]), "detail": c["detail"]}
+                                for c in r["details"] if not c["passed"]]})
+    shown = {r["model"] for r in rows}
+    running = [{"model": m, "since": fmt_time(s.store, at)} for m, at in s.model_checks_running.items()]
+    return {"rows": rows, "running": running, "running_only": [r for r in running if r["model"] not in shown],
+            "default": s.settings.model_default}
 
 
 @page(require="admin")
@@ -163,18 +199,92 @@ async def save_section(request: Request, viewer: Viewer) -> Response:
     if section not in saved_settings.SECTIONS:
         return error_page(request, viewer, 404, "Not found", "That settings section doesn't exist.")
     form = await request.form()
-    values, errors = saved_settings.validate(section, form, actor_slack_id=viewer.slack_user_id)
+    values, errors = saved_settings.validate(section, form, actor_slack_id=viewer.slack_user_id,
+                                                    settings=s.settings, db=s.db)
     if errors:
-        submitted = {f.name: str(form.get(f.name, "")) for f in saved_settings.SECTIONS[section][1]}
+        submitted = {f.name: saved_settings.form_text(form, f.name) for f in saved_settings.SECTIONS[section][1]}
         return render(request, "settings.html", viewer, status_code=400,
                       flash="Some settings need fixing. They're marked below.",
                       **settings_context(s, errors, submitted))
     changed = saved_settings.save(s.db, s.settings, values, viewer.id)
     apply_live(s)
+    if "ai_providers" in changed:
+        use_new_bridge(s)
+        refresh_model_names(s)
     title = saved_settings.SECTIONS[section][0]
     title = "Claude settings" if section == "claude" else title.lower()
     flash(request, f"Saved {title}." if changed else f"Nothing changed in {title}.")
     return RedirectResponse(f"/settings#{section}", status_code=303)
+
+
+_background: set = set()
+
+
+def refresh_model_names(s: Services) -> None:
+    """Re-read the gateway's model names in the background (providers or keys changed). Never blocks or fails."""
+    if getattr(s.claude, "list_models", None) is None:
+        return
+    task = asyncio.get_running_loop().create_task(_load_model_names(s))
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
+def use_new_keys(s: Services) -> None:
+    """Hand the saved API keys to the running AI client, so they work without a restart."""
+    set_keys = getattr(s.claude, "set_keys", None)
+    if set_keys is not None:
+        set_keys(provider_keys(s.settings))
+
+
+def use_new_bridge(s: Services) -> None:
+    """Turn the Claude subscription models on or off in the running AI client, without a restart."""
+    set_bridge = getattr(s.claude, "set_bridge", None)
+    if set_bridge is not None:
+        set_bridge(settings_bridge_env(s.settings))
+
+
+def key_problem(provider: str, key: str) -> str:
+    """Why a typed API key can't be right, or an empty string. Only checks the shape, never the key itself."""
+    name = saved_settings.PROVIDER_LABELS[provider]
+    if re.search(r"\s", key):
+        return f"The {name} key has a space or line break in it. Paste it again on one line."
+    if not 16 <= len(key) <= 512:
+        return f"That doesn't look like a {name} key. Copy the whole key again."
+    if provider == "anthropic" and not key.startswith("sk-ant-"):
+        return "The Anthropic key starts with sk-ant-. Create it inside the SubZero AI workspace."
+    return ""
+
+
+@page(require="admin")
+async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
+    """Save API keys for the providers that are turned on. They go in config.env and are never shown again."""
+    s = services(request)
+    form = await request.form()
+    typed = {p: str(form.get(name, "") or "").strip() for p, name in KEY_SETTINGS.items()}
+    typed = {p: key for p, key in typed.items() if key}
+    problem = ""
+    for provider, key in typed.items():
+        if provider not in s.settings.ai_providers:
+            problem = (f"{saved_settings.PROVIDER_LABELS[provider]} isn't turned on. "
+                       "Turn it on under Claude settings first.")
+        else:
+            problem = key_problem(provider, key)
+        if problem:
+            break
+    if not typed:
+        problem = "Paste a key into at least one box."
+    if problem:
+        flash(request, f"Keys weren't saved. {problem}")
+        return RedirectResponse("/settings#ai-keys", status_code=303)
+    _save_config(s, {KEY_ENV[p]: key for p, key in typed.items()})
+    for provider, key in typed.items():
+        setattr(s.settings, KEY_SETTINGS[provider], key)
+    use_new_keys(s)
+    refresh_model_names(s)
+    names = [saved_settings.PROVIDER_LABELS[p] for p in typed]
+    s.db.audit("ai_key_saved", actor_id=viewer.id, details={"providers": list(typed)})
+    flash(request, "Saved the key for " + ", ".join(names) + ". It works from the next message.")
+    return RedirectResponse("/settings#ai-keys", status_code=303)
 
 
 GITHUB_URL_RE = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/\s]+/[^/#?\s]+)")
@@ -260,6 +370,43 @@ async def backup_now(request: Request, viewer: Viewer) -> Response:
     flash(request, f"Backed up to {name}." if name else
           "The backup failed. The health list says why; check that the backups folder exists.")
     return RedirectResponse("/settings#health", status_code=303)
+
+
+async def _run_safety_check(s: Services, model: str, actor_id: int, actor_name: str) -> None:
+    """The background job behind the Run button. Always clears the 'running' mark."""
+    try:
+        result = await model_check.run_model_check(s.claude, s.settings, model)
+        model_check.save_result(s.db, result, actor_name)
+        s.db.audit("model_check_done", actor_id=actor_id, details={
+            "model": model, "chat_passed": result.chat_passed, "screener_passed": result.screener_passed,
+            "failed": [c.case for c in result.failed], "check_version": result.check_version})
+    except Exception as exc:
+        log.exception("The model safety check on %s failed to run", model)
+        s.db.audit("model_check_done", actor_id=actor_id, details={
+            "model": model, "error": type(exc).__name__})
+    finally:
+        s.model_checks_running.pop(model, None)
+
+
+@page(require="admin")
+async def run_model_check(request: Request, viewer: Viewer) -> Response:
+    """Start the safety check as a background job: a full check takes longer than the tunnel waits."""
+    s = services(request)
+    form = await request.form()
+    model, problem = saved_settings.check_model(str(form.get("model", "") or ""), s.settings.ai_providers,
+                                                resolve_backend(s.settings))
+    if not problem:
+        problem = model_check.judge_problem(s.settings)
+    if not problem and model in s.model_checks_running:
+        problem = f"A safety check on {model} is already running."
+    if problem:
+        flash(request, f"The safety check didn't start. {problem}")
+        return RedirectResponse("/settings#model-check", status_code=303)
+    s.model_checks_running[model] = utcnow()
+    s.db.audit("model_check_started", actor_id=viewer.id, details={"model": model})
+    s.tasks.spawn(_run_safety_check(s, model, viewer.id, viewer.name), name=f"model-check-{model}")
+    flash(request, "Safety check started. Refresh in a minute.")
+    return RedirectResponse("/settings#model-check", status_code=303)
 
 
 # --------------------------------------------------------------------------- setup page
@@ -404,8 +551,13 @@ async def setup_step(request: Request) -> Response:
             except Exception as exc:
                 errors["claude"] = f"Claude didn't accept the key: {exc}"
             else:
-                _save_config(s, {"ANTHROPIC_API_KEY": key, "FAKE_CLAUDE": "0"})
+                updates = {"ANTHROPIC_API_KEY": key, "FAKE_CLAUDE": "0"}
+                if s.settings.ai_backend.strip().lower() == "fake":
+                    updates["AI_BACKEND"] = "anthropic"
+                    s.settings.ai_backend = "anthropic"
+                _save_config(s, updates)
                 s.settings.anthropic_api_key = key
+                use_new_keys(s)
                 notes["claude"] = f"The key works with {s.settings.model_default}."
 
     elif step == "admins":
@@ -479,8 +631,10 @@ async def recovery_login(request: Request) -> Response:
 admin_routes = [
     Route("/settings", settings_page),
     Route("/settings/backup", backup_now, methods=["POST"]),
+    Route("/settings/model-check", run_model_check, methods=["POST"]),
     Route("/settings/prompts/{layer}", save_prompt, methods=["POST"]),
     Route("/settings/connectors", save_connectors, methods=["POST"]),
+    Route("/settings/ai-keys", save_ai_keys, methods=["POST"]),
     Route("/settings/{section}", save_section, methods=["POST"]),
     Route("/setup", setup_page),
     Route("/setup/{step}", setup_step, methods=["POST"]),

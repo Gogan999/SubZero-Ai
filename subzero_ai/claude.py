@@ -13,6 +13,8 @@ from typing import Any
 
 import requests
 
+from .config import model_provider, normalize_model_id
+
 log = logging.getLogger("subzero.claude")
 
 API_VERSION = "2023-06-01"
@@ -117,6 +119,17 @@ def _error_message(resp: requests.Response) -> str:
         return f"HTTP {resp.status_code}: {resp.text[:300]}"
 
 
+def api_model(model: str) -> str:
+    """The model name Anthropic's API wants: the id without its anthropic/ prefix. Other providers need the Pi
+    backend."""
+    provider = model_provider(model)
+    if provider == "anthropic":
+        return normalize_model_id(model).split("/", 1)[1]
+    if provider:
+        raise ClaudeError(f"This chat's model ({model}) needs AI_BACKEND=pi.")
+    return model
+
+
 class ClaudeClient:
     def __init__(self, api_key: str, *, base_url: str = "https://api.anthropic.com",
                  session: requests.Session | None = None, max_retries: int = 2):
@@ -131,7 +144,7 @@ class ClaudeClient:
                      web_searches: int = 0) -> dict[str, Any]:
         """web_searches: let Claude search the web up to this many times for this reply (0 means no search)."""
         body: dict[str, Any] = {
-            "model": model,
+            "model": api_model(model),
             "max_tokens": max_tokens,
             # Cache the system prompt: it's identical across requests, so repeats bill at the cache-read rate.
             # system_extra goes after the cached part, so it doesn't spoil the cache for other requests.
@@ -147,6 +160,11 @@ class ClaudeClient:
         if stream:
             body["stream"] = True
         return body
+
+    def set_keys(self, keys: dict[str, str]) -> None:
+        """Use the Anthropic key from a new set of provider keys (other providers need the Pi backend)."""
+        if keys.get("anthropic"):
+            self.api_key = keys["anthropic"]
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -176,8 +194,13 @@ class ClaudeClient:
     async def stream(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
                      effort: str | None = None, system_extra: str | None = None,
                      web_searches: int = 0) -> AsyncIterator[StreamEvent]:
-        body = self.request_body(model=model, system=system, messages=messages, max_tokens=max_tokens,
-                                 effort=effort, stream=True, system_extra=system_extra, web_searches=web_searches)
+        try:
+            body = self.request_body(model=model, system=system, messages=messages, max_tokens=max_tokens,
+                                     effort=effort, stream=True, system_extra=system_extra,
+                                     web_searches=web_searches)
+        except ClaudeError as exc:
+            yield StreamEvent("error", error=str(exc))
+            return
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
         stop = threading.Event()

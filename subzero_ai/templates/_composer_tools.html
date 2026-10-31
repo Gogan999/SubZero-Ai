@@ -1,7 +1,7 @@
 {% from "_icons.html" import icon %}
 {% set research_ok = viewer.is_mentor or settings.research_for_students %}
 <div class="composer-tools">
-  <label class="tool-button attach" title="Attach files: code, text, PNG/JPG screenshots, or videos">
+  <label class="tool-button attach" title="{{ 'Attach files: code, text, PNG/JPG screenshots, or videos' if caps.images else 'Attach code or text files' }}">
     <input class="visually-hidden" type="file" name="files" multiple accept="{{ accept }}" data-files
       data-max-files="{{ max_files }}" data-max-bytes="{{ max_file_bytes }}"
       data-max-total="{{ max_message_bytes }}" data-max-frames="{{ max_frames }}" {% if waiting %}disabled{% endif %}>
@@ -12,13 +12,15 @@
     <div class="menu">
       <fieldset class="menu-group">
         <legend>Tools</legend>
-        {% if settings.web_search_enabled %}
+        {% if settings.web_search_enabled and caps.web_search %}
         <label class="menu-item toggle"><input type="checkbox" name="search" value="1" data-tool="Web search"> {{ icon('globe') }} <span>Web search<span class="menu-hint">Look up datasheets, rules and specs</span></span></label>
         {% if research_ok %}
         <label class="menu-item toggle"><input type="checkbox" name="research" value="1" data-tool="Research"> {{ icon('research') }} <span>Research<span class="menu-hint">A report built from many searches</span></span></label>
         {% endif %}
         {% endif %}
+        {% if caps.thinking %}
         <label class="menu-item toggle"><input type="checkbox" name="think" value="1" data-tool="Extended thinking"> {{ icon('think') }} <span>Extended thinking<span class="menu-hint">Think longer on hard problems</span></span></label>
+        {% endif %}
       </fieldset>
       <fieldset class="menu-group">
         <legend>{{ icon('style') }} Response style</legend>

@@ -30,9 +30,20 @@ PACKAGING = ROOT / "packaging"
 WINDOWS = PACKAGING / "windows"
 
 PYTHON_VERSION = "3.13.17"
+NODE_VERSION = "22.23.4"
+MIN_NPM = (9, 6)  # --os and --cpu for optional dependencies
+# update.ps1 unpacks the zip under %TEMP%\SZ-<yyyyMMdd-HHmmss>\u\ with Windows PowerShell 5.1, which fails past 259
+# characters. Assume the worst: a 30-character user name. Explorer's Extract All (about 45 characters in front,
+# C:\Users\<name>\Downloads\SubZeroAI-windows\) is then covered too.
+UPDATE_PREFIX = "C:\\Users\\" + "u" * 30 + "\\AppData\\Local\\Temp" + "\\SZ-20260101-120000\\u\\"
+PATH_LIMIT = 259
+PATH_PREFIX = len(UPDATE_PREFIX)
+GATEWAY_FILES = ("package.json", "package-lock.json", "gateway.mjs", "README.md")
 DOWNLOADS = {
     "python": (f"https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip",
                "9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb38"),
+    "node": (f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-win-x64.zip",
+             "cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20"),
     "winsw": ("https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe",
               "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da"),
     "cloudflared": ("https://github.com/cloudflare/cloudflared/releases/download/2026.10.3/"
@@ -92,6 +103,85 @@ def copy_text(src: Path, dest: Path) -> None:
         shutil.copy2(src, dest)
 
 
+def prune_node_modules(root: Path) -> int:
+    """Remove files the gateway never loads: type declarations (.d.ts, .d.mts, .d.cts), source maps, and every
+    node_modules/.bin folder. Keeps .ts sources (pi-claude-bridge loads its src/*.ts), docs and licenses. Returns the
+    number of files removed."""
+    removed = 0
+    for path in list(root.rglob("*")):
+        if path.is_symlink() or not path.exists():
+            continue
+        if path.is_dir() and path.name == ".bin" and path.parent.name == "node_modules":
+            removed += sum(1 for f in path.rglob("*") if f.is_file() or f.is_symlink())
+            shutil.rmtree(path)
+        elif path.is_file() and re.search(r"\.d\.[cm]?ts$|\.map$", path.name):
+            path.unlink()
+            removed += 1
+    return removed
+
+
+def long_zip_paths(names: list[str], prefix: int = PATH_PREFIX, limit: int = PATH_LIMIT) -> list[tuple[int, str]]:
+    """The zip paths that would pass `limit` characters once extracted under a folder `prefix` characters long,
+    longest first."""
+    bad = [(len(name) + prefix, name) for name in names if len(name) + prefix > limit]
+    return sorted(bad, reverse=True)
+
+
+def npm_version() -> tuple[str, tuple[int, ...]]:
+    """The build computer's npm program and its version. Stops with a plain message if it is missing or old."""
+    npm = shutil.which("npm")
+    if not npm:
+        raise SystemExit("npm isn't installed on this computer. Install Node.js 22 or newer (it includes npm) to build.")
+    out = subprocess.run([npm, "--version"], capture_output=True, text=True).stdout.strip()
+    found = re.match(r"(\d+)\.(\d+)", out)
+    if not found or (int(found.group(1)), int(found.group(2))) < MIN_NPM:
+        raise SystemExit(f"npm {out or '(unknown version)'} is too old; the build needs npm "
+                         f"{'.'.join(map(str, MIN_NPM))} or newer for --os and --cpu. Update Node.js.")
+    return npm, tuple(int(n) for n in found.groups())
+
+
+def add_node(stage: Path, cache: Path) -> None:
+    """Unpack the pinned Node.js zip into <stage>/node, without its top-level node-v<version>-win-x64 folder."""
+    node_dir = stage / "node"
+    top = f"node-v{NODE_VERSION}-win-x64/"
+    with zipfile.ZipFile(fetch("node", cache)) as zf:
+        for info in zf.infolist():
+            if not info.filename.startswith(top):
+                raise SystemExit(f"Unexpected file in the Node.js zip: {info.filename}")
+            rel = info.filename[len(top):]
+            if not rel:
+                continue
+            target = node_dir / rel
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(info))
+    if not (node_dir / "node.exe").is_file():
+        raise SystemExit("The Node.js zip has no node.exe.")
+
+
+def add_gateway(app: Path) -> None:
+    """Copy pi_gateway (not its tests or the dev machine's node_modules) and install its packages for 64-bit
+    Windows from the lock file, without running any install scripts."""
+    npm, _ = npm_version()
+    gateway = app / "pi_gateway"
+    gateway.mkdir(parents=True)
+    for name in GATEWAY_FILES:
+        shutil.copy2(ROOT / "pi_gateway" / name, gateway / name)
+    shutil.copytree(ROOT / "pi_gateway" / "lib", gateway / "lib")
+    print("Installing the AI helper's npm packages for Windows (from package-lock.json)")
+    subprocess.run([npm, "ci", "--ignore-scripts", "--omit=dev", "--os=win32", "--cpu=x64",
+                    "--no-audit", "--no-fund"], cwd=gateway, check=True)
+    print(f"Pruned {prune_node_modules(gateway / 'node_modules')} files (type declarations, source maps, .bin)")
+    sdk = gateway / "node_modules" / "@anthropic-ai"
+    if not (sdk / "claude-agent-sdk-win32-x64" / "claude.exe").is_file():
+        raise SystemExit("npm didn't install claude.exe (@anthropic-ai/claude-agent-sdk-win32-x64).")
+    other = sorted(p.name for p in sdk.glob("claude-agent-sdk-*") if p.name != "claude-agent-sdk-win32-x64")
+    if other:
+        raise SystemExit(f"npm installed packages for other systems: {', '.join(other)}.")
+
+
 def build(out_dir: Path, cache: Path) -> Path:
     version = app_version()
     stage = out_dir / f"SubZeroAI-{version}"
@@ -123,6 +213,10 @@ def build(out_dir: Path, cache: Path) -> Path:
         shutil.copy2(ROOT / name, app / name)
     shutil.copy2(PACKAGING / "requirements-lock.txt", app / "requirements-lock.txt")
 
+    # Node.js and the AI helper that runs on it
+    add_node(stage, cache)
+    add_gateway(app)
+
     # Service wrapper, Cloudflare connector, scripts, and the .cmd files people double-click
     (stage / "service").mkdir()
     shutil.copy2(fetch("winsw", cache), stage / "service" / "SubZeroAI.exe")
@@ -137,15 +231,23 @@ def build(out_dir: Path, cache: Path) -> Path:
     (stage / "VERSION").write_text(version + "\n", encoding="ascii")
     (stage / "release.json").write_text(json.dumps({
         "version": version, "repo": UPDATE_REPO, "asset": ASSET_NAME, "python": PYTHON_VERSION,
+        "node": NODE_VERSION,
     }, indent=2) + "\n", encoding="ascii")
 
     # Zip it, with everything inside one SubZeroAI-<version> folder
+    names = [f"{stage.name}/{p.relative_to(stage).as_posix()}" for p in sorted(stage.rglob("*")) if p.is_file()]
+    too_long = long_zip_paths(names)
+    if too_long:
+        shown = "\n".join(f"  {n} {p}" for n, p in too_long[:10])
+        raise SystemExit(f"{len(too_long)} paths in the zip are too long to unpack in the worst case (limit "
+                         f"{PATH_LIMIT} with {PATH_PREFIX} characters of folders in front); the longest is "
+                         f"{too_long[0][0]}:\n{shown}")
+    print(f"Longest path in the zip: {max(map(len, names))} characters (limit {PATH_LIMIT - PATH_PREFIX}, for the worst-case update folder)")
     archive = out_dir / ASSET_NAME
     archive.unlink(missing_ok=True)
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        for path in sorted(stage.rglob("*")):
-            if path.is_file():
-                zf.write(path, f"{stage.name}/{path.relative_to(stage).as_posix()}")
+        for name in names:
+            zf.write(out_dir / name, name)
     print(f"Built {archive} ({archive.stat().st_size / 1_048_576:.1f} MB)")
     print(f"SHA-256 {sha256(archive)}")
     return archive

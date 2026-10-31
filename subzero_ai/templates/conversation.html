@@ -62,6 +62,13 @@
       </div>
     </div>
     <p class="form-error" role="alert" hidden></p>
+    {% if viewer.is_mentor %}
+    {% set missing = [] %}
+    {% if not caps.web_search %}{% set _ = missing.append('search the web') %}{% endif %}
+    {% if not caps.thinking %}{% set _ = missing.append('think longer') %}{% endif %}
+    {% if not caps.images %}{% set _ = missing.append('read images') %}{% endif %}
+    {% if missing %}<p class="composer-note" data-model-note>This model can't {{ missing[:-1]|join(', ') ~ (' or ' if missing|length > 1 else '') ~ missing[-1] }}.</p>{% endif %}
+    {% endif %}
     <p class="composer-note">Attach code, text, screenshots or videos, up to {{ max_files }} files of 50 MB. Don't attach photos or videos of people. Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
   </form>
   {% else %}

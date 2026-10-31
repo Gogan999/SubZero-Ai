@@ -11,6 +11,7 @@ from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
 from .code_runner import CodeError
+from .config import normalize_model_id
 from .render import markdown_html
 from .store import Viewer
 from .web import Services, error_page, fmt_time, model_label, page, render, services
@@ -62,17 +63,26 @@ def step_view(s: Services, row) -> dict[str, Any]:
 def session_view(s: Services, row) -> dict[str, Any]:
     label, kind = STATUS_LABELS[row["status"]]
     return {"id": row["id"], "title": row["title"], "task": row["task"], "status": row["status"], "label": label,
-            "kind": kind, "owner": row["owner_name"], "model": model_label(row["model"]), "repo": row["repo"],
+            "kind": kind, "owner": row["owner_name"], "model": model_label(row["model"], s.model_names), "repo": row["repo"],
             "ref": row["ref"], "error": row["error"], "updated": fmt_time(s.store, row["updated_at"]),
             "created": fmt_time(s.store, row["created_at"]), "live": row["status"] in LIVE,
             "tokens": row["input_tokens"] + row["output_tokens"],
             "pending": row["pending"] if "pending" in row.keys() else 0}
 
 
+NO_CODE_MODEL = "Code sessions need a Claude model. An admin can pick one in Settings."
+
+
+def code_models(s: Services) -> list[tuple[str, str]]:
+    """The default and hard models that can run Code sessions (Claude models only), with their labels."""
+    return [(m, model_label(m, s.model_names)) for m in dict.fromkeys(
+        normalize_model_id(m) for m in (s.settings.model_default, s.settings.model_hard)) if s.capabilities(m).code]
+
+
 @page(require="mentor")
 async def code_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
-    models = [(m, model_label(m)) for m in dict.fromkeys([s.settings.model_default, s.settings.model_hard])]
+    models = code_models(s)
     return render(request, "code.html", viewer, sessions=[session_view(s, r) for r in s.code.list()],
                   available=s.code.available, models=models, commands=s.settings.code_commands,
                   error=request.session.pop("code_error", None))
@@ -82,9 +92,13 @@ async def code_page(request: Request, viewer: Viewer) -> Response:
 async def code_start(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
-    model = str(form.get("model", ""))
-    if model not in (s.settings.model_default, s.settings.model_hard):
-        model = s.settings.model_default
+    allowed = [m for m, _ in code_models(s)]
+    if not allowed:
+        request.session["code_error"] = NO_CODE_MODEL
+        return RedirectResponse("/code", status_code=303)
+    model = normalize_model_id(form.get("model", ""))
+    if model not in allowed:
+        model = allowed[0]
     try:
         session_id = s.code.start(viewer, str(form.get("task", "")), model)
     except CodeError as exc:

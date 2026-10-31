@@ -56,7 +56,36 @@ Not on screen yet. Add a placeholder only when work on one starts.
 - **Memory**: facts about the team's robot that Claude remembers across chats, edited by mentors like the prompt layers in Settings.
 - **Mentor dashboard**: approval times, busiest subteams, most-asked topics.
 
+## Pi backend follow-ups (0.5)
+
+- **Slack DMs (S1, stretch).** Let people message the bot in Slack. It must go through `ApprovalService.submit` like web messages, with no bypass.
+- **Bridge spike on the mini PC.** Run `docs/BRIDGE_SPIKE.md` end to end on the real machine before turning on the Claude subscription provider for students.
+- **Real-API tests for OpenAI and OpenRouter.** The suite uses fakes; run the model safety check and a few chats against live keys and record the results.
+- **F4b label nit.** Tidy the wording of the composer labels shown when a feature is unavailable for the chat's model.
+
+## Follow-ups for the AI providers work (0.5)
+
+- **Slack DMs (S1, stretch):** let students message the bot in Slack; each DM must go through `ApprovalService.submit`, the same as a web message.
+- **Bridge spike on the mini PC:** run `docs/BRIDGE_SPIKE.md` before turning on the Claude subscription provider for students.
+- **Real-API tests** for OpenAI and OpenRouter models through the Pi gateway (only Anthropic has been tried live; the suite uses fakes).
+- **Review-card labels** may still say "Web search" on a pending message after a model switch drops that feature. The reply is generated without it, but the card should say so.
+
 ## Done
+
+- AI providers (0.5): `AI_BACKEND` (anthropic, pi, fake) with the Node.js Pi gateway (`pi_gateway/`) and `PiClient`;
+  `provider/model` ids with a migration; an AI providers box and API keys on Settings; per-model feature gating
+  (web search, Research, Code, thinking, images); the model safety check (Settings box and `check --model`) that a
+  model must pass before it becomes the default, hard-problem or screener model; the optional Claude subscription
+  bridge (off by default, `claude-login`, `docs/BRIDGE_SPIKE.md`); Windows packaging with Node.js; and a backend
+  regression suite that runs the flow tests on all three backends.
+
+- Pi backend (0.5): `AI_BACKEND` (anthropic default, pi, fake) with the Node.js Pi gateway in `pi_gateway/` and `PiClient`;
+  `provider/model` ids (anthropic, openai, google, openrouter, claude-bridge) with a migration for saved models; the AI
+  providers setting and API keys box on Settings; per-model feature gating (web search, Research, Code, thinking,
+  images); the model safety check (Settings box and `check --model`) required before a model becomes the default,
+  hard-problem or screener model; the optional Claude subscription bridge (off by default, `claude-login`,
+  `docs/BRIDGE_SPIKE.md`); Windows packaging with Node.js; and the backend regression suite that runs the flow tests
+  against all three backends.
 
 - Code (`/code`, mentors only): a mentor gives Claude a task in the GitHub repository from Connectors.
   Claude works in a copy on the mini PC (downloaded as a zip, so git isn't needed). It lists, reads and

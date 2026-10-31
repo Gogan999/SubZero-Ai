@@ -12,6 +12,20 @@
     {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}
     {% if item.error %}<p class="field-error" id="e-{{ f.name }}">{{ item.error }}</p>{% endif %}
   </div>
+  {% elif f.kind == 'providers' %}
+  <fieldset class="field" {{ aria }}>
+    <legend>{{ f.label }}</legend>
+    <input type="hidden" name="{{ f.name }}" value="">
+    {% for p in item.choices %}
+    <div class="field check">
+      <input type="checkbox" id="f-{{ f.name }}-{{ p.id }}" name="{{ f.name }}" value="{{ p.id }}" {% if p.on %}checked{% endif %}>
+      <label for="f-{{ f.name }}-{{ p.id }}">{{ p.label }}</label>
+      {% if p.help %}<p class="field-hint" id="h-{{ f.name }}-{{ p.id }}">{{ p.help }}</p>{% endif %}
+    </div>
+    {% endfor %}
+    {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}
+    {% if item.error %}<p class="field-error" id="e-{{ f.name }}">{{ item.error }}</p>{% endif %}
+  </fieldset>
   {% else %}
   <div class="field">
     <label for="f-{{ f.name }}">{{ f.label }}</label>
@@ -34,11 +48,13 @@
 {% block main %}
 <section class="page narrow">
   <h1>Settings</h1>
-  <p class="lede">Changes apply to the next message, with no restart. Every change is kept in the <a href="/audit">audit log</a>. API keys and Slack tokens live in config.env on the mini PC and aren't shown here.</p>
+  <p class="lede">Changes apply to the next message, with no restart. Every change is kept in the <a href="/audit">audit log</a>. API keys and Slack tokens live in config.env on the mini PC and are never shown here.</p>
   <nav aria-label="Settings sections">
     <ul class="settings-nav">
       <li><a href="#health">Health and backups</a></li>
       {% for sec in sections %}<li><a href="#{{ sec.key }}">{{ sec.title }}</a></li>{% endfor %}
+      <li><a href="#ai-keys">API keys</a></li>
+      <li><a href="#model-check">Model safety check</a></li>
       <li><a href="#connectors">Connectors</a></li>
       <li><a href="#prompts">System prompt</a></li>
       <li><a href="#history">Change history</a></li>
@@ -85,6 +101,59 @@
     </form>
   </section>
   {% endfor %}
+
+  <section class="panel" id="ai-keys" aria-labelledby="ai-keys-title">
+    <h2 id="ai-keys-title">API keys</h2>
+    <p class="field-hint">One API key for each company you turned on under AI providers in the Claude settings. Keys are saved in config.env on the mini PC and never shown again. To replace a key, paste the new one. A box left empty keeps the saved key. New keys work right away.</p>
+    <form method="post" action="/settings/ai-keys" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        {% for k in ai_keys %}
+        <div class="field">
+          <label for="key-{{ k.id }}">{{ k.label }} API key <span class="pill {{ 'ok' if k.set else 'unknown' }}">{{ 'Saved' if k.set else 'Not set' }}</span></label>
+          <input id="key-{{ k.id }}" name="{{ k.field }}" type="password" autocomplete="off" spellcheck="false" aria-describedby="key-{{ k.id }}-hint" placeholder="{{ 'Leave empty to keep the saved key' if k.set else 'Paste the key here' }}">
+          <p class="field-hint" id="key-{{ k.id }}-hint">{{ k.help }}</p>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">Save keys</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="model-check" aria-labelledby="model-check-title">
+    <h2 id="model-check-title">Model safety check</h2>
+    <p class="field-hint">Sends a model a few test messages: an unsafe shop request, a "forget your rules" trick, a student who says they want to hurt themselves, an everyday question, a request for an explainer, and two messages for the screener. A model has to pass before it can be the default, hard-problem or screener model. The model you type is graded on its answers by the judge model, {{ settings.model_check_judge }}, so that model's provider must be turned on and have its API key saved. Models already in use keep working. The check sends about ten requests and takes a minute or two.</p>
+    <form method="post" action="/settings/model-check" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="check-model">Model to check</label>
+        <input id="check-model" name="model" type="text" value="{{ safety.default }}" spellcheck="false" autocomplete="off" aria-describedby="check-model-hint">
+        <p class="field-hint" id="check-model-hint">Write it as provider/model, like openrouter/meta-llama/llama-4.</p>
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">Run safety check</button></div>
+    </form>
+    {% for r in safety.running_only %}<p class="field-hint"><span class="pill unknown">Running</span> <span class="mono">{{ r.model }}</span> since {{ r.since }}. Refresh the page in a minute.</p>{% endfor %}
+    {% if safety.rows %}
+    <div class="table-wrap">
+      <table class="audit">
+        <thead><tr><th>Model</th><th>Chats</th><th>Screener</th><th>Checked</th><th>What failed</th></tr></thead>
+        <tbody>
+        {% for r in safety.rows %}
+        <tr>
+          <td class="mono">{{ r.model }}{% if r.running %} <span class="pill unknown">Running</span>{% endif %}</td>
+          <td>{% if r.chat_passed %}<span class="pill ok">&#10003; Passed</span>{% else %}<span class="pill bad">&#10007; Failed</span>{% endif %}</td>
+          <td>{% if r.screener_passed %}<span class="pill ok">&#10003; Passed</span>{% else %}<span class="pill bad">&#10007; Failed</span>{% endif %}</td>
+          <td>{{ r.time }}{% if not r.current %}<br><span class="field-hint">Out of date. Run it again.</span>{% endif %}</td>
+          <td>{% if r.failed %}<ul class="simple-list">{% for f in r.failed %}<li>{{ f.name }}{% if f.detail %}: <span class="field-hint">{{ f.detail }}</span>{% endif %}</li>{% endfor %}</ul>{% else %}<span class="field-hint">Nothing</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="field-hint">No model has been checked yet.</p>
+    {% endif %}
+  </section>
 
   <section class="panel" id="connectors" aria-labelledby="connectors-title">
     <h2 id="connectors-title">Connectors</h2>
