@@ -66,9 +66,12 @@ def sse(events: list[tuple[str, dict]]) -> str:
 
 class FakeMessagesSession:
     """Stands in for requests.Session. Answers POST /v1/messages from FakeClaude's scripted logic, as the Messages
-    API would. `calls` is FakeClaude's own record of what it was asked (model, system, messages, ...)."""
+    API would. `calls` is FakeClaude's own record of what it was asked (model, system, messages, ...). `chunk`
+    re-cuts the streamed text into pieces of that many characters. FakeClaude's search and sources events are
+    dropped here (the stream carries only text and usage)."""
 
-    def __init__(self):
+    def __init__(self, chunk: int = 0):
+        self.chunk = chunk
         self.fake = FakeClaude(delay=0)
         self.requests: list[dict] = []
 
@@ -115,8 +118,10 @@ class FakeMessagesSession:
                                             "content_block": {"type": "text", "text": ""}}))
         for e in events:
             if e.kind == "text":
-                out.append(("content_block_delta", {"type": "content_block_delta", "index": 0,
-                                                    "delta": {"type": "text_delta", "text": e.text}}))
+                size = self.chunk or len(e.text) or 1
+                for i in range(0, len(e.text), size):
+                    out.append(("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                                        "delta": {"type": "text_delta", "text": e.text[i:i + size]}}))
         out.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
         last = usages[-1] if len(usages) > 1 else {}
         out.append(("message_delta", {"type": "message_delta", "delta": {"stop_reason": last.get("stop_reason")},
@@ -128,8 +133,8 @@ class FakeMessagesSession:
 class RecordingClaudeClient(ClaudeClient):
     """The real client, talking to FakeMessagesSession. `calls` mirrors FakeClaude.calls."""
 
-    def __init__(self):
-        self.fake_session = FakeMessagesSession()
+    def __init__(self, chunk: int = 0):
+        self.fake_session = FakeMessagesSession(chunk)
         super().__init__("sk-test", session=self.fake_session)  # type: ignore[arg-type]
 
     @property
@@ -142,9 +147,11 @@ class RecordingPiClient(PiClient):
     """The real PiClient, talking to tests/fake_pi_gateway.py in "claude" mode. The gateway writes each request it
     receives to a file; `calls` reads it back in FakeClaude.calls' shape."""
 
-    def __init__(self, calls_file: Path):
+    def __init__(self, calls_file: Path, chunk: int = 0):
         env = child_env({"anthropic": "sk-test-key"})
         env.update(FAKE_PI_MODE="claude", FAKE_PI_CALLS=str(calls_file))
+        if chunk:
+            env["FAKE_PI_CHUNK"] = str(chunk)
         super().__init__([sys.executable, FAKE_GATEWAY], env)
         self.calls_file = calls_file
 

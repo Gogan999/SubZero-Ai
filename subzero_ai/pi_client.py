@@ -47,6 +47,7 @@ _BRIDGE_VARS = ("SUBZERO_BRIDGE", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "P
 
 _DEAD = object()  # put in a request's queue when the process exits under it
 _SHUTDOWN = object()  # same, when we closed the process on purpose
+MAX_TIMEOUTS = 3  # a gateway that times out this many requests in a row (ignoring aborts) is replaced
 
 
 def key_env_name(provider: str) -> str:
@@ -143,6 +144,12 @@ def resolve_node(configured: str = "", root: Path | str | None = None) -> str:
     return str(bundled) if bundled.is_file() else "node"
 
 
+def _shorten(text: str, limit: int = 200) -> str:
+    """Cut text a student will read to about `limit` characters, with an ellipsis. The full text goes in the log."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
 def error_message(code: str, detail: str, model: str) -> str:
     """Plain-language text for a gateway error record."""
     if code == "no_key":
@@ -158,7 +165,7 @@ def error_message(code: str, detail: str, model: str) -> str:
                 return LOGIN_MESSAGE
             if detail.startswith("Claude tried to use a tool"):
                 return detail
-        return f"The AI service returned an error: {detail}"
+        return f"The AI service returned an error: {_shorten(detail)}"
     if code == "aborted":
         return "The AI request was cancelled. Try again."
     return GENERIC_MESSAGE
@@ -184,6 +191,7 @@ class _Proc:
     closing: bool = False
     dead: bool = False
     retired: bool = False  # replaced by a newer process (new keys); stops when its last request finishes
+    timeouts: int = 0  # requests in a row that timed out; reset by one that finishes
 
 
 class PiClient:
@@ -312,6 +320,8 @@ class PiClient:
         with self._lock:
             pending = proc.pending.get(rid)
             known_abort = rid in proc.aborted
+            if known_abort and isinstance(item, dict) and item.get("kind") == "done":
+                proc.aborted.discard(rid)  # the gateway has finished with it; nothing more will come
         if pending is None:
             (log.debug if known_abort else log.warning)("The AI helper sent a record for unknown request %s", rid)
             return
@@ -337,6 +347,12 @@ class PiClient:
             log.warning("The AI helper exited unexpectedly (code %s)", code)
         for rid in waiting:
             self._deliver(proc, rid, _SHUTDOWN if proc.closing else _DEAD)
+        for stream in (proc.popen.stdin, proc.popen.stdout):  # stderr is closed by its own reader
+            try:
+                with proc.write_lock:
+                    stream.close()
+            except (OSError, ValueError, AttributeError):
+                pass
 
     def _drain_stderr(self, proc: _Proc) -> None:
         try:
@@ -347,6 +363,9 @@ class PiClient:
                     log.log(level, "gateway: %s", line)
         except Exception:
             pass
+        finally:
+            with contextlib.suppress(OSError, ValueError, AttributeError):
+                proc.popen.stderr.close()
 
     def _send(self, proc: _Proc, obj: dict[str, Any]) -> bool:
         """Write one request line. False if the process can't take it."""
@@ -375,6 +394,7 @@ class PiClient:
                     proc.pending[rid] = pending
                     break
         finished = False
+        timed_out = False
         try:
             if not self._send(proc, {"id": rid, **payload}):
                 finished = True  # nothing to abort
@@ -384,10 +404,12 @@ class PiClient:
             while True:
                 left = deadline - loop.time()
                 if left <= 0:
+                    timed_out = True
                     raise _Failure(SLOW_MESSAGE)
                 try:
                     item = await asyncio.wait_for(pending.queue.get(), min(self.idle_timeout, left))
                 except asyncio.TimeoutError:
+                    timed_out = True
                     raise _Failure(SLOW_MESSAGE if loop.time() >= deadline else IDLE_MESSAGE) from None
                 if item is _DEAD or item is _SHUTDOWN:
                     finished = True
@@ -395,6 +417,8 @@ class PiClient:
                 kind = item.get("kind")
                 if kind == "done":
                     finished = True
+                    with self._lock:
+                        proc.timeouts = 0
                     if failure is not None:
                         raise _Failure(failure)
                     return
@@ -403,6 +427,8 @@ class PiClient:
                     detail = str(item.get("error") or "")
                     if code not in ("provider", "no_key", "unknown_model", "aborted"):
                         log.warning("The AI helper rejected a request (%s): %s", code, detail)
+                    if code == "provider":
+                        log.info("The AI service returned an error: %s", detail)
                     failure = error_message(code, detail, model)
                     continue
                 yield item
@@ -412,6 +438,17 @@ class PiClient:
                 if not finished:
                     proc.aborted.add(rid)
                 last_one = proc.retired and not proc.pending and not proc.dead
+                deaf = False
+                if timed_out:
+                    proc.timeouts += 1
+                    if proc.timeouts >= MAX_TIMEOUTS and not proc.dead and not proc.closing:
+                        deaf = True  # it ignores aborts: stop it; the next request starts a fresh one
+                        proc.retired = proc.closing = True
+                        if self._proc is proc:
+                            self._proc = None
+            if deaf:
+                log.warning("The AI helper timed out %d requests in a row; restarting it", proc.timeouts)
+                self._stop_in_background(proc)
             if not finished and not proc.dead:
                 self._send(proc, {"id": rid, "op": "abort"})
             if last_one:
@@ -483,17 +520,21 @@ class PiClient:
 
     async def ping(self) -> dict[str, Any]:
         """The gateway's pong record (version, pi_ai, node). Raises ClaudeError if it doesn't answer."""
+        pong: dict[str, Any] | None = None
         try:
             async with contextlib.aclosing(self._records({"op": "ping"}, total=min(self.request_timeout, 30))) as recs:
-                async for record in recs:
+                async for record in recs:  # read to done, so closing early doesn't send a needless abort
                     if record.get("kind") == "pong":
-                        return record
+                        pong = record
         except _Failure as exc:
             raise ClaudeError(str(exc)) from None
-        raise ClaudeError(GENERIC_MESSAGE)
+        if pong is None:
+            raise ClaudeError(GENERIC_MESSAGE)
+        return pong
 
     async def list_models(self, providers: list[str] | None = None) -> list[dict[str, Any]]:
         """The models the gateway knows, optionally only for some providers."""
+        models: list[dict[str, Any]] | None = None
         payload: dict[str, Any] = {"op": "models"}
         if providers is not None:
             payload["providers"] = list(providers)
@@ -501,10 +542,12 @@ class PiClient:
             async with contextlib.aclosing(self._records(payload, total=min(self.request_timeout, 30))) as recs:
                 async for record in recs:
                     if record.get("kind") == "models":
-                        return list(record.get("models") or [])
+                        models = list(record.get("models") or [])
         except _Failure as exc:
             raise ClaudeError(str(exc)) from None
-        raise ClaudeError(GENERIC_MESSAGE)
+        if models is None:
+            raise ClaudeError(GENERIC_MESSAGE)
+        return models
 
     # ----------------------------------------------------------------- shutdown
     async def aclose(self) -> None:

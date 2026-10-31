@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
@@ -10,6 +11,9 @@ from .claude import ClaudeClient, ClaudeError, FakeClaude, StreamEvent
 from .config import PROVIDERS, Settings, model_provider, normalize_model_id  # noqa: F401 (re-exported)
 from .pi_client import PiClient
 
+log = logging.getLogger("subzero.ai")
+
+UNAVAILABLE_MESSAGE = "The AI isn't set up right now. Tell a mentor."
 BACKENDS = ("anthropic", "pi", "fake")
 
 
@@ -62,14 +66,17 @@ def resolve_backend(settings: Settings) -> str:
     """The backend name in use. FAKE_CLAUDE=1 is an alias for fake. May be an unknown string."""
     if settings.fake_claude:
         return "fake"
-    return settings.ai_backend.strip().lower()
+    return settings.ai_backend.strip().lower() or "anthropic"  # a blank AI_BACKEND= means the default
 
 
 class UnavailableClient:
-    """Stands in when the chosen backend can't run, so the service stays up and says why."""
+    """Stands in when the chosen backend can't run, so the service stays up. Students and mentors get a short
+    `message`; the admin-facing `detail` (what to fix in config.env) goes to the log once and to `check`."""
 
-    def __init__(self, message: str):
+    def __init__(self, detail: str, message: str = UNAVAILABLE_MESSAGE):
+        self.detail = detail
         self.message = message
+        log.error("The AI isn't available: %s", detail)
 
     async def stream(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
                      effort: str | None = None, system_extra: str | None = None,

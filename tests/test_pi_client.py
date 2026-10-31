@@ -215,6 +215,53 @@ class FailureTest(PiClientCase):
         self.assertIn("stopped answering", events[0].error)
         self.assertEqual(len((await self.seen(c))["aborted"]), 1)
 
+    async def test_ping_and_models_send_no_abort(self):
+        c = self.client()
+        await c.ping()
+        await c.list_models()
+        self.assertEqual((await self.seen(c))["aborted"], [])
+
+    async def test_aborted_ids_are_dropped_when_done_arrives(self):
+        c = self.client(idle_timeout=0.2)
+        await self.stream(c, "fake/hang")
+        proc = c._proc
+        for _ in range(50):
+            if not proc.aborted:
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual(proc.aborted, set())
+
+    async def test_gateway_that_ignores_aborts_is_replaced_after_three_timeouts(self):
+        c = self.client(idle_timeout=0.2)
+        first = (await self.seen(c))["pid"]
+        for _ in range(2):
+            with self.assertRaisesRegex(ClaudeError, "stopped answering"):
+                await self.complete(c, "fake/deaf")
+        self.assertIs(c._proc.popen.poll(), None)  # two in a row isn't enough
+        with self.assertRaisesRegex(ClaudeError, "stopped answering"):
+            await self.complete(c, "fake/deaf")
+        self.assertNotEqual((await self.seen(c))["pid"], first)
+
+    async def test_a_finished_request_resets_the_timeout_count(self):
+        c = self.client(idle_timeout=0.2)
+        first = (await self.seen(c))["pid"]
+        for _ in range(2):
+            with self.assertRaises(ClaudeError):
+                await self.complete(c, "fake/deaf")
+        await self.complete(c)
+        for _ in range(2):
+            with self.assertRaises(ClaudeError):
+                await self.complete(c, "fake/deaf")
+        self.assertEqual((await self.seen(c))["pid"], first)
+
+    async def test_provider_error_text_is_cut_for_students(self):
+        from subzero_ai.pi_client import error_message
+        long = "x" * 500
+        text = error_message("provider", long, "fake/m")
+        self.assertLess(len(text), 260)
+        self.assertTrue(text.endswith("…"))
+        self.assertIn("boom", error_message("provider", "boom", "fake/m"))
+
     async def test_total_timeout(self):
         c = self.client(idle_timeout=5, request_timeout=0.4)
         with self.assertRaisesRegex(ClaudeError, "took too long"):

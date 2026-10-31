@@ -3,7 +3,9 @@ chosen by its model name (fake/echo, fake/slow, ...). No Node, no network.
 
 With FAKE_PI_MODE=claude, every request is instead answered by FakeClaude's scripted logic (the same replies, magic
 words and screener verdicts as the offline app), whatever the model. FAKE_PI_CALLS names a file where each request is
-appended as one JSON line, in the shape of FakeClaude.calls."""
+appended as one JSON line, in the shape of FakeClaude.calls. FAKE_PI_CHUNK=n re-cuts the streamed text into pieces of
+n characters (to test things that span chunks). In claude mode FakeClaude's search and sources events are dropped (pi
+has no web search), and the recorded calls say web_searches=0, as the real gateway reports."""
 
 from __future__ import annotations
 
@@ -82,7 +84,9 @@ def handle_as_claude(rid: str, req: dict) -> None:
             async def run() -> None:
                 async for event in fake.stream(system_extra=req.get("system_extra"), **args):
                     if event.kind == "text":
-                        emit(id=rid, kind="text", text=event.text)
+                        size = int(os.environ.get("FAKE_PI_CHUNK") or 0) or len(event.text) or 1
+                        for i in range(0, len(event.text), size):
+                            emit(id=rid, kind="text", text=event.text[i:i + size])
                     elif event.kind == "usage":
                         emit(id=rid, kind="usage", usage=event.usage)
                     elif event.kind == "error":
@@ -137,6 +141,8 @@ def handle(req: dict) -> None:
             reply(rid, req, "fine")
         elif name == "hang":
             event.wait()
+        elif name == "deaf":  # ignores aborts, never finishes
+            threading.Event().wait()
         elif name == "drip":  # keeps talking, never finishes
             while not event.wait(0.03):
                 emit(id=rid, kind="text", text=".")

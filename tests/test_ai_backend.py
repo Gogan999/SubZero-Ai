@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
 import re
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from subzero_ai.ai_backend import (BACKENDS, Capabilities, UnavailableClient, capabilities_for, make_client,
-                                   resolve_backend)
+from subzero_ai.ai_backend import (BACKENDS, UNAVAILABLE_MESSAGE, AIBackend, Capabilities, UnavailableClient,
+                                   capabilities_for, make_client, resolve_backend)
 from subzero_ai.checks import FAIL, WARN, run_checks
 from subzero_ai.claude import ClaudeClient, ClaudeError, FakeClaude
 from subzero_ai.config import load_settings, parse_env_file
@@ -53,23 +55,47 @@ class FactoryTest(unittest.TestCase):
 
     def test_unknown_is_unavailable(self):
         self.assertIsInstance(make_client(settings_with(ai_backend="xyz")), UnavailableClient)
-        message = make_client(settings_with(ai_backend="xyz")).message
-        self.assertIn("AI_BACKEND=xyz", message)
-        self.assertIn("anthropic, pi or fake", message)
+        client = make_client(settings_with(ai_backend="xyz"))
+        self.assertIn("AI_BACKEND=xyz", client.detail)
+        self.assertIn("anthropic, pi or fake", client.detail)
+        self.assertEqual(client.message, "The AI isn't set up right now. Tell a mentor.")
+        self.assertNotIn("config.env", client.message)
+
+    def test_blank_backend_means_anthropic(self):
+        for blank in ("", "   "):
+            s = settings_with(ai_backend=blank)
+            self.assertEqual(resolve_backend(s), "anthropic")
+            self.assertIsInstance(make_client(s), ClaudeClient)
         self.assertEqual(BACKENDS, ("anthropic", "pi", "fake"))
 
 
 class UnavailableClientTest(unittest.TestCase):
+    def test_students_get_the_short_message_and_the_detail_is_logged(self):
+        logging.disable(logging.NOTSET)  # tests/__init__ turns logging off
+        self.addCleanup(logging.disable, logging.CRITICAL)
+        with self.assertLogs("subzero.ai", "ERROR") as logs:
+            client = UnavailableClient("Fix AI_BACKEND in config.env")
+        self.assertIn("Fix AI_BACKEND in config.env", logs.output[0])
+        self.assertEqual(client.message, UNAVAILABLE_MESSAGE)
+        events = asyncio.run(self._events(client))
+        self.assertEqual([e.error for e in events], [UNAVAILABLE_MESSAGE])
+        with self.assertRaisesRegex(ClaudeError, "Tell a mentor"):
+            asyncio.run(client.complete(model="m", system="s", messages=[], max_tokens=10))
+
+    @staticmethod
+    async def _events(client):
+        return [e async for e in client.stream(model="m", system="s", messages=[], max_tokens=10)]
+
     def test_stream_reports_error_and_stops(self):
         async def run():
-            return [e async for e in UnavailableClient("nope").stream(
+            return [e async for e in UnavailableClient("detail", "nope").stream(
                 model="m", system="s", messages=[], max_tokens=10)]
 
         events = asyncio.run(run())
         self.assertEqual([(e.kind, e.error) for e in events], [("error", "nope")])
 
     def test_complete_and_tool_turn_raise(self):
-        client = UnavailableClient("nope")
+        client = UnavailableClient("detail", "nope")
         with self.assertRaisesRegex(ClaudeError, "nope"):
             asyncio.run(client.complete(model="m", system="s", messages=[], max_tokens=10))
         with self.assertRaisesRegex(ClaudeError, "nope"):
@@ -96,11 +122,17 @@ class CapabilitiesTest(unittest.TestCase):
         with self.assertRaises(Exception):
             capabilities_for("claude-x").tools = False  # type: ignore[misc]
 
-    def test_clients_have_the_protocol_methods(self):
+    def test_clients_match_the_protocol_signatures(self):
+        def shape(func):
+            return [(p.name, p.kind, p.default) for p in inspect.signature(func).parameters.values()
+                    if p.name != "self"]
+
         pi = make_client(settings_with(ai_backend="pi"))
         for client in (FakeClaude(), ClaudeClient("k"), UnavailableClient("x"), pi):
             for name in ("stream", "complete", "tool_turn"):
                 self.assertTrue(callable(getattr(client, name)), (type(client), name))
+                self.assertEqual(shape(getattr(client, name)), shape(getattr(AIBackend, name)),
+                                 (type(client).__name__, name))
 
 
 class CheckTest(unittest.TestCase):

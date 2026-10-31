@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from subzero_ai.claude import FakeClaude, StreamEvent
-
 from subzero_ai.web import COMING_SOON
 
-from .backends import add_variants
+from .backends import RecordingClaudeClient, RecordingPiClient, add_variants
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 
@@ -615,6 +618,34 @@ class ReplyProblemsTest(unittest.TestCase):
 
 # The same tests again on the other AI backends (tests/backends.py). Tests that inject behavior by subclassing
 # FakeClaude stay fake-only.
+class SplitAlertTest(unittest.TestCase):
+    """The [MENTOR ALERT] marker arriving in small pieces on the real Anthropic and Pi clients (the fake-only
+    version is ReplyProblemsTest.test_alert_marker_split_across_chunks)."""
+
+    def tearDown(self):
+        self.h.close()
+
+    def check(self, claude):
+        self.h = Harness(claude=claude)
+        kim = self.h.login(MENTOR)
+        mid = kim.new_chat("ALERT-TEST I feel awful").json()["message_id"]
+        self.h.idle()
+        reply = self.h.reply_to(mid)
+        self.assertNotIn("MENTOR ALERT", reply["content"])
+        self.assertTrue(reply["content"].startswith("That sounds like a lot to carry."))
+        self.assertEqual(self.h.services.store.conversation(reply["conversation_id"])["visibility"], "private")
+
+    def test_anthropic(self):
+        self.check(RecordingClaudeClient(chunk=3))
+
+    def test_pi(self):
+        tmp = Path(tempfile.mkdtemp(prefix="subzero-split-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        client = RecordingPiClient(tmp / "calls.jsonl", chunk=3)
+        self.addCleanup(lambda: asyncio.run(client.aclose()))
+        self.check(client)
+
+
 add_variants(globals(), FlowTest, ReplyProblemsTest, fake_only={
     "FlowTest": {"test_claude_html_is_not_rendered"},
     "ReplyProblemsTest": {"test_failed_reply_can_be_retried_without_new_approval",
