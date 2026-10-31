@@ -15,6 +15,28 @@ from .store import MENTOR_ROLES, PENDING, Store, Viewer
 log = logging.getLogger("subzero.slack")
 
 
+async def viewer_for_slack_user(store: Store, slack, slack_user_id: str, role: str,
+                                info: dict[str, Any] | None = None) -> Viewer:
+    """The app account for a Slack member: created from their Slack profile the first time (pass `info` if the
+    profile was already fetched), and given the role they have now."""
+    row = store.user_by_slack_id(slack_user_id)
+    if row is None:
+        name, avatar = slack_user_id, None
+        try:
+            if info is None:
+                info = await slack.user_info(slack_user_id)
+            profile = info.get("profile") or {}
+            name = profile.get("display_name") or profile.get("real_name") or info.get("real_name") or name
+            avatar = profile.get("image_72")
+        except Exception:
+            log.warning("Couldn't look up Slack user %s", slack_user_id, exc_info=True)
+        row = store.upsert_user(slack_user_id=slack_user_id, name=name, role=role, avatar_url=avatar)
+    elif row["role"] != role:
+        store.set_user_role(row["id"], role)
+    return Viewer(id=row["id"], slack_user_id=slack_user_id, name=row["name"], role=role,
+                  avatar_url=row["avatar_url"])
+
+
 class SlackInteractions:
     def __init__(self, *, settings: Settings, store: Store, approvals: ApprovalService, directory: Directory,
                  slack, tasks: Tasks):
@@ -24,9 +46,15 @@ class SlackInteractions:
         self.directory = directory
         self.slack = slack
         self.tasks = tasks
+        self.dms = None  # SlackDMs, set by build_services
 
     async def dispatch(self, envelope: dict[str, Any]) -> dict[str, Any] | None:
         """Called for every Socket Mode envelope. Must return quickly: the return value is the acknowledgement."""
+        if envelope.get("type") == "events_api":
+            event = (envelope.get("payload") or {}).get("event") or {}
+            if self.dms is not None and event.get("type") == "message" and event.get("channel_type") == "im":
+                self.tasks.spawn(self.dms.handle_event(event), name="slack-dm")
+            return None
         if envelope.get("type") != "interactive":
             return None
         payload = envelope.get("payload") or {}
@@ -45,21 +73,7 @@ class SlackInteractions:
         role = await self.directory.role_for(slack_user_id, force=fresh)
         if role not in MENTOR_ROLES:
             return None
-        row = self.store.user_by_slack_id(slack_user_id)
-        if row is None:
-            name, avatar = slack_user_id, None
-            try:
-                info = await self.slack.user_info(slack_user_id)
-                profile = info.get("profile") or {}
-                name = profile.get("display_name") or profile.get("real_name") or info.get("real_name") or name
-                avatar = profile.get("image_72")
-            except Exception:
-                log.warning("Couldn't look up Slack user %s", slack_user_id, exc_info=True)
-            row = self.store.upsert_user(slack_user_id=slack_user_id, name=name, role=role, avatar_url=avatar)
-        elif row["role"] != role:
-            self.store.set_user_role(row["id"], role)
-        return Viewer(id=row["id"], slack_user_id=slack_user_id, name=row["name"], role=role,
-                      avatar_url=row["avatar_url"])
+        return await viewer_for_slack_user(self.store, self.slack, slack_user_id, role)
 
     async def _tell(self, channel: str | None, user: str, text: str) -> None:
         try:

@@ -70,17 +70,18 @@ def slack_manifest(settings: Settings, public_url: str | None = None) -> dict:
         },
         "features": {
             "app_home": {"home_tab_enabled": False, "messages_tab_enabled": True,
-                         "messages_tab_read_only_enabled": True},
+                         "messages_tab_read_only_enabled": False},
             "bot_user": {"display_name": settings.app_name, "always_online": True},
         },
         "oauth_config": {
             "redirect_urls": [base + "/auth/slack/callback"],
             "scopes": {
-                "bot": ["chat:write", "im:write", "groups:read", "users:read"],
+                "bot": ["chat:write", "im:write", "im:history", "groups:read", "users:read"],
                 "user": ["openid", "email", "profile"],
             },
         },
         "settings": {
+            "event_subscriptions": {"bot_events": ["message.im"]},
             "interactivity": {"is_enabled": True},
             "org_deploy_enabled": False,
             "socket_mode_enabled": True,

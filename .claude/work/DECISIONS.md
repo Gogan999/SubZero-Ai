@@ -38,3 +38,18 @@
 - D36 (F6): The release stays one zip. Node.js v22.23.4 (official win-x64 zip, SHA-256 cbc74b5e…5f20 from nodejs.org SHASUMS256) unpacks to `<install>\node\`, and the gateway with its win32-x64 node_modules (`npm ci --ignore-scripts --omit=dev --os=win32 --cpu=x64`) goes to `<install>\app\pi_gateway\`, so the Claude Code binary for the bridge (~320 MiB) is included. That makes the zip much bigger, but users keep downloading one file, and the bridge still starts off. `PI_NODE` empty (the new default) means `<install>\node\node.exe` if it's there, otherwise `node` on PATH.
 - D37 (F6): At build time, prune `*.d.ts`/`*.d.mts`/`*.d.cts`, `*.map` and `node_modules/.bin` from the gateway's node_modules. Keep every `.ts` source (the bridge is loaded through jiti), every README/docs file (pi-coding-agent reads them) and every LICENSE/NOTICE. update.ps1 unpacks to a short temp path (`SZ-<stamp>\\u`), and the build's path guard uses the worst-case update prefix (~100 chars) with a 259 limit. That roughly halves the file count, and updates keep working for long Windows usernames.
 - D38 (F7): The regression suite runs the existing flow tests (test_flow, test_approval_window, test_slack_interactions) against three backends through one mixin/parameter: FakeClaude directly; ClaudeClient with a fake requests.Session that turns FakeClaude's canned behaviour (magic words included) into Anthropic SSE/JSON; and PiClient with tests/fake_pi_gateway.py in a 'fakeclaude' mode that does the same over the gateway protocol. Every backend sees the same scripted model behaviour, so any difference in the results comes from the client and transport code, not from the replies.
+
+## S1 Slack DMs (2026-10-31, after PR #11 merged)
+- D39. New `subzero_ai/slack_dm.py` (`SlackDMs`); `SlackInteractions.dispatch` routes `events_api` message.im envelopes to it, acks at once, works in a spawned task.
+- D40. Ignore subtypes, bot messages, the bot's own user and empty text; dedupe Slack retries on (channel, ts) before submitting.
+- D41. One chat per Slack thread (Q6). Top-level DM starts a chat; a thread reply continues the linked chat; an unlinked thread gets a "start a new message" note.
+- D42. Migration v13: `slack_threads` (conversation ↔ channel/thread_ts) and `slack_dm_messages` (channel, ts → message).
+- D43. Who can DM: `Directory.role_for` plus `is_excluded_account`; same user upsert as reviewers (shared helper); submit through `ApprovalService.submit` unchanged.
+- D44. Thread notes: errors show the Outcome message; pending gets "A mentor will check this…" and, for a new chat, a website link noting the team can see approved chats.
+- D45. Files by DM are refused with a pointer to the website.
+- D46. `ReplyRunner.on_reply` / `on_reply_done` hooks; placeholder then updates at most every 3 s, final text at the end; only for messages that came in by DM.
+- D47. Small Markdown → Slack mrkdwn converter, 3500-char chunks; explainers become a website link; sources listed.
+- D48. Outcome of review for DM messages posted in the thread through a hook (rejection reason student-only; edited note).
+- D49. `SLACK_DMS` setting (default on), admin-overridable.
+- D50. Manifest: writable Messages tab, `im:history`, `message.im` event; README permissions + student-facing section; Logan reinstalls the app.
+- D51. `ApprovalService.submit(on_saved=...)` callback, called right after the message is saved and before the reply or card; SlackDMs saves its thread/message links there, so no retry/wait race handling. A failing hook is logged and never blocks review or the reply.

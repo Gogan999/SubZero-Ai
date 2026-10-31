@@ -56,16 +56,8 @@ Not on screen yet. Add a placeholder only when work on one starts.
 - **Memory**: facts about the team's robot that Claude remembers across chats, edited by mentors like the prompt layers in Settings.
 - **Mentor dashboard**: approval times, busiest subteams, most-asked topics.
 
-## Pi backend follow-ups (0.5)
-
-- **Slack DMs (S1, stretch).** Let people message the bot in Slack. It must go through `ApprovalService.submit` like web messages, with no bypass.
-- **Bridge spike on the mini PC.** Run `docs/BRIDGE_SPIKE.md` end to end on the real machine before turning on the Claude subscription provider for students.
-- **Real-API tests for OpenAI and OpenRouter.** The suite uses fakes; run the model safety check and a few chats against live keys and record the results.
-- **F4b label nit.** Tidy the wording of the composer labels shown when a feature is unavailable for the chat's model.
-
 ## Follow-ups for the AI providers work (0.5)
 
-- **Slack DMs (S1, stretch):** let students message the bot in Slack; each DM must go through `ApprovalService.submit`, the same as a web message.
 - **Bridge spike on the mini PC:** run `docs/BRIDGE_SPIKE.md` before turning on the Claude subscription provider for students.
 - **Real-API tests** for OpenAI and OpenRouter models through the Pi gateway (only Anthropic has been tried live; the suite uses fakes).
 - **Review-card labels** may still say "Web search" on a pending message after a model switch drops that feature. The reply is generated without it, but the card should say so.
@@ -131,3 +123,6 @@ Not on screen yet. Add a placeholder only when work on one starts.
 - Model picker in the composer for mentors.
 - Video attachments (MP4, MOV, WebM) and a 50 MB per-file limit (90 MB per message, under Cloudflare's 100 MB cap). Claude can't watch video, so the browser sends it up to 8 still frames per video.
 - Attachments, interactive explainers and the mentor approval flow (versions 0.2 to 0.4).
+- Slack DMs (0.6): people can message the bot in Slack. Each top-level DM starts a chat and its Slack thread continues
+  it; every DM goes through `ApprovalService.submit` like a web message, and the reply is posted back in the thread
+  (`subzero_ai/slack_dm.py`, `SLACK_DMS` setting, `im:history` scope and `message.im` event).

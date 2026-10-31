@@ -392,6 +392,38 @@ class Store:
     def mark_reminded(self, message_id: int) -> None:
         self.db.execute("UPDATE slack_cards SET reminded_at = ? WHERE message_id = ?", (utcnow(), message_id))
 
+    # -------------------------------------------------------------- slack DMs
+    def claim_dm_event(self, channel: str, ts: str) -> bool:
+        """Remember a Slack message. False when it was seen before (Slack delivered it twice)."""
+        cur = self.db.execute("INSERT OR IGNORE INTO slack_dm_messages (channel, ts, created_at) VALUES (?, ?, ?)",
+                              (channel, ts, utcnow()))
+        return cur.rowcount > 0
+
+    def release_dm_event(self, channel: str, ts: str) -> None:
+        """Forget a Slack message that couldn't be processed, so Slack's retry is handled."""
+        self.db.execute("DELETE FROM slack_dm_messages WHERE channel = ? AND ts = ? AND message_id IS NULL",
+                        (channel, ts))
+
+    def link_dm_message(self, channel: str, ts: str, message_id: int) -> None:
+        self.db.execute("UPDATE slack_dm_messages SET message_id = ? WHERE channel = ? AND ts = ?",
+                        (message_id, channel, ts))
+
+    def dm_message(self, message_id: int) -> sqlite3.Row | None:
+        """Where a message came in from Slack, or None if it was sent on the website."""
+        return self.db.one("SELECT * FROM slack_dm_messages WHERE message_id = ?", (message_id,))
+
+    def link_slack_thread(self, conversation_id: int, channel: str, thread_ts: str) -> None:
+        self.db.execute("INSERT OR IGNORE INTO slack_threads (conversation_id, channel, thread_ts) VALUES (?, ?, ?)",
+                        (conversation_id, channel, thread_ts))
+
+    def slack_thread(self, conversation_id: int) -> sqlite3.Row | None:
+        return self.db.one("SELECT * FROM slack_threads WHERE conversation_id = ?", (conversation_id,))
+
+    def conversation_in_thread(self, channel: str, thread_ts: str) -> int | None:
+        row = self.db.one("SELECT conversation_id FROM slack_threads WHERE channel = ? AND thread_ts = ?",
+                          (channel, thread_ts))
+        return row["conversation_id"] if row else None
+
     # ------------------------------------------------------------------ audit
     def audit_entries(self, limit: int = 300) -> list[sqlite3.Row]:
         return self.db.all(
