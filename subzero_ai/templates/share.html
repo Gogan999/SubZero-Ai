@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Share {{ title }} · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <p class="crumbs"><a href="/c/{{ conv.id }}">{{ title }}</a></p>
+  <h1>Share this chat</h1>
+  <p class="lede">Make a read-only link for someone outside the team, such as a parent. It shows the chat as it is now: approved messages and Claude's replies, with people shown as "Student" or "Mentor" instead of by name, and no attached files.</p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <section class="panel" aria-labelledby="new-share-title">
+    <h2 id="new-share-title">New link</h2>
+    <form method="post" action="/c/{{ conv.id }}/share">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="share-audience">Who is it for?</label>
+        <input id="share-audience" name="audience" maxlength="120" required placeholder="My parents" value="{{ audience }}" aria-describedby="share-audience-hint">
+        <p class="field-hint" id="share-audience-hint">{% if viewer.is_mentor %}Your link works straight away.{% else %}A mentor sees this and approves the link before it works.{% endif %} Links stop working after {{ days }} days, and you can revoke one any time.</p>
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">{{ icon('share') }} {{ 'Make link' if viewer.is_mentor else 'Ask for a link' }}</button></div>
+    </form>
+  </section>
+  <section class="panel" aria-labelledby="links-title">
+    <h2 id="links-title">Links</h2>
+    {% if links %}
+    <ul class="share-links">
+      {% for link in links %}
+      <li class="share-link">
+        <div class="share-link-head">
+          <span class="share-for">For {{ link.audience }}</span>
+          <span class="pill {{ {'active': 'ok', 'pending': 'pending', 'declined': 'bad'}.get(link.state, 'unknown') }}">{{ link.label }}</span>
+        </div>
+        {% if link.state == 'active' %}
+        <div class="share-url">
+          <label class="visually-hidden" for="share-url-{{ link.id }}">Link for {{ link.audience }}</label>
+          <input id="share-url-{{ link.id }}" value="{{ link.url }}" readonly>
+          <button class="button small" type="button" data-copy-value="#share-url-{{ link.id }}">Copy</button>
+        </div>
+        {% endif %}
+        <p class="fine">
+          Asked by {{ link.requester }}, {{ link.created }}{% if link.reviewer and link.reviewer != link.requester %} · reviewed by {{ link.reviewer }}{% endif %}{% if link.expires and link.state == 'active' %} · works until {{ link.expires }}{% endif %} · opened {{ link.views }} time{{ '' if link.views == 1 else 's' }}
+        </p>
+        {% if link.state in ('active', 'pending') %}
+        <div class="share-actions">
+          <a class="button small quiet" href="/shares/{{ link.id }}/preview">Preview</a>
+          <form method="post" action="/shares/{{ link.id }}/revoke">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="button small quiet" type="submit" data-confirm="Revoke this link? Anyone who has it can't open the chat any more.">{{ 'Cancel request' if link.state == 'pending' else 'Revoke' }}</button>
+          </form>
+        </div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="fine">No links yet.</p>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

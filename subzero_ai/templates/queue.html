@@ -4,9 +4,45 @@
 <section class="page narrow">
   <h1>Messages waiting for review</h1>
   <p class="lede">These also appear as cards in #claude-approvals. Acting here or in Slack does the same thing.</p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
   <div data-queue>
     {% include "_queue_items.html" %}
   </div>
+  {% if code_waiting %}
+  <section class="panel" id="code" aria-labelledby="code-title">
+    <h2 id="code-title">Code steps to approve</h2>
+    <ul class="simple-list">
+      {% for c in code_waiting %}<li><a href="/code/{{ c.id }}">{{ c.title }}</a> <span class="field-hint">{{ c.pending }} step{{ 's' if c.pending != 1 else '' }}, started by {{ c.owner }}</span></li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  {% if shares %}
+  <section class="panel" id="shares" aria-labelledby="shares-title">
+    <h2 id="shares-title">Share links to approve</h2>
+    <p class="field-hint">Read-only links to a chat for someone outside the team. Open the preview to see exactly what they'd see: approved messages and replies, with people shown as Student or Mentor and no files. Names typed in the messages themselves still show, so check the text before approving.</p>
+    <ul class="share-links">
+      {% for link in shares %}
+      <li class="share-link">
+        <div class="share-link-head">
+          <span class="share-for">{{ link.requester }} wants to share <a href="/c/{{ link.conversation_id }}">{{ link.title }}</a> with {{ link.audience }}</span>
+        </div>
+        <p class="fine">Asked {{ link.created }}</p>
+        <div class="share-actions">
+          <a class="button small" href="/shares/{{ link.id }}/preview">Preview</a>
+          <form method="post" action="/shares/{{ link.id }}/approve">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="button small primary" type="submit">Approve<span class="visually-hidden"> link for {{ link.audience }}</span></button>
+          </form>
+          <form method="post" action="/shares/{{ link.id }}/decline">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="button small quiet" type="submit">Decline<span class="visually-hidden"> link for {{ link.audience }}</span></button>
+          </form>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
   {% if settings.approval_window_minutes or window %}
   <section class="panel" id="window" aria-labelledby="window-title">
     <h2 id="window-title">Sent without review</h2>

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page">
+  <p class="crumbs"><a href="/artifacts">Artifacts</a></p>
+  <div class="page-head">
+    <h1>{{ title }}</h1>
+    <a class="button" href="{{ chat_url }}">{{ icon('chats') }} Open the chat</a>
+  </div>
+  <p class="thread-meta">From “{{ chat_title }}”, started by {{ conv.owner_name }}{% if conv.subteam %}, {{ conv.subteam }}{% endif %}{% if time %} · <time>{{ time }}</time>{% endif %}</p>
+  {% if conv.visibility == 'private' %}
+  <p class="private-note">Private: only {{ 'you' if conv.owner_id == viewer.id else conv.owner_name }} and mentors can see this.</p>
+  {% endif %}
+  <div class="artifact-view">{{ figure|safe }}</div>
+</section>
+{% endblock %}

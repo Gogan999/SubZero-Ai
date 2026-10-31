@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 from subzero_ai.claude import FakeClaude, StreamEvent
 
+from subzero_ai.web import COMING_SOON
+
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 
@@ -389,11 +391,13 @@ class FlowTest(unittest.TestCase):
         self.assertIn('href="/recents"', page)
         self.assertIn(f'href="/c/{cid}"', page, "the sidebar's Recents lists the student's own chats")
         self.assertIn("1 waiting", page)
-        for path in ("/projects", "/artifacts", "/code"):
+        for path in ("/projects", "/artifacts"):
             self.assertIn(f'href="{path}"', page)
-            resp = self.ava.get(path)
-            self.assertEqual(resp.status_code, 200)
-            self.assertIn("Coming soon", resp.text)
+            self.assertEqual(self.ava.get(path).status_code, 200)
+        self.assertNotIn('href="/code"', page, "Code is for mentors")
+        self.assertIn('href="/code"', self.kim.get("/chats").text)
+        for key in COMING_SOON:  # the ones not built yet
+            self.assertIn("Coming soon", self.ava.get(f"/{key}").text)
         self.assertNotIn('href="/queue"', page, "students don't get mentor tools")
         self.assertIn('href="/queue"', self.kim.get("/chats").text)
         # Old chat-list links still work

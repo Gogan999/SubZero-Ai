@@ -131,6 +131,103 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE messages ADD COLUMN screen_note TEXT;
     """,
+    # Version 6: projects, which group chats and give them shared instructions and reference files
+    """
+    CREATE TABLE projects (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        instructions TEXT NOT NULL DEFAULT '',
+        created_by INTEGER REFERENCES users(id),
+        archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE project_files (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'image')),
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        added_by INTEGER REFERENCES users(id),
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_project_files ON project_files(project_id, id);
+
+    ALTER TABLE conversations ADD COLUMN project_id INTEGER REFERENCES projects(id);
+    CREATE INDEX idx_conversations_project ON conversations(project_id, updated_at DESC);
+    """,
+    # Version 7: each person's preferences (Profile and preferences, Appearance)
+    """
+    ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'system';
+    ALTER TABLE users ADD COLUMN notify_dm INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE users ADD COLUMN default_subteam TEXT;
+    """,
+    # Version 8: composer tools (response style, extended thinking, web search, research) and what they found
+    """
+    ALTER TABLE messages ADD COLUMN options TEXT;
+    ALTER TABLE messages ADD COLUMN web_searches INTEGER;
+    ALTER TABLE messages ADD COLUMN sources TEXT;
+    """,
+    # Version 9: read-only share links for people outside the team, approved by a mentor
+    """
+    CREATE TABLE shares (
+        id INTEGER PRIMARY KEY,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        token TEXT NOT NULL UNIQUE,
+        upto_message_id INTEGER NOT NULL,
+        audience TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'active', 'declined', 'revoked')),
+        requested_by INTEGER NOT NULL REFERENCES users(id),
+        reviewed_by INTEGER REFERENCES users(id),
+        views INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        expires_at TEXT
+    );
+    CREATE INDEX idx_shares_conversation ON shares(conversation_id, id);
+    CREATE INDEX idx_shares_status ON shares(status, id);
+    """,
+    # Version 10: Code sessions, where Claude works in a copy of the team's repository and a mentor approves
+    # every file change and command
+    """
+    CREATE TABLE code_sessions (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('preparing', 'running', 'waiting', 'done', 'stopped', 'failed')),
+        model TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        ref TEXT NOT NULL DEFAULT '',
+        transcript TEXT NOT NULL DEFAULT '[]',
+        error TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        created_by INTEGER NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE code_steps (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+        turn INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'tool', 'note')),
+        tool TEXT,
+        tool_use_id TEXT,
+        input TEXT,
+        output TEXT,
+        status TEXT NOT NULL CHECK (status IN ('done', 'pending', 'approved', 'declined', 'running', 'error')),
+        reviewed_by INTEGER REFERENCES users(id),
+        review_note TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE INDEX idx_code_steps ON code_steps(session_id, id);
+    """,
 ]
 
 

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}{{ session.title }} · Code · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow code-page">
+  <p class="crumbs"><a href="/code">Code</a></p>
+  <h1>{{ session.title }}</h1>
+  <p class="thread-meta">Started by {{ session.owner }}, {{ session.created }} · {{ session.repo }}{% if session.ref %} ({{ session.ref }}){% endif %} · {{ session.model }}</p>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div data-code-steps data-url="/code/{{ session.id }}/steps">
+    {% include "_code_steps.html" %}
+  </div>
+</section>
+{% endblock %}

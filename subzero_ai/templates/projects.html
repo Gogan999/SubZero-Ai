@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Projects · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page">
+  <div class="page-head">
+    <h1>{{ 'Archived projects' if archived else 'Projects' }}</h1>
+    {% if viewer.is_mentor and not archived %}<a class="button primary" href="#new-project">{{ icon('plus') }} New project</a>{% endif %}
+  </div>
+  <p class="lede">A project groups the chats about one mechanism or subsystem. Mentors give it instructions and reference files, and Claude reads them in every chat in the project. Mentors still review every student message.</p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  {% if viewer.is_mentor %}
+  <nav class="tabs" aria-label="Which projects">
+    <a href="/projects" {% if not archived %}aria-current="page"{% endif %}>Active</a>
+    <a href="/projects?archived=1" {% if archived %}aria-current="page"{% endif %}>Archived</a>
+  </nav>
+  {% endif %}
+  <ul class="artifact-grid">
+    {% for item in items %}
+    <li class="artifact-card">
+      <span class="artifact-mark" aria-hidden="true">{{ icon('projects') }}</span>
+      <a class="artifact-title" href="/projects/{{ item.id }}">{{ item.name }}</a>
+      {% if item.description %}<p class="card-text">{{ item.description }}</p>{% endif %}
+      <span class="chat-meta">{{ item.chats }} chat{{ '' if item.chats == 1 else 's' }} · {{ item.files }} file{{ '' if item.files == 1 else 's' }}{% if item.has_instructions %} · Instructions{% endif %}</span>
+    </li>
+    {% else %}
+    <li class="empty-state">{% if archived %}No archived projects.{% elif viewer.is_mentor %}No projects yet. Make one for each mechanism or subsystem the team is working on.{% else %}No projects yet. Mentors set them up, one for each mechanism or subsystem. Until then, start a chat with New chat.{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% if viewer.is_mentor and not archived %}
+  <section class="panel" id="new-project" aria-labelledby="new-project-title">
+    <h2 id="new-project-title">New project</h2>
+    {% if error %}<p class="field-error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="/projects/new">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">{% with prefix='new', p=None %}{% include "_project_fields.html" %}{% endwith %}</div>
+      <div class="form-actions"><button class="button primary" type="submit">Create project</button></div>
+    </form>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

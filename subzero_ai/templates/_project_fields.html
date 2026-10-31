@@ -1,0 +1,15 @@
+{# Name, description and instructions, for the New project form and a project's Edit form #}
+<div class="field">
+  <label for="{{ prefix }}-name">Name</label>
+  <input id="{{ prefix }}-name" name="name" type="text" maxlength="80" required value="{{ p.name if p else '' }}" placeholder="Intake">
+</div>
+<div class="field">
+  <label for="{{ prefix }}-description">Description</label>
+  <input id="{{ prefix }}-description" name="description" type="text" maxlength="300" value="{{ p.description if p else '' }}" aria-describedby="{{ prefix }}-description-hint">
+  <p class="field-hint" id="{{ prefix }}-description-hint">One line shown on the Projects page, like “Over-the-bumper roller intake for this season”.</p>
+</div>
+<div class="field">
+  <label for="{{ prefix }}-instructions">Instructions for Claude</label>
+  <textarea id="{{ prefix }}-instructions" name="instructions" rows="6" maxlength="8000" aria-describedby="{{ prefix }}-instructions-hint">{{ p.instructions if p else '' }}</textarea>
+  <p class="field-hint" id="{{ prefix }}-instructions-hint">Claude reads these in every chat in the project, after the safety rules. For example: which motors and motor controllers the mechanism uses, its gear ratio, and the code library versions.</p>
+</div>

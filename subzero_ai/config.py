@@ -68,6 +68,10 @@ class Settings:
     max_tokens_explainer: int = 16000
     long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
+    # Web search costs extra for each search, so the whole team shares a daily limit
+    web_search_enabled: bool = True
+    web_search_daily_limit: int = 50
+    research_for_students: bool = False  # Research runs many searches, so it starts as mentors only
 
     # Slack
     slack_bot_token: str = ""
@@ -92,6 +96,16 @@ class Settings:
     always_review_slack_ids: frozenset[str] = frozenset()  # students who never get the approval window
     screener_enabled: bool = True  # a small model checks each message in the window; anything it flags waits
     model_screener: str = "claude-haiku-5-5"
+
+    # Connectors: add files to a message from the team's GitHub repository or a shared Google Drive link
+    connector_github_repo: str = ""  # owner/name
+    connector_github_branch: str = ""  # empty means the repository's default branch
+    connector_github_token: str = ""  # only for a private repository: a fine-grained token with read-only Contents
+    connector_drive_links: bool = True
+
+    # Code: Claude works in a copy of the GitHub repository above; a mentor approves each change and command
+    code_commands: tuple[str, ...] = ("gradlew",)  # programs Claude may ask to run, by name
+    code_command_timeout: int = 600  # seconds
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200
