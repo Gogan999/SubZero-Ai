@@ -4,6 +4,10 @@ Status: **waiting for Logan's go-ahead** (plan approval is on). Nothing below is
 
 - Branch: `claude/project-thread-ntchvl`
 - Starting commit: `afcc835` (main, "Merge pull request #9"), clean working tree, 226 tests passing.
+- Runs under the delegated workflow in `.claude/WORKFLOW.md` (opt-in, see the root `CLAUDE.md`).
+- **Sequencing:** PR #8 (projects, composer tools, Code sessions; branch `claude/project-thread-cg9ea7`) is still
+  open and widens the AI client interface. Build F1 on top of main *after* PR #8 merges, so the seam covers
+  its methods. If #8 is still open when Logan approves, F1 starts from #8's head instead.
 
 ## Goal
 
@@ -36,6 +40,11 @@ messages go through the same approval flow.
   default and hard-problem model (`web.py:704-717`).
 - Effort (`low|medium|high`) is sent as `output_config.effort`; the system prompt is cached with
   `cache_control` (`claude.py:99-116`).
+- PR #8 (not merged yet) adds Claude-only features on top of that client: `stream(..., web_searches=n)`
+  using Anthropic's server-side `web_search` tool with citations; Research (up to 20 searches);
+  extended thinking (`xhigh` effort); response styles (system-prompt text, so model-neutral); and
+  Code sessions through a new `tool_turn(...)` method with client-side tools where a mentor approves
+  every edit and command (`subzero_ai/web_code.py`).
 - Approval, screener, MENTOR ALERT, limits and rejections all sit above the client
   (`subzero_ai/approvals.py`, `generation.py`), so they don't need to change.
 - Slack: Socket Mode only handles `interactive` envelopes today (`subzero_ai/slack_handlers.py:27-38`).
@@ -81,11 +90,12 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 Each is sized for one implementer pass. Status: all **not started**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
-- Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures plus
-  `StreamEvent`), a factory used by `build_services` and `checks.py`, and a new setting
+- Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's
+  `web_searches` argument and `tool_turn`, plus `StreamEvent`) and a per-model capability record
+  (`web_search`, `tools`, `thinking`, `images`, D11), a factory used by `build_services` and `checks.py`, and a new setting
   `AI_BACKEND = anthropic | pi | fake` (default `anthropic`; `FAKE_CLAUDE=1` keeps working as an alias
   for `fake`). No behavior change.
-- Acceptance: all 226 existing tests pass unchanged; new tests show the factory picks the right client
+- Acceptance: all existing tests pass unchanged; new tests show the factory picks the right client
   for each value and rejects unknown ones with a clear `check` message.
 - Files: `subzero_ai/claude.py` (or a new `subzero_ai/ai_backend.py`), `web.py:176-190`, `checks.py`,
   `config.py`, `config.example.env`.
@@ -110,7 +120,8 @@ Each is sized for one implementer pass. Status: all **not started**.
   dies, kill it on shutdown), multiplexes requests by id, implements `stream`/`complete`, sends
   `abort` when a stream's consumer stops, applies timeouts, maps effort to Pi thinking levels, and
   maps Pi usage (`input`, `output`, `cacheRead`, `cacheWrite`, `cost`) onto the keys generation already
-  stores. Errors come back as the same plain-language messages `ClaudeClient` uses today.
+  stores. Implements PR #8's `tool_turn` through pi-ai's tool calling, and `web_searches` only for
+  models whose capability record has `web_search` (D11). Errors come back as the same plain-language messages `ClaudeClient` uses today.
 - Acceptance: tests drive `PiClient` against a fake gateway script written in Python (so the Python
   tests need no Node), covering streaming, complete, abort, gateway crash and restart, timeout, and
   malformed lines. With `AI_BACKEND=pi`, `generation.py`, `screener.py`, titles, health and `check`
@@ -132,7 +143,29 @@ Each is sized for one implementer pass. Status: all **not started**.
   `web.py`, `web_admin.py`, `templates/settings.html`, `checks.py`.
 - Depends on: F3, Q2, Q3.
 
-### F5. Claude Code via `pi-claude-bridge`
+### F4b. Claude-only features on other models (PR #8)
+- Build: the composer shows Web search and Research only when the chat's model has `web_search`
+  (today: Anthropic Claude models); extended thinking maps to the model's highest Pi thinking level or
+  hides when it has none; response styles work everywhere. Code sessions stay Claude-only at first
+  (Q7). A mentor switching a chat to a model without a feature sees a plain note that it's off.
+- Acceptance: tests for each feature × {Claude, non-Claude fake model}: hidden or shown correctly, and
+  the server refuses a forced request for a missing feature.
+- Files: `web.py` (`clean_options`), `templates/_composer_tools.html`, `generation.py`, `web_code.py`.
+- Depends on: F1, F3, F4, Q7.
+
+### F4c. Safety check before a model reaches students (D12)
+- Build: an admin-run "Model safety check" (also `subzero-ai check --model provider/id`) that sends a
+  fixed set of test prompts through the real system prompt and checks the answers: refuses the unsafe
+  ones, writes `[MENTOR ALERT]` first for the wellbeing ones, follows the explainer format, and passes
+  the screener's SAFE/REVIEW format if used as the screener. The result is stored with the model ID
+  and date; admin validation refuses a model for the default, hard-problem or screener slot until it
+  has a passing check (Anthropic models included, so the rule is the same for all).
+- Acceptance: tests with a fake model that passes, one that misses the alert, and one that errors;
+  the setting can't be saved for a failing or unchecked model.
+- Files: new `subzero_ai/model_check.py`, `checks.py`, `saved_settings.py`, `web_admin.py`, settings template.
+- Depends on: F3, F4.
+
+### F5. Claude Code via `pi-claude-bridge` (only if Q1 says so)
 - Build: add `pi-claude-bridge` and `@earendil-works/pi-coding-agent` (exact versions) to the gateway.
   `claude-bridge/...` models run through an in-memory SDK session: `noTools`, no extensions except the
   bridge, an empty working folder under `DATA_DIR`, `CLAUDE_CONFIG_DIR` and `PI_CODING_AGENT_DIR`
@@ -144,7 +177,7 @@ Each is sized for one implementer pass. Status: all **not started**.
   safety prompt and MENTOR ALERT format with no tool use, and measures its latency; then gateway
   tests with the bridge's query stubbed, and a manual test plan for the real login.
 - Files: `pi_gateway/`, `subzero_ai/__main__.py`, `checks.py`, `docs`.
-- Depends on: F2, F4, **Q1 must be answered first**.
+- Depends on: F2, F4, **Q1 must be answered first**. The review leans toward skipping it (Q1 option b).
 
 ### F6. Windows packaging
 - Build: `packaging/build_windows.py` downloads the official Node.js 22 LTS Windows zip (pinned
@@ -169,7 +202,7 @@ Each is sized for one implementer pass. Status: all **not started**.
   `AI_BACKEND` back to `anthropic` if Pi misbehaves. Update `config.example.env`, the responsible-use
   page if it names Claude as the only model, and `docs/FEATURES_TODO.md`. Bump the version to 0.5.0.
 - Acceptance: a mentor can follow the README from a fresh install to a working non-Claude model.
-- Depends on: F1-F7.
+- Depends on: F1-F7, F4b, F4c.
 
 ### S1 (stretch, second priority). Direct messages to the Slack bot
 - Build: turn the bot's Messages tab on for writing, add the `im:history` bot scope and the
@@ -191,7 +224,7 @@ Each is sized for one implementer pass. Status: all **not started**.
 
 ## Key decisions
 
-See `DECISIONS.md` (D1-D10).
+See `DECISIONS.md` (D1-D12).
 
 ## Open questions for Logan
 
@@ -202,11 +235,11 @@ See `DECISIONS.md` (D1-D10).
   personal subscription also looks like account sharing under the consumer terms. Options:
   (a) build the bridge but keep it admin-only, for Logan's own testing, while students use API-key
   models (recommended); (b) skip the bridge and reach Claude through pi-ai with the existing API key;
-  (c) ask Anthropic for approval first.
+  (c) ask Anthropic for approval first. The PR review leaned toward (b); (a) only makes sense if
+  you personally want to try Claude Code through Pi.
 - **Q2. Which providers first?** Recommendation: Anthropic (API key) plus one other, such as OpenAI or
-  OpenRouter, and optionally a local model through Ollama. Every new model must pass a short safety
-  check (follows the safety prompt, produces `[MENTOR ALERT]` when it should) before an admin can
-  enable it for students.
+  OpenRouter, and optionally a local model through Ollama. Every model has to pass the F4c safety check
+  before students can use it (now a planned feature, D12).
 - **Q3. Who picks models?** Recommendation: unchanged. Admins choose the default, hard-problem,
   title and screener models (now from any enabled provider); mentors switch a chat between default
   and hard-problem.
@@ -217,6 +250,18 @@ See `DECISIONS.md` (D1-D10).
   thread's branch and opened as a PR. Should the rule read "push only to the session's branch, never
   to main"?
 - **Q6. Slack DMs (S1):** one chat per Slack thread (recommended), or one running chat per person?
+- **Q7. PR #8's Claude-only features on other models.** Web search and Research use Anthropic's own
+  search, so they'd be hidden on other models (recommended), or we add a separate search service later
+  (more cost and keys). Code sessions: keep Claude-only (recommended, since the mentor-approved edit
+  flow was tuned on Claude), or allow any model with tool calling after it passes F4c.
+
+## Review feedback folded in (2026-10-31)
+
+- The root `CLAUDE.md` loads in every session, so the delegated workflow is now opt-in: the root file
+  holds only Project facts and a pointer; the workflow moved to `.claude/WORKFLOW.md`.
+- Planned against PR #8's wider client interface (F1, F3, F4b, Q7).
+- Safety check before non-Claude models reach students is now a feature (F4c, D12).
+- Bridge: reviewer leans toward skipping it (Q1).
 
 ## Risks
 

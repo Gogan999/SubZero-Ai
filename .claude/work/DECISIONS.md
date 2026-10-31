@@ -10,3 +10,6 @@
 - D8 (F5): The bridge provider is off by default and only an admin can turn it on — pending Q1 on subscription terms.
 - D9 (S1): Slack DMs go through `ApprovalService.submit` like web messages, with no bypass — keeps one approval flow.
 - D10 (F2, F3): Python tests use a fake gateway written in Python; the gateway has its own `node --test` suite with pi-ai's `fauxProvider` — the main suite stays fast and needs no Node or keys.
+- D11 (F1, F4b): Each model gets a capability record (web search, tools, thinking, images), and the UI and server only offer a feature the chat's model supports — PR #8's web search is Anthropic's server tool, so other models can't use it.
+- D12 (F4c): No model (any provider) can be set as the default, hard-problem or screener model until it passes the stored safety check — the safety prompt and MENTOR ALERT have only been verified on Claude.
+- D13 (workflow): The delegated workflow is opt-in via `.claude/WORKFLOW.md`; the root `CLAUDE.md` holds only Project facts — the root file loads in every session and would otherwise change all future threads.
