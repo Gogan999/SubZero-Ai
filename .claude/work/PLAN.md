@@ -165,19 +165,19 @@ Each is sized for one implementer pass. Status: all **not started**.
 - Files: new `subzero_ai/model_check.py`, `checks.py`, `saved_settings.py`, `web_admin.py`, settings template.
 - Depends on: F3, F4.
 
-### F5. Claude Code via `pi-claude-bridge` (only if Q1 says so)
+### F5. Claude Code via `pi-claude-bridge` (Q1: available to everyone)
 - Build: add `pi-claude-bridge` and `@earendil-works/pi-coding-agent` (exact versions) to the gateway.
   `claude-bridge/...` models run through an in-memory SDK session: `noTools`, no extensions except the
   bridge, an empty working folder under `DATA_DIR`, `CLAUDE_CONFIG_DIR` and `PI_CODING_AGENT_DIR`
   under `DATA_DIR`, our system prompt passed as Pi's custom prompt (the bridge refuses a replaced
   prompt), and prior turns seeded into the session. Claude Code's MCP servers stay blocked
   (`strictMcpConfig`, the bridge default). A `subzero-ai claude-login` command runs Claude Code's login
-  for the service's config folder; `check` reports whether it's logged in. Admin toggle, off by default.
+  for the service's config folder; `check` reports whether it's logged in. Admin toggle, off until the admin turns it on; once on, bridge models can be picked for students like any other model, after passing F4c. The admin page notes that bridge replies use the logged-in Claude subscription's quota, and shows a clear error when that quota runs out (the `anthropic` API-key path stays available as a fallback model).
 - Acceptance: a spike first (one afternoon) confirms on the mini PC that a bridge reply honors our
   safety prompt and MENTOR ALERT format with no tool use, and measures its latency; then gateway
   tests with the bridge's query stubbed, and a manual test plan for the real login.
 - Files: `pi_gateway/`, `subzero_ai/__main__.py`, `checks.py`, `docs`.
-- Depends on: F2, F4, **Q1 must be answered first**. The review leans toward skipping it (Q1 option b).
+- Depends on: F2, F4, F4c.
 
 ### F6. Windows packaging
 - Build: `packaging/build_windows.py` downloads the official Node.js 22 LTS Windows zip (pinned
@@ -228,7 +228,7 @@ See `DECISIONS.md` (D1-D12).
 
 ## Open questions for Logan
 
-- **Q1. Claude subscription through the bridge (blocks F5).** The bridge uses a Claude Pro/Max login.
+- **Q1. Claude subscription through the bridge. ANSWERED 2026-10-31: Logan chose "bridge for everyone"** (students' chats may run on the subscription). He accepted the terms risk described here. The bridge uses a Claude Pro/Max login.
   Anthropic's Agent SDK docs say: "Unless previously approved, Anthropic does not allow third party
   developers to offer claude.ai login or rate limits for their products, including agents built on the
   Claude Agent SDK. Use the API key authentication methods... instead." Serving the whole team from one
@@ -271,6 +271,7 @@ See `DECISIONS.md` (D1-D12).
 - The bridge puts Claude Code's coding-agent prompt ahead of ours and adds latency per reply; the F5
   spike measures both before we commit to it.
 - Prompt caching and effort behave differently per provider, so costs will shift.
+- Running students' chats on one Claude subscription goes against Anthropic's stated Agent SDK policy, and the account could be limited or suspended (Logan's accepted risk, Q1). Keep an API-key model configured as a fallback.
 - Claude Code's login has to be done for the Windows service account, which is awkward (F5 command).
 
 ## Minor findings

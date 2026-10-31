@@ -7,7 +7,7 @@
 - D5 (F4): Model IDs become `provider/model`, with a migration that prefixes existing rows with `anthropic/` — one unambiguous ID across providers; the Fable/Mythos block stays.
 - D6 (F1-F8): Approval, the window, the screener, MENTOR ALERT, limits and rejections stay above the backend and don't change; the screener and titles also run through the chosen backend — the safety flow is model-independent by construction.
 - D7 (F2, F6): Pin exact npm versions with a lockfile, install with `npm ci --ignore-scripts`, and bundle the official Node.js 22 LTS zip checked against a pinned SHA-256 — matches the existing build's pinning policy.
-- D8 (F5): The bridge provider is off by default and only an admin can turn it on — pending Q1 on subscription terms.
+- D8 (F5): Bridge models can serve students once an admin turns the provider on and the model passes F4c — Logan's choice on Q1 (2026-10-31), made with the subscription-terms risk explained; an API-key model stays configured as a fallback.
 - D9 (S1): Slack DMs go through `ApprovalService.submit` like web messages, with no bypass — keeps one approval flow.
 - D10 (F2, F3): Python tests use a fake gateway written in Python; the gateway has its own `node --test` suite with pi-ai's `fauxProvider` — the main suite stays fast and needs no Node or keys.
 - D11 (F1, F4b): Each model gets a capability record (web search, tools, thinking, images), and the UI and server only offer a feature the chat's model supports — PR #8's web search is Anthropic's server tool, so other models can't use it.
