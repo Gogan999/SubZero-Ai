@@ -3,6 +3,7 @@
     python -m subzero_ai               start the app, using config.env
     python -m subzero_ai --test-mode   start with sample sign-ins (and a pretend Claude if there's no API key)
     python -m subzero_ai check         check config.env, Slack, and the Claude API key
+    python -m subzero_ai check --model provider/id   run only the model safety check on one model
     python -m subzero_ai backup [LABEL] back up the database, attached files, and prompts now
     python -m subzero_ai backups       list the backups
     python -m subzero_ai restore NAME  put a backup back (stop the app first; "latest" picks the newest)
@@ -37,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="run (default) starts the app; see the list above for the others")
     parser.add_argument("name", nargs="?",
                         help="for restore: the backup's file name or path, or latest; for backup: a label")
+    parser.add_argument("--model", help="for check: run only the model safety check on this model (provider/id)")
     parser.add_argument("--config", help="path to config.env")
     parser.add_argument("--test-mode", action="store_true",
                         help="sample sign-ins on this PC, data in ./test-data, and a pretend Claude without an API key")
@@ -76,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
         settings.fake_claude = True
     setup_logging(settings.data_dir / "logs", args.verbose)
 
+    if args.model and args.command != "check":
+        print("--model only works with the check command.")
+        return 2
+    if args.command == "check" and args.model:
+        return safety_check_tool(args.model, settings)
     if args.command == "check":
         from .checks import print_report, run_checks
         return print_report(asyncio.run(run_checks(settings)))
@@ -119,6 +126,48 @@ def app_is_running(settings: Settings) -> bool:
             return True
     except Exception:
         return False
+
+
+def safety_check_tool(model: str, settings: Settings, client=None) -> int:
+    """Run only the model safety check on one model, store the result, and print it. Exit code 0 on a pass."""
+    from . import model_check, saved_settings
+    from .ai_backend import make_client, resolve_backend
+    from .db import Database
+
+    db = Database(settings.db_path)
+    saved_settings.load_into(settings, db)  # the providers an admin turned on
+    model, problem = saved_settings.check_model(model, settings.ai_providers, resolve_backend(settings))
+    if problem:
+        print(problem)
+        return 2
+
+    async def run():
+        own = client is None
+        ai = client or make_client(settings)
+        try:
+            return await model_check.run_model_check(ai, settings, model)
+        finally:
+            if own and hasattr(ai, "aclose"):
+                await ai.aclose()
+
+    problem = model_check.judge_problem(settings)
+    if problem:
+        print(problem)
+        return 2
+    print(f"Model safety check on {model} (judge: {settings.model_check_judge}). This takes a minute or two.")
+    result = asyncio.run(run())
+    print("")
+    for case in result.cases:
+        label = model_check.CASE_LABELS.get(case.case, case.case)
+        print(f"  {'PASS' if case.passed else 'FAIL'}  {label}" + ("" if case.passed else f": {case.detail}"))
+    model_check.save_result(db, result, "check command")
+    db.audit("model_check_done", actor_id=None, details={
+        "model": model, "chat_passed": result.chat_passed, "screener_passed": result.screener_passed,
+        "failed": [c.case for c in result.failed], "check_version": result.check_version, "by": "check command"})
+    print("")
+    print(f"Chats: {'passed' if result.chat_passed else 'FAILED'}. "
+          f"Screener: {'passed' if result.screener_passed else 'FAILED'}.")
+    return 0 if result.chat_passed and result.screener_passed else 1
 
 
 def run_tool(command: str, name: str | None, settings: Settings) -> int:

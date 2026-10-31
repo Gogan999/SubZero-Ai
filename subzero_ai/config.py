@@ -128,6 +128,8 @@ class Settings:
     always_review_slack_ids: frozenset[str] = frozenset()  # students who never get the approval window
     screener_enabled: bool = True  # a small model checks each message in the window; anything it flags waits
     model_screener: str = "anthropic/claude-haiku-5-5"
+    # The model that grades the Model safety check's open-ended cases (refusals). Not a saved setting.
+    model_check_judge: str = "anthropic/claude-sonnet-5-5"
 
     # Connectors: add files to a message from the team's GitHub repository or a shared Google Drive link
     connector_github_repo: str = ""  # owner/name
@@ -205,12 +207,13 @@ _CONVERTERS = {
 
 
 MODEL_SETTINGS = ("model_default", "model_hard", "model_titles", "model_screener")
+MODEL_ID_SETTINGS = MODEL_SETTINGS + ("model_check_judge",)  # every setting that holds a model id
 
 
 def convert(name: str, raw: str):
     """Turn a text value into the type of the named setting."""
     f = next(f for f in fields(Settings) if f.name == name)
-    if name in MODEL_SETTINGS:
+    if name in MODEL_ID_SETTINGS:
         return normalize_model_id(raw)
     if name == "ai_providers":
         return _as_providers(raw)
@@ -280,7 +283,7 @@ def load_settings(env_file: str | os.PathLike | None = None, *, search_cwd: bool
 
     for name, value in overrides.items():
         setattr(settings, name, value)
-    for name in MODEL_SETTINGS:
+    for name in MODEL_ID_SETTINGS:
         setattr(settings, name, normalize_model_id(getattr(settings, name)))
 
     settings.data_dir = Path(settings.data_dir)

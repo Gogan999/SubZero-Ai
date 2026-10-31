@@ -39,6 +39,13 @@ to answer, answer REVIEW.
 Reply with one line: SAFE, or REVIEW: reason."""
 
 
+def screen_body(text: str) -> str:
+    """The message as the screener is shown it, cut to length and wrapped in its tag."""
+    body = text if len(text) <= MAX_SCREEN_CHARS else text[:MAX_SCREEN_CHARS] + "\n[message cut off here]"
+    body = body.replace("<", "&lt;")  # so the message can't close the <message> tag early
+    return f"<message>\n{body}\n</message>"
+
+
 @dataclass
 class Verdict:
     passed: bool
@@ -51,18 +58,21 @@ class Screener:
         self.claude = claude
 
     async def check(self, text: str) -> Verdict:
-        body = text if len(text) <= MAX_SCREEN_CHARS else text[:MAX_SCREEN_CHARS] + "\n[message cut off here]"
-        body = body.replace("<", "&lt;")  # so the message can't close the <message> tag early
         try:
             answer = await asyncio.wait_for(self.claude.complete(
                 model=self.settings.model_screener, system=SCREEN_SYSTEM,
-                messages=[{"role": "user", "content": f"<message>\n{body}\n</message>"}], max_tokens=60),
+                messages=[{"role": "user", "content": screen_body(text)}], max_tokens=60),
                 timeout=TIMEOUT_SECONDS)
         except Exception as exc:
             log.warning("The screener failed, so the message goes to mentors", exc_info=True)
             return Verdict(False, f"The screener couldn't check it ({type(exc).__name__}).")
-        answer = (answer or "").strip()
-        if answer.upper().rstrip(".") == "SAFE":
-            return Verdict(True)
-        reason = answer.split(":", 1)[1].strip() if answer.upper().startswith("REVIEW") and ":" in answer else ""
-        return Verdict(False, (reason or "Flagged for a mentor to look at.")[:200])
+        return parse_answer(answer)
+
+
+def parse_answer(answer: str | None) -> Verdict:
+    """Read the screener's reply. Only exactly SAFE passes; anything else goes to mentors."""
+    answer = (answer or "").strip()
+    if answer.upper().rstrip(".") == "SAFE":
+        return Verdict(True)
+    reason = answer.split(":", 1)[1].strip() if answer.upper().startswith("REVIEW") and ":" in answer else ""
+    return Verdict(False, (reason or "Flagged for a mentor to look at.")[:200])

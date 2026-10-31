@@ -180,6 +180,8 @@ class Services:
     model_names: dict[str, str] = field(default_factory=dict)
     # The gateway's full record per model id (`images`, `reasoning`, ...), for what each non-Claude model can do
     model_info: dict[str, dict] = field(default_factory=dict)
+    # Model safety checks in progress: model id -> when it started (the background task itself is in `tasks`)
+    model_checks_running: dict[str, str] = field(default_factory=dict)
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient

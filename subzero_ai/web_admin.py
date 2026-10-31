@@ -14,10 +14,12 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import __version__, saved_settings, setup_flow
+from . import __version__, model_check, saved_settings, setup_flow
+from .ai_backend import resolve_backend
 from .backup import list_backups, size_text
 from .config import PROVIDERS, update_env_file
 from .connectors import BRANCH_RE, REPO_RE, ConnectorError
+from .db import utcnow
 from .maintenance import update_available
 from .pi_client import KEY_SETTINGS, provider_keys
 from .roles import RECOVERY_USER, is_excluded_account
@@ -165,8 +167,22 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
     ai_keys = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "field": KEY_SETTINGS[p],
                 "set": bool(getattr(s.settings, KEY_SETTINGS[p])), "help": KEY_HELP[p]}
                for p in PROVIDERS if p in s.settings.ai_providers]
-    return {"health": health_rows(s), "sections": sections, "ai_keys": ai_keys, "prompts": prompts, "history": history,
+    return {"health": health_rows(s), "sections": sections, "ai_keys": ai_keys, "safety": safety_context(s),
+            "prompts": prompts, "history": history,
             "backups": backups, "backup_folder": str(s.settings.backups_path), "connectors": connectors}
+
+
+def safety_context(s: Services) -> dict[str, Any]:
+    """The Model safety check box: the latest result per model and the checks running now."""
+    rows = []
+    for r in model_check.latest_results(s.db):
+        rows.append({**r, "time": fmt_time(s.store, r["checked_at"]), "running": r["model"] in s.model_checks_running,
+                     "failed": [{"name": model_check.CASE_LABELS.get(c["case"], c["case"]), "detail": c["detail"]}
+                                for c in r["details"] if not c["passed"]]})
+    shown = {r["model"] for r in rows}
+    running = [{"model": m, "since": fmt_time(s.store, at)} for m, at in s.model_checks_running.items()]
+    return {"rows": rows, "running": running, "running_only": [r for r in running if r["model"] not in shown],
+            "default": s.settings.model_default}
 
 
 @page(require="admin")
@@ -184,7 +200,7 @@ async def save_section(request: Request, viewer: Viewer) -> Response:
         return error_page(request, viewer, 404, "Not found", "That settings section doesn't exist.")
     form = await request.form()
     values, errors = saved_settings.validate(section, form, actor_slack_id=viewer.slack_user_id,
-                                                    settings=s.settings)
+                                                    settings=s.settings, db=s.db)
     if errors:
         submitted = {f.name: saved_settings.form_text(form, f.name) for f in saved_settings.SECTIONS[section][1]}
         return render(request, "settings.html", viewer, status_code=400,
@@ -346,6 +362,43 @@ async def backup_now(request: Request, viewer: Viewer) -> Response:
     flash(request, f"Backed up to {name}." if name else
           "The backup failed. The health list says why; check that the backups folder exists.")
     return RedirectResponse("/settings#health", status_code=303)
+
+
+async def _run_safety_check(s: Services, model: str, actor_id: int, actor_name: str) -> None:
+    """The background job behind the Run button. Always clears the 'running' mark."""
+    try:
+        result = await model_check.run_model_check(s.claude, s.settings, model)
+        model_check.save_result(s.db, result, actor_name)
+        s.db.audit("model_check_done", actor_id=actor_id, details={
+            "model": model, "chat_passed": result.chat_passed, "screener_passed": result.screener_passed,
+            "failed": [c.case for c in result.failed], "check_version": result.check_version})
+    except Exception as exc:
+        log.exception("The model safety check on %s failed to run", model)
+        s.db.audit("model_check_done", actor_id=actor_id, details={
+            "model": model, "error": type(exc).__name__})
+    finally:
+        s.model_checks_running.pop(model, None)
+
+
+@page(require="admin")
+async def run_model_check(request: Request, viewer: Viewer) -> Response:
+    """Start the safety check as a background job: a full check takes longer than the tunnel waits."""
+    s = services(request)
+    form = await request.form()
+    model, problem = saved_settings.check_model(str(form.get("model", "") or ""), s.settings.ai_providers,
+                                                resolve_backend(s.settings))
+    if not problem:
+        problem = model_check.judge_problem(s.settings)
+    if not problem and model in s.model_checks_running:
+        problem = f"A safety check on {model} is already running."
+    if problem:
+        flash(request, f"The safety check didn't start. {problem}")
+        return RedirectResponse("/settings#model-check", status_code=303)
+    s.model_checks_running[model] = utcnow()
+    s.db.audit("model_check_started", actor_id=viewer.id, details={"model": model})
+    s.tasks.spawn(_run_safety_check(s, model, viewer.id, viewer.name), name=f"model-check-{model}")
+    flash(request, "Safety check started. Refresh in a minute.")
+    return RedirectResponse("/settings#model-check", status_code=303)
 
 
 # --------------------------------------------------------------------------- setup page
@@ -570,6 +623,7 @@ async def recovery_login(request: Request) -> Response:
 admin_routes = [
     Route("/settings", settings_page),
     Route("/settings/backup", backup_now, methods=["POST"]),
+    Route("/settings/model-check", run_model_check, methods=["POST"]),
     Route("/settings/prompts/{layer}", save_prompt, methods=["POST"]),
     Route("/settings/connectors", save_connectors, methods=["POST"]),
     Route("/settings/ai-keys", save_ai_keys, methods=["POST"]),

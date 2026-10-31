@@ -88,7 +88,7 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 
 ## Features (build order)
 
-Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4 commit c9fdc6d; F4b **done** (approved, D29-D30); F4c **in progress**; the rest **not started**.
+Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4 commit c9fdc6d; F4b **done** (approved, D29-D30); F4b commit eab9ec4; F4c **done** (approved round 3, D31-D33); F5 **in progress**; the rest **not started**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
 - Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's
@@ -295,4 +295,5 @@ See `DECISIONS.md` (D1-D12).
 - F4b-M1: project-page image uploads aren't refused for non-image models (hidden at reply time); maybe a note on the project page.
 - F4b-M2: a dropped option may still show as "Web search" on the review card / message label.
 - F4b-M5: a video's stills each get their own "can't see images" note (text blocks sit between them).
+- F4c: in FAKE_CLAUDE/test mode a safety check can't pass (no judge), so changing the default/hard/screener model in dev needs a real backend or a seeded model_checks row.
 - F1-M4 (no change needed now): setup step doesn't clear in-memory `fake_claude`; pre-existing, takes effect after restart.

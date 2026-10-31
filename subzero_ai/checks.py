@@ -67,6 +67,8 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
             if backend == "pi" and claude is None:
                 await client.aclose()
 
+    _check_safety_results(settings, add)
+
     # ------------------------------------------------------------------- Slack
     if slack is None and settings.slack_bot_token:
         slack = SlackWebApi(settings.slack_bot_token)
@@ -129,6 +131,25 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
     else:
         add(WARN, "No admins named", "Set ADMIN_SLACK_IDS to the coaches' Slack member IDs.")
     return results
+
+
+def _check_safety_results(settings: Settings, add) -> None:
+    """Warn about each model in use that hasn't passed the Model safety check (models set before the check
+    existed are allowed to keep working, so this is a warning, not a failure)."""
+    from .db import Database
+    from .model_check import has_passed
+    try:
+        db = Database(settings.db_path)
+    except Exception:
+        return
+    roles = [("Default model", settings.model_default, False), ("Hard-problem model", settings.model_hard, False)]
+    if settings.screener_enabled:
+        roles.append(("Screener model", settings.model_screener, True))
+    for label, model, screener in roles:
+        model = normalize_model_id(model)
+        if not has_passed(db, model, screener=screener):
+            add(WARN, f"{label} hasn't passed the model safety check yet ({model})",
+                f"Run: python -m subzero_ai check --model {model}")
 
 
 async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:

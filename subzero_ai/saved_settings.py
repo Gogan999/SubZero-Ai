@@ -18,6 +18,7 @@ from .ai_backend import resolve_backend
 from .config import MODEL_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
 from .db import Database, utcnow
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
+from .model_check import requirement_problem
 
 log = logging.getLogger("subzero.settings")
 
@@ -190,10 +191,16 @@ def check_model(raw: str, providers, backend: str) -> tuple[str, str]:
     return model, ""
 
 
+# The settings a model can only be newly set for after passing the Model safety check (True: the screener part)
+CHECKED_MODEL_SETTINGS = {"model_default": False, "model_hard": False, "model_screener": True}
+
+
 def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
-             settings: Settings | None = None) -> tuple[dict[str, Any], dict[str, str]]:
+             settings: Settings | None = None, db: Database | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """Check one section's form. Returns (values, errors), keyed by setting name.
-    Pass the current settings so models are checked against the providers that are on and the AI backend."""
+    Pass the current settings so models are checked against the providers that are on and the AI backend.
+    Pass the database to also require the Model safety check for a changed default, hard-problem or screener
+    model (a value that isn't changing is left alone)."""
     values: dict[str, Any] = {}
     errors: dict[str, str] = {}
     fields = SECTIONS[section][1]
@@ -221,6 +228,10 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
             values[f.name] = number
         elif f.kind == "model":
             model, problem = check_model(raw, providers, backend)
+            if not problem and db is not None and f.name in CHECKED_MODEL_SETTINGS:
+                unchanged = settings is not None and model == normalize_model_id(getattr(settings, f.name))
+                if not unchanged:
+                    problem = requirement_problem(db, model, screener=CHECKED_MODEL_SETTINGS[f.name])
             if problem:
                 errors[f.name] = problem
             else:

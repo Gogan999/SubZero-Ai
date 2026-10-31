@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subzero_ai import saved_settings
+from subzero_ai import model_check, saved_settings
 from subzero_ai.ai_backend import normalize_model_id
 from subzero_ai.claude import ClaudeClient, ClaudeError, FakeClaude
 from subzero_ai.config import Settings, load_settings
@@ -278,7 +278,9 @@ class KeyRouteTest(unittest.TestCase):
                 "model_hard": "openai/gpt-x", "model_titles": "claude-haiku-5-5", "effort_default": "medium",
                 "effort_high": "high", "max_tokens_chat": "8000", "max_tokens_explainer": "16000",
                 "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
-        # the offline backend takes any enabled provider
+        # the offline backend takes any enabled provider, and a new hard-problem model needs a passing safety check
+        model_check.save_result(self.h.services.db, model_check.CheckResult("openai/gpt-x", cases=[
+            model_check.CaseResult(c, True) for c in model_check.CHAT_CASES + model_check.SCREENER_CASES]))
         resp = self.admin.post("/settings/claude", form, headers=HTML)
         self.assertEqual(resp.status_code, 200, resp.text)
         self.assertIn("Saved Claude settings.", resp.text)
