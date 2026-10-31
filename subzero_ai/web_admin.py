@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -289,6 +290,9 @@ async def learn_workspace(s: Services) -> None:
     """Ask Slack for the workspace's name once, for the Connected accounts list. Never blocks the page long."""
     if s.slack_workspace or s.slack is None or not s.settings.slack_bot_token:
         return
+    if time.monotonic() - s.slack_workspace_asked < 600:
+        return  # Slack didn't answer recently: don't slow every page load while it's down
+    s.slack_workspace_asked = time.monotonic()
     try:
         auth = await asyncio.wait_for(s.slack.auth_test(), timeout=3)
         s.slack_workspace = auth.get("team") or auth.get("team_id") or ""
@@ -614,7 +618,13 @@ async def bridge_sign_out(request: Request, viewer: Viewer) -> Response:
     if not path.is_file():
         flash(request, "The Claude subscription isn't signed in.")
     else:
-        path.unlink()
+        try:
+            path.unlink()
+        except OSError as exc:  # on Windows, the AI helper may have the file open
+            log.warning("Couldn't remove the Claude subscription login: %s", type(exc).__name__)
+            flash(request, "Couldn't sign out right now because the AI helper is using the login. Try again in a "
+                           "minute, or restart first.")
+            return RedirectResponse("/settings#accounts", status_code=303)
         use_new_bridge(s)
         s.db.audit("bridge_signed_out", actor_id=viewer.id)
         flash(request, "Signed out of the Claude subscription. Its models stop working until someone signs in "

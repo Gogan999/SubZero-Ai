@@ -8,7 +8,9 @@ by hand.
 settings are written to config.env by the Settings page. Secrets (keys and tokens) are always in config.env, never
 shown again on the page (only their last four characters), never written to the log or the audit log, and left
 out of backups. A setting marked **restart** is saved right away but used only after the app restarts: the Settings
-page shows a **Restart now** button when one is waiting.
+page shows a **Restart now** button when one is waiting. The Windows service waits a little longer before each
+restart in the same hour (3 seconds, then 20 seconds, then a minute), so a third restart in an hour takes about a
+minute to come back.
 
 **Environment variables win.** If a Windows environment variable with the same name is set on the mini PC, it
 beats config.env, so the Settings page shows that field locked and says so.

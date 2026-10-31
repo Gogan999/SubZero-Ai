@@ -188,6 +188,7 @@ class Services:
     pending_restart: dict[str, str] = field(default_factory=dict)
     checks_running: str = ""  # when the Settings page's Run checks job started ("" when none is running)
     slack_workspace: str = ""  # the Slack workspace's name, once the Settings page has asked Slack
+    slack_workspace_asked: float = 0.0  # time.monotonic() of the last time it asked
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient

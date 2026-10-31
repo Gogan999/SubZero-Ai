@@ -326,6 +326,16 @@ class AccountsTest(Base):
         self.assertFalse(path.exists())
         self.assertEqual(len(self.audit("bridge_signed_out")), 1)
 
+    def test_bridge_sign_out_when_the_file_is_in_use(self):
+        path = bridge_credentials_path(self.h.settings.data_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+        with mock.patch("pathlib.Path.unlink", side_effect=PermissionError("in use")):
+            resp = self.post("/settings/bridge/sign-out", {})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Couldn&#39;t sign out right now", resp.text)
+        self.assertTrue(path.exists())
+
 
 class UnitTest(unittest.TestCase):
     def test_every_setting_has_a_place(self):
