@@ -43,6 +43,30 @@ def escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+_SLACK_MARKUP = re.compile(r"<([^<>]*)>")
+
+
+def from_slack(text: str) -> str:
+    """Turn the text of an incoming Slack message back into what the person typed: links, mentions and channel
+    names become plain text, and Slack's &amp; &lt; &gt; become the characters again (code pasted into a DM
+    reaches the AI as written)."""
+    def plain(match: re.Match) -> str:
+        inner = match.group(1)
+        target, _, label = inner.partition("|")
+        if target.startswith("@"):
+            return "@" + (label or "someone")
+        if target.startswith("#"):
+            return "#" + (label or "a channel")
+        if target.startswith("!"):
+            special = target[1:].split("^")[0]
+            return label or ("@" + special if special in ("here", "channel", "everyone") else "")
+        if label and label != target and label not in (target.removeprefix("mailto:"),):
+            return f"{label} ({target})"
+        return target.removeprefix("mailto:")
+    text = _SLACK_MARKUP.sub(plain, text)
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
 def _split_blocks(text: str) -> list[tuple[bool, str, str]]:
     """Markdown cut into (is_code, info string, body) pieces. Text pieces hold whole lines; a code piece holds the
     lines between the fences. A fence that is never closed runs to the end."""
@@ -258,7 +282,7 @@ class SlackDMs:
             return
         if user == await self.bot_user_id():
             return
-        text = (event.get("text") or "").strip()
+        text = from_slack(event.get("text") or "").strip()
         if not text and not has_files:
             return
         if not self.store.claim_dm_event(channel, ts):

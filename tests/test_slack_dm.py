@@ -6,7 +6,7 @@ import json
 import unittest
 
 from subzero_ai.claude import FakeClaude
-from subzero_ai.slack_dm import CHUNK_LIMIT, _hard_split, escape, replace_explainers, to_slack
+from subzero_ai.slack_dm import CHUNK_LIMIT, _hard_split, escape, from_slack, replace_explainers, to_slack
 
 from .helpers import Harness
 from .test_slack_interactions import block_action
@@ -104,6 +104,11 @@ class DirectMessageFlowTest(DMTestBase):
         conv = self.store.conversation(self.h.message(mid)["conversation_id"])
         self.assertEqual(conv["owner_slack_id"], KID)
         self.assertEqual(conv["owner_name"], "Kid K")
+
+    def test_pasted_code_reaches_the_ai_as_typed(self):
+        ts = self.send("Why does `if (a &lt; b &amp;&amp; c &gt; 0)` fail? See <https://docs.wpilib.org|the docs>")
+        self.assertEqual(self.h.message(self.message_for(ts))["content"],
+                         "Why does `if (a < b && c > 0)` fail? See the docs (https://docs.wpilib.org)")
 
     def test_follow_up_in_thread_continues_chat_and_new_message_starts_new_chat(self):
         ts = self.send()
@@ -605,3 +610,19 @@ class PruneTest(DMTestBase):
         row = self.h.services.db.one("SELECT * FROM slack_dm_messages WHERE ts = ?", (ts,))
         self.assertIsNotNone(row)
         self.assertIsNone(row["message_id"])
+
+
+class FromSlackTest(unittest.TestCase):
+    def test_entities_are_decoded(self):
+        self.assertEqual(from_slack("if (a &lt; b &amp;&amp; c &gt; d) {}"), "if (a < b && c > d) {}")
+        self.assertEqual(from_slack("List&lt;String&gt; x; &amp;lt;"), "List<String> x; &lt;")
+
+    def test_links_mentions_and_channels(self):
+        self.assertEqual(from_slack("see <https://docs.wpilib.org>"), "see https://docs.wpilib.org")
+        self.assertEqual(from_slack("<https://a.org/x|the docs>"), "the docs (https://a.org/x)")
+        self.assertEqual(from_slack("<https://a.org|https://a.org>"), "https://a.org")
+        self.assertEqual(from_slack("<mailto:a@b.org|a@b.org>"), "a@b.org")
+        self.assertEqual(from_slack("hi <@U123> and <@U456|kim>"), "hi @someone and @kim")
+        self.assertEqual(from_slack("in <#C1|build-team>"), "in #build-team")
+        self.assertEqual(from_slack("<!here> look"), "@here look")
+        self.assertEqual(from_slack("<!date^1700000000^{date}|Nov 14>"), "Nov 14")
