@@ -17,7 +17,7 @@ from unittest import mock
 
 from subzero_ai.checks import FAIL, OK, run_checks
 from subzero_ai.claude import ClaudeError
-from subzero_ai.config import load_settings
+from subzero_ai.config import Settings, load_settings
 from subzero_ai.pi_client import DIED_MESSAGE, DOWN_MESSAGE, PiClient, child_env, key_env_name
 from subzero_ai.screener import Screener
 from subzero_ai.slack_api import FakeSlack
@@ -312,8 +312,23 @@ class AppWiringTest(unittest.TestCase):
         self.h = Harness()  # so tearDown has something to close
 
 
+class NodeResolveTest(unittest.TestCase):
+    def test_bundled_node_wins_over_path(self):
+        from subzero_ai.pi_client import resolve_node
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self.assertEqual(resolve_node("", root), "node")
+        (root / "node").mkdir()
+        (root / "node" / "node.exe").write_bytes(b"")
+        self.assertEqual(resolve_node("", root), str(root / "node" / "node.exe"))
+        self.assertEqual(resolve_node("/opt/node", root), "/opt/node")
+
+    def test_default_setting_is_empty(self):
+        self.assertEqual(Settings().pi_node, "")
+
+
 class CheckTest(unittest.TestCase):
-    def run_check(self, **overrides):
+    def run_check(self, node_runner=lambda node: "v22.23.4", **overrides):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         values = dict(public_url="https://ai.example.org", ai_backend="pi", pi_node=sys.executable,
@@ -323,7 +338,7 @@ class CheckTest(unittest.TestCase):
                       slack_approvals_channel="CAPPROVALS", admin_slack_ids=frozenset({"U1"}))
         values.update(overrides)
         settings = load_settings(search_cwd=False, data_dir=tmp, **values)
-        results = asyncio.run(run_checks(settings, slack=FakeSlack(members={"UBOT"})))
+        results = asyncio.run(run_checks(settings, slack=FakeSlack(members={"UBOT"}), node_runner=node_runner))
         return {r.title: r for r in results}
 
     def test_pi_ok(self):
@@ -333,6 +348,21 @@ class CheckTest(unittest.TestCase):
         self.assertIn("pi-ai 9.9.9", helper.detail)
         self.assertEqual(results["Default model answers (fake/echo)"].status, OK)
         self.assertEqual(results["Title model answers (fake/echo)"].status, OK)
+
+    def test_node_version_ok_and_too_old(self):
+        ok = self.run_check()["Node.js 22.23.4 is new enough"]
+        self.assertEqual(ok.status, OK)
+        old = self.run_check(node_runner=lambda node: "v22.18.9")["Node.js is too old"]
+        self.assertEqual(old.status, FAIL)
+        self.assertIn("22.19", old.detail)
+        self.assertEqual(self.run_check(node_runner=lambda node: "v24.0.0")["Node.js 24.0.0 is new enough"].status, OK)
+
+    def test_node_that_will_not_run_fails_plainly(self):
+        def boom(node):
+            raise FileNotFoundError(node)
+        found = self.run_check(node_runner=boom)["Node.js isn't installed or won't start"]
+        self.assertEqual(found.status, FAIL)
+        self.assertIn("PI_NODE", found.detail)
 
     def test_pi_node_missing_fails(self):
         found = self.run_check(pi_node="/no/such/node")["The AI helper isn't working"]

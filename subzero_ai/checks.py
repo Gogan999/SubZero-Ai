@@ -4,6 +4,7 @@ before anyone depends on them. Each Claude check is a tiny request that costs a 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from urllib.parse import urlparse
 
 from .ai_backend import make_client, resolve_backend, unavailable_message
 from .config import Settings, model_provider, normalize_model_id
-from .pi_client import BRIDGE_PROVIDER, bridge_logged_in, provider_keys
+from .pi_client import BRIDGE_PROVIDER, bridge_logged_in, provider_keys, resolve_node
 from .slack_api import SlackError, SlackWebApi
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
@@ -24,7 +25,7 @@ class Check:
     detail: str = ""
 
 
-async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Check]:
+async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner=None) -> list[Check]:
     results: list[Check] = []
 
     def add(status: str, title: str, detail: str = "") -> None:
@@ -70,7 +71,7 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
                 add(FAIL, "Claude subscription isn't signed in", "Run: python -m subzero_ai claude-login")
         client = claude or make_client(settings, max_retries=1)
         try:
-            await _check_models(settings, client, add, pi=backend == "pi")
+            await _check_models(settings, client, add, pi=backend == "pi", node_runner=node_runner)
         finally:
             if backend == "pi" and claude is None:
                 await client.aclose()
@@ -160,7 +161,7 @@ def _check_safety_results(settings: Settings, add) -> None:
                 f"Run: python -m subzero_ai check --model {model}")
 
 
-async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:
+async def _check_models(settings: Settings, client, add, *, pi: bool, node_runner=None) -> None:
     """Probe the default, hard-problem, title and screener models with a tiny request each."""
     models = [("Default model", settings.model_default, settings.effort_default),
               ("Hard-problem model", settings.model_hard, settings.effort_default),
@@ -168,6 +169,7 @@ async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:
               ("Screener model", settings.model_screener, None)]
     models = [(label, normalize_model_id(model), effort) for label, model, effort in models]
     if pi:
+        check_node_version(resolve_node(settings.pi_node), add, node_runner)
         try:
             pong = await client.ping()
             add(OK, "The AI helper (Node.js) is running",
@@ -193,6 +195,35 @@ async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:
             add(OK, f"{label} answers ({model})")
         except Exception as exc:
             add(FAIL, f"{label} didn't answer ({model})", str(exc))
+
+
+MIN_NODE = (22, 19)
+
+
+def node_version_output(node: str) -> str:
+    """What `<node> --version` prints, e.g. "v22.23.4". Raises OSError or subprocess errors if it can't run."""
+    done = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=20)
+    return done.stdout.strip()
+
+
+def check_node_version(node: str, add, runner=None) -> None:
+    """OK if Node.js runs and is 22.19 or newer, otherwise FAIL with a plain message. `runner(node)` returns the
+    version text (injected in tests)."""
+    need = ".".join(str(n) for n in MIN_NODE)
+    try:
+        text = (runner or node_version_output)(node)
+    except Exception:
+        add(FAIL, "Node.js isn't installed or won't start",
+            f"The AI helper needs Node.js {need} or newer. Tried: {node}. Use the Windows release, which includes it, "
+            "or set PI_NODE in config.env to the full path of node.exe.")
+        return
+    found = re.match(r"v?(\d+)\.(\d+)", text or "")
+    if found and (int(found.group(1)), int(found.group(2))) >= MIN_NODE:
+        add(OK, f"Node.js {text.lstrip('v')} is new enough", f"The AI helper needs {need} or newer. Using {node}.")
+    else:
+        add(FAIL, "Node.js is too old",
+            f"Found {text or 'no version'} at {node}, but the AI helper needs {need} or newer. "
+            "Use the Windows release, which includes it, or set PI_NODE in config.env to a newer node.exe.")
 
 
 def data_folder_open(path: str, icacls_output: str | None = None) -> str:

@@ -88,7 +88,7 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 
 ## Features (build order)
 
-Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4 commit c9fdc6d; F4b **done** (approved, D29-D30); F4b commit eab9ec4; F4c **done** (approved round 3, D31-D33); F4c commit f605155; F5 **done in code** (approved round 4, D34-D35; mini-PC spike in docs/BRIDGE_SPIKE.md still to run by Logan); F6 **in progress**; the rest **not started**.
+Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4 commit c9fdc6d; F4b **done** (approved, D29-D30); F4b commit eab9ec4; F4c **done** (approved round 3, D31-D33); F4c commit f605155; F5 **done in code** (approved round 4, D34-D35; mini-PC spike in docs/BRIDGE_SPIKE.md still to run by Logan); F5 commit ca02932; F6 **done** (approved round 2, D36-D37; zip 254.6 MB, 12,829 files; PowerShell untested on Windows); F7 **in progress**; F8 **not started**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
 - Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's

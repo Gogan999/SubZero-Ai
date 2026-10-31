@@ -97,7 +97,7 @@ class Settings:
     long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
     ai_backend: str = "anthropic"  # anthropic, pi, or fake (FAKE_CLAUDE=1 also means fake)
-    pi_node: str = "node"  # path to Node.js, for the pi backend
+    pi_node: str = ""  # path to Node.js for the pi backend; empty means the install's node\node.exe, else "node"
     pi_gateway_script: str = ""  # empty means pi_gateway/gateway.mjs next to the subzero_ai folder
     pi_request_timeout: int = 300  # seconds for a whole pi request
     pi_idle_timeout: int = 120  # longest quiet gap in a pi reply, in seconds

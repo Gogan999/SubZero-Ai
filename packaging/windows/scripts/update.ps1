@@ -15,8 +15,8 @@ if ($Zip) { $fwd += @("-Zip", (Resolve-Path $Zip).Path) }
 if ($Force) { $fwd += "-Force" }
 Assert-Admin $PSCommandPath $fwd
 
-$work = Join-Path $env:TEMP ("SubZeroAI-update-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-$previous = Join-Path $env:TEMP ("SubZeroAI-previous-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+$work = Join-Path $env:TEMP ("SZ-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+$previous = Join-Path $env:TEMP ("SZ-prev-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 
 try {
     Write-Host "SubZero AI update" -ForegroundColor Cyan
@@ -44,7 +44,7 @@ try {
         if (-not $asset) { throw "Release $($latest.tag_name) doesn't include $($release.asset)." }
         Write-Note "Downloading version $newVersion..."
         $Zip = Join-Path $work $release.asset
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $Zip -UseBasicParsing -TimeoutSec 600
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $Zip -UseBasicParsing -TimeoutSec 1800
         # GitHub lists each file's SHA-256; a download that doesn't match is cut short or tampered with.
         if ($asset.digest -and $asset.digest -like "sha256:*") {
             $expected = $asset.digest.Substring(7)
@@ -55,8 +55,10 @@ try {
     }
 
     Write-Step "Unpacking"
-    $unpacked = Join-Path $work "unpacked"
-    Expand-Archive -Path $Zip -DestinationPath $unpacked -Force
+    $unpacked = Join-Path $work "u"
+    # Work folders are named short (SZ-<stamp>\u) because Windows PowerShell 5.1 can't open paths over 260 characters.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $unpacked)
     $newRoot = Get-ChildItem -Path $unpacked -Recurse -Filter "release.json" | Select-Object -First 1 | ForEach-Object { $_.DirectoryName }
     if (-not $newRoot -or -not (Test-Path (Join-Path $newRoot "python\python.exe"))) { throw "That zip isn't a SubZero AI release." }
     $newVersion = Get-InstalledVersion $newRoot

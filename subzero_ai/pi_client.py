@@ -129,6 +129,20 @@ def default_gateway_script() -> str:
     return str(Path(__file__).resolve().parent.parent / "pi_gateway" / "gateway.mjs")
 
 
+def install_root() -> Path:
+    """The folder that holds app\\ and python\\ in a packaged install (the subzero_ai package's parent's parent)."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def resolve_node(configured: str = "", root: Path | str | None = None) -> str:
+    """The Node.js program to run: PI_NODE if set, else <install>\\node\\node.exe if the release zip put one
+    there, else plain "node" from PATH."""
+    if configured:
+        return configured
+    bundled = Path(root or install_root()) / "node" / "node.exe"
+    return str(bundled) if bundled.is_file() else "node"
+
+
 def error_message(code: str, detail: str, model: str) -> str:
     """Plain-language text for a gateway error record."""
     if code == "no_key":
@@ -198,7 +212,7 @@ class PiClient:
     def from_settings(cls, settings: Settings) -> PiClient:
         script = settings.pi_gateway_script or default_gateway_script()
         env = {**child_env(provider_keys(settings)), **settings_bridge_env(settings)}
-        return cls([settings.pi_node or "node", script], env, request_timeout=settings.pi_request_timeout,
+        return cls([resolve_node(settings.pi_node), script], env, request_timeout=settings.pi_request_timeout,
                    idle_timeout=settings.pi_idle_timeout)
 
     def set_keys(self, keys: dict[str, str]) -> None:
