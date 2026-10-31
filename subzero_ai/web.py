@@ -50,7 +50,8 @@ from .attachments import (
     size_label,
 )
 from .auth import LoginError, SlackLogin, profile_from_claims
-from .claude import ClaudeClient, FakeClaude
+from .ai_backend import make_client
+from .claude import ClaudeClient
 from .code_runner import CodeRunner
 from .config import Settings, load_settings
 from .connectors import ConnectorError, Drive, GitHub
@@ -172,8 +173,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     if slack is None and settings.slack_enabled:
         slack = SlackWebApi(settings.slack_bot_token)
     if claude is None:
-        claude = FakeClaude() if settings.fake_claude else ClaudeClient(
-            settings.anthropic_api_key, base_url=settings.anthropic_base_url)
+        claude = make_client(settings)
     broker, tasks = Broker(), Tasks()
     attachments = Attachments(db, settings.data_dir / "files")
     projects = Projects(db, settings.data_dir / "files")

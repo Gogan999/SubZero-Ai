@@ -404,7 +404,11 @@ async def setup_step(request: Request) -> Response:
             except Exception as exc:
                 errors["claude"] = f"Claude didn't accept the key: {exc}"
             else:
-                _save_config(s, {"ANTHROPIC_API_KEY": key, "FAKE_CLAUDE": "0"})
+                updates = {"ANTHROPIC_API_KEY": key, "FAKE_CLAUDE": "0"}
+                if s.settings.ai_backend.strip().lower() == "fake":
+                    updates["AI_BACKEND"] = "anthropic"
+                    s.settings.ai_backend = "anthropic"
+                _save_config(s, updates)
                 s.settings.anthropic_api_key = key
                 notes["claude"] = f"The key works with {s.settings.model_default}."
 

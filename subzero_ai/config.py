@@ -68,6 +68,7 @@ class Settings:
     max_tokens_explainer: int = 16000
     long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
+    ai_backend: str = "anthropic"  # anthropic, pi, or fake (FAKE_CLAUDE=1 also means fake)
     # Web search costs extra for each search, so the whole team shares a daily limit
     web_search_enabled: bool = True
     web_search_daily_limit: int = 50

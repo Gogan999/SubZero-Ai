@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from .claude import ClaudeClient
+from .ai_backend import make_client, resolve_backend, unavailable_message
 from .config import Settings
 from .slack_api import SlackError, SlackWebApi
 
@@ -51,14 +51,19 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
             "Anyone using this PC can sign in as a sample person. Turn it off before students use the app.")
 
     # ------------------------------------------------------------------ Claude
-    if settings.fake_claude:
+    backend = resolve_backend(settings)
+    if backend == "fake":
         add(WARN, "Using the pretend Claude (FAKE_CLAUDE=1)",
-            "Replies are canned. Set ANTHROPIC_API_KEY and FAKE_CLAUDE=0 for real answers.")
+            "Replies are canned (FAKE_CLAUDE=1 or AI_BACKEND=fake). "
+            "Set ANTHROPIC_API_KEY, FAKE_CLAUDE=0 and AI_BACKEND=anthropic for real answers.")
+    elif backend != "anthropic":
+        add(FAIL, "The AI backend can't be used" if backend == "pi" else "AI_BACKEND isn't a known backend",
+            unavailable_message(backend))
     elif not settings.anthropic_api_key:
         add(FAIL, "No Claude API key",
             "Set ANTHROPIC_API_KEY. Create the key inside the SubZero AI workspace at platform.claude.com.")
     else:
-        client = claude or ClaudeClient(settings.anthropic_api_key, base_url=settings.anthropic_base_url, max_retries=1)
+        client = claude or make_client(settings, max_retries=1)
         models = [("Default model", settings.model_default, settings.effort_default),
                   ("Hard-problem model", settings.model_hard, settings.effort_default),
                   ("Title model", settings.model_titles, None)]

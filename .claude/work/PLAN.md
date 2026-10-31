@@ -1,9 +1,10 @@
 # Plan: move AI access onto the Pi harness
 
-Status: **approved by Logan 2026-10-31; build not started.** Build in a fresh session so the `researcher`/`implementer`/`reviewer` agents load, under `.claude/WORKFLOW.md`. Start at F1 (from PR #8's head if #8 is still open).
+Status: **approved by Logan 2026-10-31; build running (thread "Build the Pi harness backend").** Build in a fresh session so the `researcher`/`implementer`/`reviewer` agents load, under `.claude/WORKFLOW.md`. Start at F1 (from PR #8's head if #8 is still open).
 
-- Branch: `claude/project-thread-ntchvl`
-- Starting commit: `afcc835` (main, "Merge pull request #9"), clean working tree, 226 tests passing.
+- Branch: `claude/project-thread-lcsb78` (build). Planning was on `claude/project-thread-ntchvl` (PR #10, merged).
+- Starting commit: `9a36654` = PR #8's head `4eb3601` merged with main `aaf4aa1`, clean tree, 260 tests passing. PR #8 then merged (main `47f59c0`, same tree), merged in as `07cc76d`.
+- Subagents: the custom agent files don't load in this cloud session, so each role runs as the general agent pinned to its model (researcher=Haiku, implementer/reviewer=Sonnet) with the role file as its instructions (D14).
 - Runs under the delegated workflow in `.claude/WORKFLOW.md` (opt-in, see the root `CLAUDE.md`).
 - **Sequencing:** PR #8 (projects, composer tools, Code sessions; branch `claude/project-thread-cg9ea7`) is still
   open and widens the AI client interface. Build F1 on top of main *after* PR #8 merges, so the seam covers
@@ -87,7 +88,7 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 
 ## Features (build order)
 
-Each is sized for one implementer pass. Status: all **not started**.
+Each is sized for one implementer pass. Status: F1 **done** (approved round 1); F2 **in progress**; the rest **not started**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
 - Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's
@@ -276,4 +277,7 @@ See `DECISIONS.md` (D1-D12).
 
 ## Minor findings
 
-None yet.
+- F1-M1: `tests/test_ai_backend.py` protocol test only checks the methods exist; compare `inspect.signature` across ClaudeClient, FakeClaude, UnavailableClient and AIBackend.
+- F1-M2: blank `AI_BACKEND=` counts as unknown and FAILs; treat empty/whitespace as `anthropic`, with a test.
+- F1-M3: UnavailableClient's message reaches students; give students "The AI isn't set up right now. Tell a mentor." and keep the config.env detail for `check`/logs.
+- F1-M4 (no change needed now): setup step doesn't clear in-memory `fake_claude`; pre-existing, takes effect after restart.
