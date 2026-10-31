@@ -1550,6 +1550,12 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                 task.cancel()
             await asyncio.gather(*loops, return_exceptions=True)
             await s.tasks.cancel_all()
+            closer = getattr(s.claude, "aclose", None)
+            if closer is not None:
+                try:
+                    await closer()
+                except Exception:
+                    log.exception("Couldn't close the AI client")
 
     review_routes = [
         Route(f"/m/{{mid:int}}/{kind}", _review_action(kind), methods=["POST"])

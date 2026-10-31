@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from .claude import ClaudeClient, ClaudeError, FakeClaude, StreamEvent
 from .config import Settings
+from .pi_client import PiClient
 
 BACKENDS = ("anthropic", "pi", "fake")
 
@@ -40,12 +41,15 @@ _ALL = Capabilities(web_search=True, tools=True, thinking=True, images=True)
 _NONE = Capabilities(web_search=False, tools=False, thinking=False, images=False)
 
 
-def capabilities_for(model: str) -> Capabilities:
-    """Claude models (bare or anthropic/-prefixed ids) can do everything; unknown models nothing."""
+def capabilities_for(model: str, backend: str = "anthropic") -> Capabilities:
+    """Claude models (bare or anthropic/-prefixed ids) can do everything; unknown models nothing.
+    The pi backend has no web search."""
     name = model.strip().lower()
     if name.startswith("anthropic/"):
         name = name[len("anthropic/"):]
-    return _ALL if name.startswith("claude-") else _NONE
+    if not name.startswith("claude-"):
+        return _NONE
+    return replace(_ALL, web_search=False) if backend == "pi" else _ALL
 
 
 def resolve_backend(settings: Settings) -> str:
@@ -77,8 +81,6 @@ class UnavailableClient:
 
 def unavailable_message(backend: str) -> str:
     """Plain-language reason a backend can't be used, or '' when it can."""
-    if backend == "pi":
-        return "The Pi backend isn't built yet. Set AI_BACKEND=anthropic in config.env."
     if backend not in BACKENDS:
         return (f"The AI backend setting AI_BACKEND={backend} isn't one of anthropic, pi or fake. "
                 "Fix it in config.env and restart.")
@@ -93,4 +95,6 @@ def make_client(settings: Settings, *, max_retries: int | None = None) -> AIBack
     if backend == "anthropic":
         extra = {} if max_retries is None else {"max_retries": max_retries}
         return ClaudeClient(settings.anthropic_api_key, base_url=settings.anthropic_base_url, **extra)
+    if backend == "pi":
+        return PiClient.from_settings(settings)
     return UnavailableClient(unavailable_message(backend))

@@ -14,6 +14,7 @@ from subzero_ai.ai_backend import (BACKENDS, Capabilities, UnavailableClient, ca
 from subzero_ai.checks import FAIL, WARN, run_checks
 from subzero_ai.claude import ClaudeClient, ClaudeError, FakeClaude
 from subzero_ai.config import load_settings, parse_env_file
+from subzero_ai.pi_client import PiClient
 from subzero_ai.slack_api import FakeSlack
 
 from .helpers import Harness
@@ -47,10 +48,11 @@ class FactoryTest(unittest.TestCase):
         self.assertIsInstance(make_client(settings_with(ai_backend="  Anthropic ")), ClaudeClient)
         self.assertEqual(resolve_backend(settings_with(ai_backend=" PI ")), "pi")
 
-    def test_pi_and_unknown_are_unavailable(self):
-        for value in ("pi", "xyz"):
-            self.assertIsInstance(make_client(settings_with(ai_backend=value)), UnavailableClient)
-        self.assertIn("isn't built yet", make_client(settings_with(ai_backend="pi")).message)
+    def test_pi_makes_a_pi_client(self):
+        self.assertIsInstance(make_client(settings_with(ai_backend="pi")), PiClient)
+
+    def test_unknown_is_unavailable(self):
+        self.assertIsInstance(make_client(settings_with(ai_backend="xyz")), UnavailableClient)
         message = make_client(settings_with(ai_backend="xyz")).message
         self.assertIn("AI_BACKEND=xyz", message)
         self.assertIn("anthropic, pi or fake", message)
@@ -85,12 +87,18 @@ class CapabilitiesTest(unittest.TestCase):
         self.assertEqual(capabilities_for("openai/gpt-x"), nothing)
         self.assertEqual(capabilities_for(""), nothing)
 
+    def test_pi_backend_has_no_web_search(self):
+        self.assertEqual(capabilities_for("claude-sonnet-5-5", "pi"), Capabilities(False, True, True, True))
+        self.assertEqual(capabilities_for("claude-sonnet-5-5", "anthropic"), Capabilities(True, True, True, True))
+        self.assertEqual(capabilities_for("openai/gpt-x", "pi"), Capabilities(False, False, False, False))
+
     def test_frozen(self):
         with self.assertRaises(Exception):
             capabilities_for("claude-x").tools = False  # type: ignore[misc]
 
     def test_clients_have_the_protocol_methods(self):
-        for client in (FakeClaude(), ClaudeClient("k"), UnavailableClient("x")):
+        pi = make_client(settings_with(ai_backend="pi"))
+        for client in (FakeClaude(), ClaudeClient("k"), UnavailableClient("x"), pi):
             for name in ("stream", "complete", "tool_turn"):
                 self.assertTrue(callable(getattr(client, name)), (type(client), name))
 
@@ -112,11 +120,6 @@ class CheckTest(unittest.TestCase):
         found = results["AI_BACKEND isn't a known backend"]
         self.assertEqual(found.status, FAIL)
         self.assertIn("AI_BACKEND=xyz", found.detail)
-
-    def test_pi_fails(self):
-        found = self.run_check(ai_backend="pi")["The AI backend can't be used"]
-        self.assertEqual(found.status, FAIL)
-        self.assertIn("isn't built yet", found.detail)
 
     def test_fake_warns(self):
         for overrides in ({"ai_backend": "fake"}, {"fake_claude": True}):

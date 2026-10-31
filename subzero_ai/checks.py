@@ -56,25 +56,15 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
         add(WARN, "Using the pretend Claude (FAKE_CLAUDE=1)",
             "Replies are canned (FAKE_CLAUDE=1 or AI_BACKEND=fake). "
             "Set ANTHROPIC_API_KEY, FAKE_CLAUDE=0 and AI_BACKEND=anthropic for real answers.")
-    elif backend != "anthropic":
-        add(FAIL, "The AI backend can't be used" if backend == "pi" else "AI_BACKEND isn't a known backend",
-            unavailable_message(backend))
-    elif not settings.anthropic_api_key:
-        add(FAIL, "No Claude API key",
-            "Set ANTHROPIC_API_KEY. Create the key inside the SubZero AI workspace at platform.claude.com.")
+    elif backend not in ("anthropic", "pi"):
+        add(FAIL, "AI_BACKEND isn't a known backend", unavailable_message(backend))
     else:
         client = claude or make_client(settings, max_retries=1)
-        models = [("Default model", settings.model_default, settings.effort_default),
-                  ("Hard-problem model", settings.model_hard, settings.effort_default),
-                  ("Title model", settings.model_titles, None)]
-        for label, model, effort in models:
-            try:
-                await client.complete(model=model, system="Reply with the word OK.",
-                                      messages=[{"role": "user", "content": "Connection check"}],
-                                      max_tokens=16, effort=effort)
-                add(OK, f"{label} answers ({model})")
-            except Exception as exc:
-                add(FAIL, f"{label} didn't answer ({model})", str(exc))
+        try:
+            await _check_models(settings, client, add, pi=backend == "pi")
+        finally:
+            if backend == "pi" and claude is None:
+                await client.aclose()
 
     # ------------------------------------------------------------------- Slack
     if slack is None and settings.slack_bot_token:
@@ -138,6 +128,37 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
     else:
         add(WARN, "No admins named", "Set ADMIN_SLACK_IDS to the coaches' Slack member IDs.")
     return results
+
+
+def _is_anthropic(model: str) -> bool:
+    return "/" not in model or model.startswith("anthropic/")
+
+
+async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:
+    """Probe the default, hard-problem and title models with a tiny request each."""
+    models = [("Default model", settings.model_default, settings.effort_default),
+              ("Hard-problem model", settings.model_hard, settings.effort_default),
+              ("Title model", settings.model_titles, None)]
+    if pi:
+        try:
+            pong = await client.ping()
+            add(OK, "The AI helper (Node.js) is running",
+                f"Node {pong.get('node', '?')}, pi-ai {pong.get('pi_ai', '?')}")
+        except Exception as exc:
+            add(FAIL, "The AI helper isn't working", f"{exc} Check PI_NODE in config.env and the log.")
+            return
+    if not settings.anthropic_api_key and (not pi or any(_is_anthropic(m) for _, m, _ in models)):
+        add(FAIL, "No Claude API key",
+            "Set ANTHROPIC_API_KEY. Create the key inside the SubZero AI workspace at platform.claude.com.")
+        return
+    for label, model, effort in models:
+        try:
+            await client.complete(model=model, system="Reply with the word OK.",
+                                  messages=[{"role": "user", "content": "Connection check"}],
+                                  max_tokens=16, effort=effort)
+            add(OK, f"{label} answers ({model})")
+        except Exception as exc:
+            add(FAIL, f"{label} didn't answer ({model})", str(exc))
 
 
 def data_folder_open(path: str, icacls_output: str | None = None) -> str:
