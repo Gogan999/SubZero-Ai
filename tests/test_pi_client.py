@@ -345,9 +345,9 @@ class CheckTest(unittest.TestCase):
 
     def test_pi_without_anthropic_key_fails_for_claude_models(self):
         results = self.run_check(anthropic_api_key="", model_default="claude-sonnet-5-5")
-        self.assertEqual(results["No Claude API key"].status, FAIL)
-        results = self.run_check(anthropic_api_key="")  # all models are fake/*: no Anthropic key needed
-        self.assertNotIn("No Claude API key", results)
+        self.assertEqual(results["No API key for anthropic"].status, FAIL)
+        results = self.run_check(anthropic_api_key="", model_screener="fake/safe")  # all models are fake/*
+        self.assertNotIn("No API key for anthropic", results)
 
 
 if __name__ == "__main__":

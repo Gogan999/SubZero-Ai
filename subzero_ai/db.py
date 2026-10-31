@@ -228,6 +228,14 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_code_steps ON code_steps(session_id, id);
     """,
+    # Version 11: model ids are provider/model, so bare claude-... ids become anthropic/claude-...
+    """
+    UPDATE conversations SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
+    UPDATE messages SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
+    UPDATE code_sessions SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
+    UPDATE settings SET value = 'anthropic/' || value
+        WHERE key IN ('model_default', 'model_hard', 'model_titles', 'model_screener') AND value LIKE 'claude-%';
+    """,
 ]
 
 

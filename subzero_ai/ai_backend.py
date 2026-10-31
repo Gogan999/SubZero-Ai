@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from .claude import ClaudeClient, ClaudeError, FakeClaude, StreamEvent
-from .config import Settings
+from .config import PROVIDERS, Settings, model_provider, normalize_model_id  # noqa: F401 (re-exported)
 from .pi_client import PiClient
 
 BACKENDS = ("anthropic", "pi", "fake")

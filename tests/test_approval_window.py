@@ -148,7 +148,7 @@ class WindowTest(unittest.TestCase):
         self.send(cid, "Follow-up")
         screens = [c for c in self.h.claude.calls if "Reply with one line: SAFE" in c.get("system", "")]
         self.assertEqual(len(screens), 1)
-        self.assertEqual(screens[0]["model"], "claude-haiku-5-5")
+        self.assertEqual(screens[0]["model"], "anthropic/claude-haiku-5-5")
         self.assertIn("<message>\nFollow-up\n</message>", screens[0]["messages"][0]["content"])
 
     def test_flagged_messages_go_to_mentors_with_the_reason(self):

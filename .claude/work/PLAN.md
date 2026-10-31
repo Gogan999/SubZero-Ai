@@ -88,7 +88,7 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 
 ## Features (build order)
 
-Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1); F4 **in progress**; the rest **not started**.
+Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F2 commit 6b77253; F3 **done** (approved round 1, commit 96aad3e); F4 **done** (approved round 2, D25-D28); F4b **in progress**; the rest **not started**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
 - Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's
@@ -290,4 +290,6 @@ See `DECISIONS.md` (D1-D12).
 - F3-M5: provider error text reaches students verbatim; truncate (~200 chars) and soften.
 - F3-M6: a wedged gateway that ignores aborts is never recycled; kill/restart after N consecutive idle timeouts.
 - F3-M7 / F4 input: the gateway's env (keys) is fixed when PiClient is built; F4 must refresh keys after an admin saves one (restart the gateway), and the setup page's key check still uses ClaudeClient.
+- F4-M4: a model whose provider isn't in ai_providers (hand-edited config.env) gets a generic probe failure in `check`, not "No API key".
+- F4-M6: setup page's key probe uses ClaudeClient with model_default; fails oddly if MODEL_DEFAULT is non-anthropic.
 - F1-M4 (no change needed now): setup step doesn't clear in-memory `fake_claude`; pre-existing, takes effect after restart.

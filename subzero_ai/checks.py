@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from .ai_backend import make_client, resolve_backend, unavailable_message
-from .config import Settings
+from .config import Settings, model_provider, normalize_model_id
+from .pi_client import provider_keys
 from .slack_api import SlackError, SlackWebApi
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
@@ -130,15 +131,13 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
     return results
 
 
-def _is_anthropic(model: str) -> bool:
-    return "/" not in model or model.startswith("anthropic/")
-
-
 async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:
-    """Probe the default, hard-problem and title models with a tiny request each."""
+    """Probe the default, hard-problem, title and screener models with a tiny request each."""
     models = [("Default model", settings.model_default, settings.effort_default),
               ("Hard-problem model", settings.model_hard, settings.effort_default),
-              ("Title model", settings.model_titles, None)]
+              ("Title model", settings.model_titles, None),
+              ("Screener model", settings.model_screener, None)]
+    models = [(label, normalize_model_id(model), effort) for label, model, effort in models]
     if pi:
         try:
             pong = await client.ping()
@@ -147,7 +146,13 @@ async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:
         except Exception as exc:
             add(FAIL, "The AI helper isn't working", f"{exc} Check PI_NODE in config.env and the log.")
             return
-    if not settings.anthropic_api_key and (not pi or any(_is_anthropic(m) for _, m, _ in models)):
+        keys = provider_keys(settings)
+        used = dict.fromkeys(model_provider(model) for _, model, _ in models)
+        missing = [p for p in used if p in settings.ai_providers and p not in keys]
+        for provider in missing:
+            add(FAIL, f"No API key for {provider}", "An admin can add it on the Settings page, under AI providers.")
+        models = [m for m in models if model_provider(m[1]) not in missing]
+    elif not settings.anthropic_api_key:
         add(FAIL, "No Claude API key",
             "Set ANTHROPIC_API_KEY. Create the key inside the SubZero AI workspace at platform.claude.com.")
         return

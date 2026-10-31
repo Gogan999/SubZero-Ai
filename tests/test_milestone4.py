@@ -70,7 +70,7 @@ class SettingsValuesTest(TempDirTest):
             "effort_default": "extreme", "effort_high": "high", "max_tokens_chat": "8,000",
             "max_tokens_explainer": "10", "long_chat_tokens": "150000"})
         self.assertIn("Fable", errors["model_default"])
-        self.assertIn("model ID", errors["model_hard"])
+        self.assertIn("provider/model", errors["model_hard"])
         self.assertIn("effort_default", errors)
         self.assertIn("max_tokens_explainer", errors)
         self.assertEqual(values["max_tokens_chat"], 8000)
@@ -134,7 +134,7 @@ class SettingsPageTest(unittest.TestCase):
                                headers=HTML)
         self.assertEqual(resp.status_code, 400)
         self.assertIn("kept off", resp.text)
-        self.assertEqual(self.h.settings.model_default, "claude-sonnet-5-5")
+        self.assertEqual(self.h.settings.model_default, "anthropic/claude-sonnet-5-5")
         # The error is tied to its field for screen readers
         field = re.search(r'<input id="f-model_default"[^>]*>', resp.text).group(0)
         self.assertIn('aria-describedby="h-model_default e-model_default"', field)

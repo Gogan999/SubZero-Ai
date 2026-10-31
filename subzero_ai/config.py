@@ -25,6 +25,29 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+# The AI providers an admin can turn on (the Pi backend reaches all of them; the Anthropic backend only the first)
+PROVIDERS = ("anthropic", "openai", "google", "openrouter")
+
+
+def normalize_model_id(value: object) -> str:
+    """Model ids are provider/model. Bare Claude ids from older settings become anthropic/claude-...;
+    anything else is only trimmed."""
+    text = str(value or "").strip()
+    return "anthropic/" + text if text.startswith("claude-") else text
+
+
+def model_provider(value: object) -> str:
+    """The provider part of a model id ('' when the id has no provider)."""
+    text = normalize_model_id(value)
+    return text.split("/", 1)[0] if "/" in text else ""
+
+
+def _as_providers(value: str) -> tuple[str, ...]:
+    """Known providers only, in a fixed order; anthropic if nothing valid is left."""
+    wanted = {part.strip().lower() for part in str(value).replace("\n", ",").split(",")}
+    return tuple(p for p in PROVIDERS if p in wanted) or ("anthropic",)
+
+
 def _as_bool(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -52,16 +75,20 @@ class Settings:
     public_url: str = "http://localhost:8787"
     host: str = "127.0.0.1"
     port: int = 8787
-    session_secret: str = ""
+    session_secret: str = field(default="", repr=False)
     app_name: str = "SubZero AI"
     timezone: str = "America/Chicago"
 
     # Claude API
-    anthropic_api_key: str = ""
+    anthropic_api_key: str = field(default="", repr=False)
     anthropic_base_url: str = "https://api.anthropic.com"
-    model_default: str = "claude-sonnet-5-5"
-    model_hard: str = "claude-opus-5-5"  # mentors can switch a conversation to this for hard problems
-    model_titles: str = "claude-haiku-5-5"
+    openai_api_key: str = field(default="", repr=False)
+    gemini_api_key: str = field(default="", repr=False)
+    openrouter_api_key: str = field(default="", repr=False)
+    ai_providers: tuple[str, ...] = ("anthropic",)  # providers admins turned on; the others' models are refused
+    model_default: str = "anthropic/claude-sonnet-5-5"  # model ids are provider/model
+    model_hard: str = "anthropic/claude-opus-5-5"  # mentors can switch a conversation to this for hard problems
+    model_titles: str = "anthropic/claude-haiku-5-5"
     effort_default: str = "medium"
     effort_high: str = "high"  # for explainers and messages with files attached (usually code reviews)
     max_tokens_chat: int = 8000
@@ -79,10 +106,10 @@ class Settings:
     research_for_students: bool = False  # Research runs many searches, so it starts as mentors only
 
     # Slack
-    slack_bot_token: str = ""
-    slack_app_token: str = ""
+    slack_bot_token: str = field(default="", repr=False)
+    slack_app_token: str = field(default="", repr=False)
     slack_client_id: str = ""
-    slack_client_secret: str = ""
+    slack_client_secret: str = field(default="", repr=False)
     slack_team_id: str = ""
     slack_approvals_channel: str = ""
     admin_slack_ids: frozenset[str] = frozenset()
@@ -100,12 +127,13 @@ class Settings:
     approval_window_minutes: int = 5
     always_review_slack_ids: frozenset[str] = frozenset()  # students who never get the approval window
     screener_enabled: bool = True  # a small model checks each message in the window; anything it flags waits
-    model_screener: str = "claude-haiku-5-5"
+    model_screener: str = "anthropic/claude-haiku-5-5"
 
     # Connectors: add files to a message from the team's GitHub repository or a shared Google Drive link
     connector_github_repo: str = ""  # owner/name
     connector_github_branch: str = ""  # empty means the repository's default branch
-    connector_github_token: str = ""  # only for a private repository: a fine-grained token with read-only Contents
+    # only for a private repository: a fine-grained token with read-only Contents
+    connector_github_token: str = field(default="", repr=False)
     connector_drive_links: bool = True
 
     # Code: Claude works in a copy of the GitHub repository above; a mentor approves each change and command
@@ -176,9 +204,16 @@ _CONVERTERS = {
 }
 
 
+MODEL_SETTINGS = ("model_default", "model_hard", "model_titles", "model_screener")
+
+
 def convert(name: str, raw: str):
     """Turn a text value into the type of the named setting."""
     f = next(f for f in fields(Settings) if f.name == name)
+    if name in MODEL_SETTINGS:
+        return normalize_model_id(raw)
+    if name == "ai_providers":
+        return _as_providers(raw)
     return _CONVERTERS.get(f.type, str)(raw)
 
 
@@ -241,11 +276,12 @@ def load_settings(env_file: str | os.PathLike | None = None, *, search_cwd: bool
         raw = os.environ.get(key, file_values.get(key))
         if raw is None:
             continue
-        converter = _CONVERTERS.get(f.type, str)
-        setattr(settings, f.name, converter(raw))
+        setattr(settings, f.name, convert(f.name, raw))
 
     for name, value in overrides.items():
         setattr(settings, name, value)
+    for name in MODEL_SETTINGS:
+        setattr(settings, name, normalize_model_id(getattr(settings, name)))
 
     settings.data_dir = Path(settings.data_dir)
     for sub in ("data", "files", "backups", "logs"):

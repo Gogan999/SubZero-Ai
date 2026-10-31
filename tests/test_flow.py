@@ -104,7 +104,7 @@ class FlowTest(unittest.TestCase):
         reply = self.h.reply_to(mid)
         self.assertEqual(reply["status"], "complete")
         self.assertEqual(reply["content"], FakeClaude.reply_for("How do I tune the arm's feedforward?"))
-        self.assertEqual(reply["model"], "claude-sonnet-5-5")
+        self.assertEqual(reply["model"], "anthropic/claude-sonnet-5-5")
         # Claude got the safety prompt and only the approved text, with no names
         call = self.h.claude.calls[0]
         self.assertIn("high school FIRST Robotics Competition team", call["system"])
@@ -490,7 +490,7 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.approve(mid)
         stream_calls = [c for c in self.h.claude.calls if c.get("kind") != "complete"]
-        self.assertEqual(stream_calls[-1]["model"], "claude-opus-5-5")
+        self.assertEqual(stream_calls[-1]["model"], "anthropic/claude-opus-5-5")
         self.assertIn("Opus 5.5", self.kim.get(f"/c/{cid}").text)
 
 

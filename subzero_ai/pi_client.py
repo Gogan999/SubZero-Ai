@@ -48,9 +48,16 @@ def key_env_name(provider: str) -> str:
     return "SUBZERO_KEY_" + re.sub(r"[^A-Za-z0-9]", "_", provider).upper()
 
 
+KEY_SETTINGS = {"anthropic": "anthropic_api_key", "openai": "openai_api_key", "google": "gemini_api_key",
+                "openrouter": "openrouter_api_key"}
+
+
 def provider_keys(settings: Settings) -> dict[str, str]:
-    """The API keys to hand the gateway, by provider id."""
-    return {"anthropic": settings.anthropic_api_key} if settings.anthropic_api_key else {}
+    """The API keys to hand the gateway, by provider id: those that are set, for providers that are turned on
+    (Anthropic counts as on whenever its key is set)."""
+    enabled = set(settings.ai_providers) | {"anthropic"}
+    return {provider: key for provider, name in KEY_SETTINGS.items()
+            if provider in enabled and (key := getattr(settings, name, ""))}
 
 
 def child_env(keys: dict[str, str], environ: dict[str, str] | None = None) -> dict[str, str]:
@@ -104,6 +111,7 @@ class _Proc:
     aborted: set[str] = field(default_factory=set)
     closing: bool = False
     dead: bool = False
+    retired: bool = False  # replaced by a newer process (new keys); stops when its last request finishes
 
 
 class PiClient:
@@ -122,6 +130,7 @@ class PiClient:
         self.kill_wait = kill_wait
         self._lock = threading.Lock()
         self._proc: _Proc | None = None
+        self._retired: list[_Proc] = []  # old processes still finishing requests
         self._closed = False
         self._retry_at = 0.0
         self._streak = 0
@@ -132,6 +141,25 @@ class PiClient:
         script = settings.pi_gateway_script or default_gateway_script()
         return cls([settings.pi_node or "node", script], child_env(provider_keys(settings)),
                    request_timeout=settings.pi_request_timeout, idle_timeout=settings.pi_idle_timeout)
+
+    def set_keys(self, keys: dict[str, str]) -> None:
+        """Use new API keys. The next request starts a fresh gateway with them. A gateway with no request in
+        flight stops now; one that is busy finishes what it's doing first, then stops. Keys are never logged."""
+        with self._lock:
+            self.env = {name: value for name, value in self.env.items() if not name.startswith("SUBZERO_KEY_")}
+            self.env.update(child_env(keys, {}))
+            proc, self._proc = self._proc, None
+            if proc is None or proc.dead:
+                return
+            proc.retired = True
+            proc.closing = True
+            if proc.pending:
+                self._retired.append(proc)
+                return
+        self._stop_in_background(proc)
+
+    def _stop_in_background(self, proc: _Proc) -> None:
+        threading.Thread(target=self._stop, args=(proc,), name="pi-stop", daemon=True).start()
 
     # ------------------------------------------------------------------ process
     def _spawn(self) -> _Proc:
@@ -210,6 +238,8 @@ class PiClient:
             waiting = list(proc.pending)
             if self._proc is proc:
                 self._proc = None
+            if proc in self._retired:
+                self._retired.remove(proc)
             if not proc.closing:
                 self._note_crash(time.monotonic() - proc.started)
         if proc.closing:
@@ -244,14 +274,17 @@ class PiClient:
     async def _records(self, payload: dict[str, Any], model: str = "",
                        total: float | None = None) -> AsyncIterator[dict[str, Any]]:
         """Send one request and yield its records until done. Raises _Failure. Aborts if closed early."""
-        proc = self._ensure_proc()
         rid = f"r{next(self._ids)}"
         loop = asyncio.get_running_loop()
         pending = _Pending(loop, asyncio.Queue())
-        with self._lock:
-            if proc.dead:
-                raise _Failure(DIED_MESSAGE)
-            proc.pending[rid] = pending
+        while True:
+            proc = self._ensure_proc()
+            with self._lock:
+                if proc.dead:
+                    raise _Failure(DIED_MESSAGE)
+                if not proc.retired:  # set_keys retires under this lock, so it can't stop a process we register on
+                    proc.pending[rid] = pending
+                    break
         finished = False
         try:
             if not self._send(proc, {"id": rid, **payload}):
@@ -289,8 +322,11 @@ class PiClient:
                 proc.pending.pop(rid, None)
                 if not finished:
                     proc.aborted.add(rid)
+                last_one = proc.retired and not proc.pending and not proc.dead
             if not finished and not proc.dead:
                 self._send(proc, {"id": rid, "op": "abort"})
+            if last_one:
+                self._stop_in_background(proc)
 
     def _payload(self, op: str, *, model: str, system: str, messages: list[dict], max_tokens: int,
                  effort: str | None, system_extra: str | None = None,
@@ -386,15 +422,18 @@ class PiClient:
         """Abort what's running, close the gateway's input, and stop it if it doesn't leave by itself."""
         with self._lock:
             self._closed = True
-            proc, self._proc = self._proc, None
-            if proc is not None:
+            procs = ([self._proc] if self._proc is not None else []) + self._retired
+            self._proc, self._retired = None, []
+            work = []
+            for proc in procs:
                 proc.closing = True
-                waiting = list(proc.pending)
-        if proc is None or proc.dead:
-            return
-        for rid in waiting:
-            self._send(proc, {"id": rid, "op": "abort"})
-        await asyncio.get_running_loop().run_in_executor(None, self._stop, proc)
+                work.append((proc, list(proc.pending)))
+        for proc, waiting in work:
+            if proc.dead:
+                continue
+            for rid in waiting:
+                self._send(proc, {"id": rid, "op": "abort"})
+            await asyncio.get_running_loop().run_in_executor(None, self._stop, proc)
 
     def _stop(self, proc: _Proc) -> None:
         try:
