@@ -8,7 +8,7 @@ Opt-in: follow this file only when the user asks for it, or when resuming work t
 
 ## Settings
 - **Plan approval: on.** After planning, show the user the plan and wait for a go-ahead. Off: build straight through.
-- **Commits: on.** Commit each approved feature locally. Never push. Off: leave changes uncommitted.
+- **Commits: on.** Commit each approved feature, then push it to the session's own branch (cloud sessions lose anything unpushed). Never push to `main`, never force-push, and never merge a PR yourself. Off: leave changes uncommitted.
 - **Review rounds before Opus steps in: 3.**
 
 # Orchestration (main session only)
@@ -80,7 +80,7 @@ Point to files instead of pasting code.
 - The plan is ready and plan approval is on.
 - A requirement is ambiguous in a way that changes what gets built, and research can't settle it.
 - The work needs something only the user has: credentials, accounts, paid services, physical hardware, system-level installs.
-- A step is destructive or hard to undo: deleting data, migrations on real data, pushing, deploying, publishing, rewriting git history.
+- A step is destructive or hard to undo: deleting data, migrations on real data, pushing anywhere but the session's branch, deploying, publishing, rewriting git history.
 - A feature is still failing after your own fix attempt.
 - All features are done.
 

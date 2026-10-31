@@ -1,6 +1,6 @@
 # Plan: move AI access onto the Pi harness
 
-Status: **waiting for Logan's go-ahead** (plan approval is on). Nothing below is built yet.
+Status: **approved by Logan 2026-10-31; build not started.** Build in a fresh session so the `researcher`/`implementer`/`reviewer` agents load, under `.claude/WORKFLOW.md`. Start at F1 (from PR #8's head if #8 is still open).
 
 - Branch: `claude/project-thread-ntchvl`
 - Starting commit: `afcc835` (main, "Merge pull request #9"), clean working tree, 226 tests passing.
@@ -246,7 +246,7 @@ See `DECISIONS.md` (D1-D12).
 - **Q4. Cost limits across providers.** Limits today count messages, not dollars. Pi reports cost per
   reply; do you want a monthly spend cap per provider? Recommendation: show spend on the admin page
   now, add a cap later if needed.
-- **Q5. "Never push" in CLAUDE.md.** In this cloud setup work only survives if it's pushed to the
+- **Q5. ANSWERED 2026-10-31: Claude may push (to the session's branch only; WORKFLOW.md updated).** "Never push" in CLAUDE.md. In this cloud setup work only survives if it's pushed to the
   thread's branch and opened as a PR. Should the rule read "push only to the session's branch, never
   to main"?
 - **Q6. Slack DMs (S1):** one chat per Slack thread (recommended), or one running chat per person?
