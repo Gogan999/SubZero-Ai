@@ -88,7 +88,7 @@ changing the approval rules; Slack DMs until F1-F8 are done.
 
 ## Features (build order)
 
-Each is sized for one implementer pass. Status: F1 **done** (approved round 1); F2 **in progress**; the rest **not started**.
+Each is sized for one implementer pass. Status: F1 **done** (approved round 1, commit 1b908ee); F2 **done** (approved round 2); F3 **in progress**; the rest **not started**.
 
 ### F1. Backend seam and `AI_BACKEND` setting
 - Build: a small `AIBackend` protocol (the existing `stream`/`complete` signatures, PR #8's
@@ -280,4 +280,7 @@ See `DECISIONS.md` (D1-D12).
 - F1-M1: `tests/test_ai_backend.py` protocol test only checks the methods exist; compare `inspect.signature` across ClaudeClient, FakeClaude, UnavailableClient and AIBackend.
 - F1-M2: blank `AI_BACKEND=` counts as unknown and FAILs; treat empty/whitespace as `anthropic`, with a test.
 - F1-M3: UnavailableClient's message reaches students; give students "The AI isn't set up right now. Tell a mentor." and keep the config.env detail for `check`/logs.
+- F2-M3: pi-ai reads some env directly (AWS, Azure, Google ADC, PI_CACHE_RETENTION); bedrock/azure/vertex unsupported for now, documented in pi_gateway/README.md.
+- F2-M5: CLAUDE.md test count is stale (226); update at the end.
+- F2-M6: a user turn mixing tool_result and text/image becomes two consecutive user messages in pi-ai's body; optionally merge (tool results first).
 - F1-M4 (no change needed now): setup step doesn't clear in-memory `fake_claude`; pre-existing, takes effect after restart.
