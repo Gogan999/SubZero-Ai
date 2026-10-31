@@ -25,15 +25,16 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-# The AI providers an admin can turn on (the Pi backend reaches all of them; the Anthropic backend only the first)
-PROVIDERS = ("anthropic", "openai", "google", "openrouter")
+# The AI providers an admin can turn on (the Pi backend reaches all of them; the Anthropic backend only the first).
+# claude-bridge is Claude through a Claude Code login (a Claude subscription): it needs no API key.
+PROVIDERS = ("anthropic", "openai", "google", "openrouter", "claude-bridge")
 
 
 def normalize_model_id(value: object) -> str:
     """Model ids are provider/model. Bare Claude ids from older settings become anthropic/claude-...;
     anything else is only trimmed."""
     text = str(value or "").strip()
-    return "anthropic/" + text if text.startswith("claude-") else text
+    return "anthropic/" + text if text.startswith("claude-") and "/" not in text else text
 
 
 def model_provider(value: object) -> str:

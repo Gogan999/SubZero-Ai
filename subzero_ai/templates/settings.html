@@ -20,6 +20,7 @@
     <div class="field check">
       <input type="checkbox" id="f-{{ f.name }}-{{ p.id }}" name="{{ f.name }}" value="{{ p.id }}" {% if p.on %}checked{% endif %}>
       <label for="f-{{ f.name }}-{{ p.id }}">{{ p.label }}</label>
+      {% if p.help %}<p class="field-hint" id="h-{{ f.name }}-{{ p.id }}">{{ p.help }}</p>{% endif %}
     </div>
     {% endfor %}
     {% if f.help %}<p class="field-hint" id="h-{{ f.name }}">{{ f.help }}</p>{% endif %}

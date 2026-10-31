@@ -30,6 +30,11 @@ NODE_MESSAGE = ("The AI helper couldn't start because Node.js couldn't be starte
                 "Ask an admin to check that Node.js is installed.")
 IDLE_MESSAGE = "The AI helper stopped answering. Try again."
 SLOW_MESSAGE = "The AI took too long to answer. Try again."
+BRIDGE_PROVIDER = "claude-bridge"  # Claude through a Claude Code login (a Claude subscription); needs no API key
+QUOTA_MESSAGE = ("The Claude subscription has hit its limit for now. Try again later or ask a mentor to switch "
+                 "models.")
+LOGIN_MESSAGE = ("The Claude subscription isn't signed in. An admin needs to run python -m subzero_ai claude-login "
+                 "on the mini PC.")
 
 # Variables Node needs to run (Linux and Windows), and proxy / certificate settings. Nothing else is passed on.
 _NODE_VARS = ("PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "HOME",
@@ -38,6 +43,7 @@ _PROXY_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_pro
                "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE")
 _ALLOWED = frozenset(_NODE_VARS + _PROXY_VARS)
 _ALLOWED_UPPER = frozenset(name.upper() for name in _ALLOWED)
+_BRIDGE_VARS = ("SUBZERO_BRIDGE", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "PI_REQUEST_TIMEOUT")
 
 _DEAD = object()  # put in a request's queue when the process exits under it
 _SHUTDOWN = object()  # same, when we closed the process on purpose
@@ -73,6 +79,51 @@ def child_env(keys: dict[str, str], environ: dict[str, str] | None = None) -> di
     return env
 
 
+def bridge_env(data_dir: Path | str, request_timeout: float = 300) -> dict[str, str]:
+    """What turns on claude-bridge/ models in the gateway: the on switch and the two folders it keeps its files in
+    (the Claude Code login and session files, and the Pi agent folder), and how long a reply may take (the gateway's
+    cross-process lock uses it). Never contains ANTHROPIC_* variables."""
+    base = Path(data_dir) / "bridge"
+    return {"SUBZERO_BRIDGE": "1", "CLAUDE_CONFIG_DIR": str(base / "claude-config"),
+            "PI_CODING_AGENT_DIR": str(base / "pi-agent"), "PI_REQUEST_TIMEOUT": str(max(1, int(request_timeout)))}
+
+
+def settings_bridge_env(settings: Settings) -> dict[str, str]:
+    """bridge_env when the Claude subscription provider is turned on, otherwise nothing."""
+    if BRIDGE_PROVIDER not in settings.ai_providers:
+        return {}
+    return bridge_env(settings.data_dir, settings.pi_request_timeout)
+
+
+def bridge_credentials_path(data_dir: Path | str) -> Path:
+    """Where Claude Code keeps its login inside the bridge's own config folder."""
+    return Path(data_dir) / "bridge" / "claude-config" / ".credentials.json"
+
+
+def bridge_logged_in(data_dir: Path | str) -> bool:
+    """True if a Claude Code login exists for the bridge. Only looks that the file is there; never reads it."""
+    return bridge_credentials_path(data_dir).is_file()
+
+
+def claude_cli_path(gateway_script: str | Path | None = None, *, platform: str | None = None,
+                    machine: str | None = None) -> Path | None:
+    """The Claude Code program that ships inside pi_gateway/node_modules (the @anthropic-ai/claude-agent-sdk-<os>-<cpu>
+    package), or None if it isn't installed for this computer."""
+    import platform as platform_module
+    import sys
+    plat = platform or sys.platform
+    cpu = (machine or platform_module.machine()).lower()
+    cpu = "arm64" if cpu in ("arm64", "aarch64") else "x64"
+    folders = {"win32": [f"win32-{cpu}"], "darwin": [f"darwin-{cpu}"],
+               "linux": [f"linux-{cpu}", f"linux-{cpu}-musl"]}.get(plat if plat in ("win32", "darwin") else "linux", [])
+    root = Path(gateway_script or default_gateway_script()).resolve().parent / "node_modules" / "@anthropic-ai"
+    for folder in folders:
+        exe = root / f"claude-agent-sdk-{folder}" / ("claude.exe" if plat == "win32" else "claude")
+        if exe.is_file():
+            return exe
+    return None
+
+
 def default_gateway_script() -> str:
     """pi_gateway/gateway.mjs next to the subzero_ai package."""
     return str(Path(__file__).resolve().parent.parent / "pi_gateway" / "gateway.mjs")
@@ -86,6 +137,13 @@ def error_message(code: str, detail: str, model: str) -> str:
     if code == "unknown_model":
         return f"The model {model} isn't available."
     if code == "provider":
+        if model.startswith(BRIDGE_PROVIDER + "/"):
+            if re.search(r"quota exceeded|usage limit|rate limit", detail, re.I):
+                return QUOTA_MESSAGE
+            if re.search(r"not logged in|/login", detail, re.I):
+                return LOGIN_MESSAGE
+            if detail.startswith("Claude tried to use a tool"):
+                return detail
         return f"The AI service returned an error: {detail}"
     if code == "aborted":
         return "The AI request was cancelled. Try again."
@@ -139,8 +197,9 @@ class PiClient:
     @classmethod
     def from_settings(cls, settings: Settings) -> PiClient:
         script = settings.pi_gateway_script or default_gateway_script()
-        return cls([settings.pi_node or "node", script], child_env(provider_keys(settings)),
-                   request_timeout=settings.pi_request_timeout, idle_timeout=settings.pi_idle_timeout)
+        env = {**child_env(provider_keys(settings)), **settings_bridge_env(settings)}
+        return cls([settings.pi_node or "node", script], env, request_timeout=settings.pi_request_timeout,
+                   idle_timeout=settings.pi_idle_timeout)
 
     def set_keys(self, keys: dict[str, str]) -> None:
         """Use new API keys. The next request starts a fresh gateway with them. A gateway with no request in
@@ -148,15 +207,31 @@ class PiClient:
         with self._lock:
             self.env = {name: value for name, value in self.env.items() if not name.startswith("SUBZERO_KEY_")}
             self.env.update(child_env(keys, {}))
-            proc, self._proc = self._proc, None
-            if proc is None or proc.dead:
-                return
-            proc.retired = True
-            proc.closing = True
-            if proc.pending:
-                self._retired.append(proc)
-                return
-        self._stop_in_background(proc)
+            stop = self._retire_locked()
+        if stop is not None:
+            self._stop_in_background(stop)
+
+    def set_bridge(self, env: dict[str, str]) -> None:
+        """Turn claude-bridge/ models on (env from bridge_env) or off (empty). The gateway restarts like it does
+        for new keys."""
+        with self._lock:
+            self.env = {name: value for name, value in self.env.items() if name not in _BRIDGE_VARS}
+            self.env.update(env)
+            stop = self._retire_locked()
+        if stop is not None:
+            self._stop_in_background(stop)
+
+    def _retire_locked(self) -> _Proc | None:
+        """Retire the current process (caller holds the lock). Returns it if it should be stopped right now."""
+        proc, self._proc = self._proc, None
+        if proc is None or proc.dead:
+            return None
+        proc.retired = True
+        proc.closing = True
+        if proc.pending:
+            self._retired.append(proc)
+            return None
+        return proc
 
     def _stop_in_background(self, proc: _Proc) -> None:
         threading.Thread(target=self._stop, args=(proc,), name="pi-stop", daemon=True).start()

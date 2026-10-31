@@ -21,9 +21,27 @@ Every request ends with exactly one `{"id", "kind": "done"}`. Bad JSON or a miss
 Effort: for Anthropic Messages models it is sent as `output_config.effort` without enabling extended thinking;
 for other models with `reasoning` it becomes the thinking level; otherwise it is ignored.
 
+## Claude subscription (`claude-bridge/<model>`)
+
+Models named `claude-bridge/<model>` answer through Claude Code (a Claude Pro/Max login) using the `pi-claude-bridge`
+extension, run inside an in-memory `@earendil-works/pi-coding-agent` session with no tools (`lib/bridge.mjs`). Off unless
+env `SUBZERO_BRIDGE=1` (then `claude-bridge/...` gives `unknown_model`). When on, `PI_CODING_AGENT_DIR` must be
+`<data dir>/bridge/pi-agent`, and `CLAUDE_CONFIG_DIR` should be `<data dir>/bridge/claude-config`. Rules:
+
+- Each reply runs in a fresh empty folder `<data dir>/bridge/work/<id>`, deleted afterwards. New Claude Code session
+  files under `CLAUDE_CONFIG_DIR` (projects, session-env, todos, ...) are deleted after each reply; the login file stays.
+- `ANTHROPIC_*` is removed from the environment at start, `SUBZERO_KEY_*` are moved out of it (Claude Code inherits the
+  environment), and `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1` are set.
+- Any tool call or tool execution stops the reply with `provider`: "Claude tried to use a tool, so this reply was
+  stopped." (the event name goes to stderr). `tool_turn` gives `bad_request`.
+- A session dropped after the abort grace time may still write files after the sweep; the next sweep removes them.
+- Replies run one at a time (also across gateway processes, with `bridge/reply.lock`). No API key is needed; cost is reported as 0 (usage keys are still sent).
+- The `models` op lists the bridge's models (with `images` / `reasoning`) when the bridge is on.
+
 Not supported yet: Bedrock, Azure OpenAI and Google Vertex (pi-ai reads their credentials from the environment directly).
 
 ## Tests
 
-`npm test` (uses pi-ai's faux provider; no network or keys). Layout: `lib/convert.mjs` (wire conversion),
-`lib/gateway.mjs` (`createGateway`), `gateway.mjs` (stdio entry).
+`npm test` (uses pi-ai's faux provider and a fake bridge extension; no network or keys; the real bridge is never
+loaded). Layout: `lib/convert.mjs` (wire conversion), `lib/gateway.mjs` (`createGateway`), `lib/bridge.mjs`
+(`createBridgeRunner`), `gateway.mjs` (stdio entry).

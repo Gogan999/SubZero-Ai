@@ -4,6 +4,7 @@
     python -m subzero_ai --test-mode   start with sample sign-ins (and a pretend Claude if there's no API key)
     python -m subzero_ai check         check config.env, Slack, and the Claude API key
     python -m subzero_ai check --model provider/id   run only the model safety check on one model
+    python -m subzero_ai claude-login  sign in the Claude subscription (Claude Code) that claude-bridge/ models use
     python -m subzero_ai backup [LABEL] back up the database, attached files, and prompts now
     python -m subzero_ai backups       list the backups
     python -m subzero_ai restore NAME  put a backup back (stop the app first; "latest" picks the newest)
@@ -29,7 +30,7 @@ from .config import Settings, load_settings
 
 # Exit code that asks for a restart: the Windows service starts the app again, and run.ps1 loops on it.
 RESTART_EXIT_CODE = 3
-COMMANDS = ["run", "check", "backup", "backups", "restore", "recovery-code", "reset-setup"]
+COMMANDS = ["run", "check", "claude-login", "backup", "backups", "restore", "recovery-code", "reset-setup"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         from .checks import print_report, run_checks
         return print_report(asyncio.run(run_checks(settings)))
+    if args.command == "claude-login":
+        return claude_login_tool(settings)
     if args.command != "run":
         return run_tool(args.command, args.name, settings)
 
@@ -168,6 +171,40 @@ def safety_check_tool(model: str, settings: Settings, client=None) -> int:
     print(f"Chats: {'passed' if result.chat_passed else 'FAILED'}. "
           f"Screener: {'passed' if result.screener_passed else 'FAILED'}.")
     return 0 if result.chat_passed and result.screener_passed else 1
+
+
+def claude_login_tool(settings: Settings, run=None) -> int:
+    """Sign in to Claude Code for claude-bridge/ models. The login is kept in <data>/bridge/claude-config, apart from
+    any other Claude Code login on this PC. `run` stands in for subprocess.run in tests."""
+    import subprocess
+
+    from .pi_client import bridge_logged_in, child_env, claude_cli_path, settings_bridge_env
+    cli = claude_cli_path(settings.pi_gateway_script or None)
+    if cli is None:
+        print("Couldn't find the Claude Code program in pi_gateway/node_modules. "
+              "Install the AI helper's files (npm ci --ignore-scripts in the pi_gateway folder) and try again.")
+        return 1
+    config_dir = settings.data_dir / "bridge" / "claude-config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    # Only the system variables Claude Code needs, plus its config folder. Never an API key or token, which would
+    # make it bill the API (or skip the login) instead of using the subscription.
+    env = child_env({})
+    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    print("Signing in to Claude. A browser window opens; sign in with the Claude Pro or Max account to use.")
+    print("")
+    try:
+        code = (run or subprocess.run)([str(cli), "auth", "login", "--claudeai"], env=env).returncode
+    except OSError as exc:
+        print(f"Couldn't start Claude Code: {exc}")
+        return 1
+    if code != 0 or not bridge_logged_in(settings.data_dir):
+        print("")
+        print("The sign-in didn't finish. Run python -m subzero_ai claude-login to try again.")
+        return 1
+    print("")
+    print("Signed in. Turn on \"Claude subscription (Claude Code)\" under AI providers in Settings to use it"
+          + ("." if settings_bridge_env(settings) else " (it needs AI_BACKEND=pi)."))
+    return 0
 
 
 def run_tool(command: str, name: str | None, settings: Settings) -> int:

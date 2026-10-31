@@ -44,13 +44,14 @@ _NONE = Capabilities(web_search=False, tools=False, thinking=False, images=False
 
 
 def capabilities_for(model: str, backend: str = "anthropic", info: dict | None = None) -> Capabilities:
-    """Claude models (bare or anthropic/-prefixed ids) can do everything, except web search on the pi backend.
-    Other models can read images and think only when the gateway's model info (`images`, `reasoning`) says so;
+    """Claude API models (bare or anthropic/-prefixed ids) can do everything, except web search on the pi backend.
+    Other models, including claude-bridge/ ones (Claude through a Claude Code login: no web search, tools or Code
+    sessions), can read images and think only when the gateway's model info (`images`, `reasoning`) says so;
     unknown ones can do nothing."""
     name = model.strip().lower()
     if name.startswith("anthropic/"):
         name = name[len("anthropic/"):]
-    if not name.startswith("claude-"):
+    if "/" in name or not name.startswith("claude-"):
         if not info:
             return _NONE
         return replace(_NONE, images=bool(info.get("images")), thinking=bool(info.get("reasoning")))

@@ -21,7 +21,7 @@ from .config import PROVIDERS, update_env_file
 from .connectors import BRANCH_RE, REPO_RE, ConnectorError
 from .db import utcnow
 from .maintenance import update_available
-from .pi_client import KEY_SETTINGS, provider_keys
+from .pi_client import KEY_SETTINGS, provider_keys, settings_bridge_env
 from .roles import RECOVERY_USER, is_excluded_account
 from .saved_settings import SLACK_ID_RE
 from .store import Viewer
@@ -139,8 +139,8 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
                 item["people"] = _names_for(s, getattr(s.settings, f.name))
             elif f.kind == "providers":
                 on = set(value.split())
-                item["choices"] = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "on": p in on}
-                                   for p in PROVIDERS]
+                item["choices"] = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "on": p in on,
+                                    "help": saved_settings.PROVIDER_HELP.get(p, "")} for p in PROVIDERS]
             items.append(item)
         sections.append({"key": key, "title": title, "fields": items})
     prompts = []
@@ -166,7 +166,7 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
                   "token_set": bool(s.settings.connector_github_token), "drive": s.settings.connector_drive_links}
     ai_keys = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "field": KEY_SETTINGS[p],
                 "set": bool(getattr(s.settings, KEY_SETTINGS[p])), "help": KEY_HELP[p]}
-               for p in PROVIDERS if p in s.settings.ai_providers]
+               for p in PROVIDERS if p in s.settings.ai_providers and p in KEY_SETTINGS]
     return {"health": health_rows(s), "sections": sections, "ai_keys": ai_keys, "safety": safety_context(s),
             "prompts": prompts, "history": history,
             "backups": backups, "backup_folder": str(s.settings.backups_path), "connectors": connectors}
@@ -209,6 +209,7 @@ async def save_section(request: Request, viewer: Viewer) -> Response:
     changed = saved_settings.save(s.db, s.settings, values, viewer.id)
     apply_live(s)
     if "ai_providers" in changed:
+        use_new_bridge(s)
         refresh_model_names(s)
     title = saved_settings.SECTIONS[section][0]
     title = "Claude settings" if section == "claude" else title.lower()
@@ -235,6 +236,13 @@ def use_new_keys(s: Services) -> None:
         set_keys(provider_keys(s.settings))
 
 
+def use_new_bridge(s: Services) -> None:
+    """Turn the Claude subscription models on or off in the running AI client, without a restart."""
+    set_bridge = getattr(s.claude, "set_bridge", None)
+    if set_bridge is not None:
+        set_bridge(settings_bridge_env(s.settings))
+
+
 def key_problem(provider: str, key: str) -> str:
     """Why a typed API key can't be right, or an empty string. Only checks the shape, never the key itself."""
     name = saved_settings.PROVIDER_LABELS[provider]
@@ -252,7 +260,7 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
     """Save API keys for the providers that are turned on. They go in config.env and are never shown again."""
     s = services(request)
     form = await request.form()
-    typed = {p: str(form.get(KEY_SETTINGS[p], "") or "").strip() for p in PROVIDERS}
+    typed = {p: str(form.get(name, "") or "").strip() for p, name in KEY_SETTINGS.items()}
     typed = {p: key for p, key in typed.items() if key}
     problem = ""
     for provider, key in typed.items():

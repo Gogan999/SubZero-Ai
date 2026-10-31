@@ -151,6 +151,8 @@ def judge_problem(settings: Settings, judge_model: str | None = None) -> str:
     start = f"The safety check uses {judge} to grade answers."
     if backend == "anthropic" and provider != "anthropic":
         return f"{start} With AI_BACKEND=anthropic the judge has to be an Anthropic model."
+    if provider == "claude-bridge":
+        return f"{start} The judge has to be an API-key model, not the Claude subscription."
     if provider not in settings.ai_providers:
         return f"{start} Turn on {label} under AI providers first."
     if provider not in provider_keys(settings):

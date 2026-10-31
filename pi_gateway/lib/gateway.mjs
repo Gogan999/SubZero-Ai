@@ -6,6 +6,8 @@ import {
 
 export { keyEnvName };
 
+const BRIDGE_PROVIDER = "claude-bridge";
+
 class RequestError extends Error {
   constructor(code, message) {
     super(message);
@@ -15,7 +17,8 @@ class RequestError extends Error {
 
 const EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 
-export function createGateway({ models, getApiKey, write, version = "0.0.0", piAiVersion = "unknown" }) {
+/** `bridge` is a runner from lib/bridge.mjs, or null when claude-bridge models are switched off. */
+export function createGateway({ models, getApiKey, write, version = "0.0.0", piAiVersion = "unknown", bridge = null }) {
   const inflight = new Map(); // id -> { controller, promise }
 
   const emit = (obj) => {
@@ -81,11 +84,48 @@ export function createGateway({ models, getApiKey, write, version = "0.0.0", piA
     return models.streamSimple(model, context, base);
   }
 
+  /** claude-bridge/<model>: a reply through Claude Code (no tools, no API key). */
+  async function runBridge(req, ref, controller) {
+    const id = req.id;
+    if (!bridge) throw new RequestError("unknown_model", `unknown model ${req.model}`);
+    if (req.op === "tool_turn") throw new RequestError("bad_request", "Code sessions can't use the Claude subscription.");
+    if (typeof req.max_tokens !== "number" || !(req.max_tokens > 0)) {
+      throw new RequestError("bad_request", "max_tokens must be a positive number");
+    }
+    let result;
+    try {
+      result = await bridge.reply(
+        { ...req, model: ref.id }, controller.signal,
+        req.op === "stream" ? (text) => emit({ id, kind: "text", text }) : undefined,
+      );
+    } catch (e) {
+      throw e instanceof RequestError || !e?.code ? e : new RequestError(e.code, e.message);
+    }
+    if (req.op === "complete" || !result.streamed) {
+      if (req.op === "complete" || result.text) emit({ id, kind: "text", text: result.text });
+    }
+    emit({ id, kind: "usage", usage: result.usage });
+  }
+
+  /** The `models` record body; claude-bridge models are added (async) only when the bridge is on. */
+  async function listModels(req) {
+    const wanted = Array.isArray(req.providers) ? req.providers : [undefined];
+    const list = wanted.filter((p) => p !== BRIDGE_PROVIDER).flatMap((p) => [...models.getModels(p)]);
+    const infos = list.map(modelInfo);
+    if (bridge && (wanted[0] === undefined || wanted.includes(BRIDGE_PROVIDER))) infos.push(...(await bridge.listModels()));
+    return infos;
+  }
+
   async function run(req, controller, entry) {
     const id = req.id;
+    if (req.op === "models") {
+      emit({ id, kind: "models", models: await listModels(req) });
+      return;
+    }
     const isTool = req.op === "tool_turn";
     const ref = splitModelRef(req.model);
     if (!ref) throw new RequestError("unknown_model", `model must look like provider/model-id, got ${JSON.stringify(req.model)}`);
+    if (ref.provider === BRIDGE_PROVIDER) return runBridge(req, ref, controller);
     const model = models.getModel(ref.provider, ref.id);
     if (!model) throw new RequestError("unknown_model", `unknown model ${req.model}`);
     const apiKey = getApiKey(ref.provider);
@@ -194,6 +234,10 @@ export function createGateway({ models, getApiKey, write, version = "0.0.0", piA
         emit({ id, kind: "done" });
         return;
       case "models": {
+        if (bridge) {
+          void runTracked(req); // loading the bridge's model list is asynchronous
+          return;
+        }
         try {
           const wanted = Array.isArray(req.providers) ? req.providers : [undefined];
           const list = wanted.flatMap((p) => [...models.getModels(p)]);

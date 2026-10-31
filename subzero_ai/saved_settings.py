@@ -26,7 +26,14 @@ EFFORTS = ("low", "medium", "high")
 # provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
 MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
 PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "google": "Google (Gemini)",
-                   "openrouter": "OpenRouter"}
+                   "openrouter": "OpenRouter", "claude-bridge": "Claude subscription (Claude Code)"}
+# A note shown under a provider's checkbox
+PROVIDER_HELP = {
+    "claude-bridge": ("Replies use the logged-in Claude subscription's limits. When they run out, students get an "
+                      "error until it resets, so keep an API-key model as the hard-problem fallback. It has to pass "
+                      "the safety check like any model. Someone must log in once with "
+                      "python -m subzero_ai claude-login. Needs AI_BACKEND=pi."),
+}
 SLACK_ID_RE = re.compile(r"[UW][A-Z0-9]{2,}")
 # These cost more and need 30-day data retention at Anthropic, so the plan keeps them off.
 BLOCKED_MODEL_WORDS = ("fable", "mythos")
@@ -212,6 +219,12 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
             errors["ai_providers"] = problem
         else:
             providers = values["ai_providers"] = chosen
+            if ("claude-bridge" in chosen and settings is not None and "claude-bridge" not in settings.ai_providers
+                    and backend != "pi"):
+                errors["ai_providers"] = ("The Claude subscription needs the AI helper. Set AI_BACKEND=pi in "
+                                          "config.env and restart, then turn it on.")
+                del values["ai_providers"]
+                providers = tuple(settings.ai_providers)
     for f in fields:
         raw = str(form.get(f.name, "") or "").strip()
         if f.kind == "bool":

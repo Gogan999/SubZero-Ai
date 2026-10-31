@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from .ai_backend import make_client, resolve_backend, unavailable_message
 from .config import Settings, model_provider, normalize_model_id
-from .pi_client import provider_keys
+from .pi_client import BRIDGE_PROVIDER, bridge_logged_in, provider_keys
 from .slack_api import SlackError, SlackWebApi
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
@@ -60,6 +60,14 @@ async def run_checks(settings: Settings, *, slack=None, claude=None) -> list[Che
     elif backend not in ("anthropic", "pi"):
         add(FAIL, "AI_BACKEND isn't a known backend", unavailable_message(backend))
     else:
+        if BRIDGE_PROVIDER in settings.ai_providers:
+            if backend != "pi":
+                add(FAIL, "The Claude subscription needs AI_BACKEND=pi",
+                    "Set AI_BACKEND=pi in config.env, or turn off Claude subscription under AI providers.")
+            elif bridge_logged_in(settings.data_dir):
+                add(OK, "Claude subscription is signed in (Claude Code login found)")
+            else:
+                add(FAIL, "Claude subscription isn't signed in", "Run: python -m subzero_ai claude-login")
         client = claude or make_client(settings, max_retries=1)
         try:
             await _check_models(settings, client, add, pi=backend == "pi")
@@ -169,7 +177,7 @@ async def _check_models(settings: Settings, client, add, *, pi: bool) -> None:
             return
         keys = provider_keys(settings)
         used = dict.fromkeys(model_provider(model) for _, model, _ in models)
-        missing = [p for p in used if p in settings.ai_providers and p not in keys]
+        missing = [p for p in used if p in settings.ai_providers and p not in keys and p != BRIDGE_PROVIDER]
         for provider in missing:
             add(FAIL, f"No API key for {provider}", "An admin can add it on the Settings page, under AI providers.")
         models = [m for m in models if model_provider(m[1]) not in missing]
