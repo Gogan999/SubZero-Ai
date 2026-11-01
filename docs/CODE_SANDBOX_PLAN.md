@@ -225,7 +225,7 @@ Do it in order, and stop after each milestone for Logan to look:
 
 - **D1 (resolved 2026-11-01).** Commands inside a student sandbox run freely with no mentor click. That is why the
   sandbox is needed.
-- **D2 (resolved 2026-11-01).** The mini PC runs Windows Pro (version 10 or 11 still to confirm). Hyper-V is available,
+- **D2 (resolved 2026-11-01).** The mini PC runs Windows 11 Pro. Hyper-V is available,
   so the recommended sandbox is **one Hyper-V VM per session**, not WSL. The M3 spike tests Hyper-V first; WSL is the
   fallback.
 - **D3.** Is it fine to run the service, or a small sandbox helper, under a dedicated local user if M3 shows we need it?
