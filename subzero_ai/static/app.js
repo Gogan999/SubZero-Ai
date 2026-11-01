@@ -815,4 +815,58 @@
     const events = new EventSource("/queue/events");
     events.addEventListener("queue", refreshQueue);
   }
+
+  // Settings: show one section at a time, picked from the menu. The address keeps the open section or box
+  // (#tab-ai, or a box like #bridge), so saving a form comes back to the same place. Without this script every
+  // section shows on one long page.
+  const settingsTabs = Array.from(document.querySelectorAll("[data-settings-tab]"));
+  if (settingsTabs.length) {
+    const tabLinks = Array.from(document.querySelectorAll('.settings-nav a[href^="#tab-"]'));
+    const tabFor = (id) => {
+      const el = id && document.getElementById(id);
+      return el ? el.closest("[data-settings-tab]") : null;
+    };
+    const showTab = (tab) => {
+      for (const t of settingsTabs) t.hidden = t !== tab;
+      for (const a of tabLinks) {
+        if (a.getAttribute("href") === "#" + tab.id) {
+          a.setAttribute("aria-current", "true");
+          a.scrollIntoView({ block: "nearest", inline: "nearest" });
+        } else {
+          a.removeAttribute("aria-current");
+        }
+      }
+    };
+    const fromAddress = () => {
+      let id = "";
+      try {
+        id = decodeURIComponent(location.hash.slice(1));
+      } catch {
+        /* a broken address: open the first section */
+      }
+      // A form that came back with mistakes opens where the first mistake is
+      const invalid = document.querySelector('[data-settings-tab] [aria-invalid="true"]');
+      const tab = tabFor(id) || (invalid && invalid.closest("[data-settings-tab]")) || settingsTabs[0];
+      showTab(tab);
+      const target = id && document.getElementById(id);
+      if (target && target !== tab) target.scrollIntoView();
+      else if (invalid && !id) invalid.focus();
+      else if (target) window.scrollTo(0, 0); // a whole section: start at the top, under the page title
+    };
+    for (const a of tabLinks) {
+      a.addEventListener("click", (event) => {
+        event.preventDefault();
+        const tab = tabFor(a.getAttribute("href").slice(1));
+        if (!tab) return;
+        history.replaceState(null, "", a.getAttribute("href"));
+        showTab(tab);
+        window.scrollTo(0, 0);
+      });
+    }
+    // Links inside the page (like "see Claude subscription") can point into another section
+    window.addEventListener("hashchange", fromAddress);
+    fromAddress();
+    // The browser jumps to the address's box once the page has loaded, after this ran: put the right place back
+    window.addEventListener("load", () => setTimeout(fromAddress, 0), { once: true });
+  }
 })();

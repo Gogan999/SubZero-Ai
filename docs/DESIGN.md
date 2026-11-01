@@ -385,8 +385,15 @@ show as "Student" or "Mentor" with an initial instead of a name or photo.
 
 Admin pages built from forms (Settings, setup, recovery sign-in) use these:
 
-- `.panel`: a `--sheet` card (`--radius`, 1px `--rule`) for each section, with
-  an `h2` and an `id` so the `.settings-nav` links at the top can jump to it.
+- `.panel`: a `--sheet` card (`--radius`, 1px `--rule`) for each box, with
+  an `h2` and an `id` so links and saves can come back to it (`/settings#bridge`).
+- Settings sections: `.settings-layout` puts the `.settings-nav` menu (links to
+  `#tab-<name>`, the open one marked `aria-current="true"` with the `--frost`
+  fill used by the sidebar) beside the `.settings-tab` groups of panels. The
+  script shows one group at a time and opens the group holding the box in the
+  address or the first field with a mistake. Without the script every group
+  shows in order. At 900px and below the menu is a sticky row of 44px tabs
+  under the top bar that scrolls sideways.
 - `.field`: label, control, `.field-hint` and `.field-error`, stacked. Controls
   use the `--field-edge` border. `.field.check` puts a checkbox beside its label.
 - `.form-actions`: the row of buttons under a form. Each panel's form has one

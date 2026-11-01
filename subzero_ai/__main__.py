@@ -178,18 +178,14 @@ def claude_login_tool(settings: Settings, run=None) -> int:
     any other Claude Code login on this PC. `run` stands in for subprocess.run in tests."""
     import subprocess
 
-    from .pi_client import bridge_logged_in, child_env, claude_cli_path, settings_bridge_env
+    from .bridge_login import login_env
+    from .pi_client import bridge_logged_in, claude_cli_path, settings_bridge_env
     cli = claude_cli_path(settings.pi_gateway_script or None)
     if cli is None:
         print("Couldn't find the Claude Code program in pi_gateway/node_modules. "
               "Install the AI helper's files (npm ci --ignore-scripts in the pi_gateway folder) and try again.")
         return 1
-    config_dir = settings.data_dir / "bridge" / "claude-config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    # Only the system variables Claude Code needs, plus its config folder. Never an API key or token, which would
-    # make it bill the API (or skip the login) instead of using the subscription.
-    env = child_env({})
-    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    env = login_env(settings.data_dir)
     print("Signing in to Claude. A browser window opens; sign in with the Claude Pro or Max account to use.")
     print("")
     try:

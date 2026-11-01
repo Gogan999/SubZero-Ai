@@ -6,7 +6,7 @@ minutes. Nothing here changes what students see until step 4 turns the provider 
 You need: the app installed with the AI helper (`AI_BACKEND=pi` in config.env), a Claude Pro or Max account to sign in
 with, and an Anthropic API key already saved (the safety check judge and the fallback models use it).
 
-1. **Log in.** In a terminal in the app folder, run `python -m subzero_ai claude-login`. Sign in with the Claude account
+1. **Log in.** On the Settings page, AI and keys, Claude subscription, press Sign in and follow the steps (or, in a terminal in the app folder, run `python -m subzero_ai claude-login`). Sign in with the Claude account
    in the browser window. It should end with "Signed in." The login is kept only in `<data folder>\bridge\claude-config`.
 2. **Check the login is seen.** Turn on the provider first (step 3), then run `python -m subzero_ai check`. It should
    show OK "Claude subscription is signed in".
