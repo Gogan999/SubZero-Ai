@@ -36,6 +36,9 @@ FAKE_CLI = textwrap.dedent(f"""\
     sys.stdout.write("Paste code here if prompted > ")
     sys.stdout.flush()
     code = sys.stdin.readline().strip()
+    while "#" not in code:  # like Claude Code: a code cut off before its #state is asked for again
+        print("Invalid code. Please make sure the full code was copied.", flush=True)
+        code = sys.stdin.readline().strip()
     with open(os.path.join(folder, "code-seen.txt"), "w") as f:
         f.write(code)
     if code != "{GOOD_CODE}":
@@ -66,7 +69,8 @@ class PartsTest(unittest.TestCase):
         self.assertEqual(failure_text("Paste code > Login failed: Code expired.\n"), "Code expired.")
         self.assertEqual(failure_text("nothing"), "")
         self.assertTrue(looks_like_code(GOOD_CODE))
-        for bad in ("", "short", "has space in it", "two\nlines123", "x" * 3000):
+        for bad in ("", "short", "has space in it", "two\nlines#123", "x" * 3000, "nostatepart123", "abcdef#",
+                    "#abcdefgh", "ab#cd#efgh"):
             self.assertFalse(looks_like_code(bad), bad)
 
 
@@ -94,8 +98,20 @@ class FlowTest(unittest.TestCase):
         login = BridgeLogin()
         login.start(self.cli, self.env)
         with self.assertRaises(LoginError) as caught:
-            login.finish("wrongcode123", lambda: False)
+            login.finish("wrongcode123#state", lambda: False)
         self.assertIn("wasn't accepted", str(caught.exception))
+        self.assertFalse(login.waiting())
+
+    def test_cut_off_code_fails_fast(self):
+        login = BridgeLogin()
+        login.start(self.cli, self.env)
+        with mock.patch.object(bridge_login, "CODE_WAIT", 30.0):
+            import time
+            started = time.monotonic()
+            with self.assertRaises(LoginError) as caught:
+                login.finish("cutoffcode123", lambda: False)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIn("after the #", str(caught.exception))
         self.assertFalse(login.waiting())
 
     def test_no_address(self):
@@ -176,9 +192,12 @@ class PageTest(unittest.TestCase):
     def test_bad_code_and_cancel(self):
         self.post("/settings/bridge/sign-in")
         page = self.post("/settings/bridge/code", {"code": "has spaces in it"}).text
-        self.assertIn("doesn&#39;t look like the code", page)
+        self.assertIn("doesn&#39;t look like the whole code", page)
         self.assertTrue(self.h.services.bridge_login.waiting())  # still waiting for a real one
-        page = self.post("/settings/bridge/code", {"code": "wrongcode999"}).text
+        page = self.post("/settings/bridge/code", {"code": "nostatepart123"}).text
+        self.assertIn("including the part after the #", page)
+        self.assertTrue(self.h.services.bridge_login.waiting())
+        page = self.post("/settings/bridge/code", {"code": "wrongcode999#state"}).text
         self.assertIn("Not signed in.", page)
         self.assertIn("wasn&#39;t accepted", page)
         self.assertFalse(bridge_credentials_path(self.h.settings.data_dir).exists())

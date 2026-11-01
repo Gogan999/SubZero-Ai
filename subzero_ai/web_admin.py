@@ -649,8 +649,8 @@ async def bridge_code(request: Request, viewer: Viewer) -> Response:
         flash(request, "That sign-in isn't waiting anymore. Press Sign in again to get a new address.")
         return RedirectResponse("/settings#bridge", status_code=303)
     if not looks_like_code(code):
-        flash(request, "That doesn't look like the code. Copy the whole code from the Claude page and paste it "
-                       "again." if code else "Paste the code from the Claude page first.")
+        flash(request, "That doesn't look like the whole code. Copy all of it from the Claude page, including the "
+                       "part after the #, and paste it again." if code else "Paste the code from the Claude page first.")
         return RedirectResponse("/settings#bridge", status_code=303)
     data_dir = s.settings.data_dir
     try:

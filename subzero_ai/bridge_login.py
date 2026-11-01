@@ -65,8 +65,9 @@ def failure_text(output: str) -> str:
 
 
 def looks_like_code(code: str) -> bool:
-    """True if a pasted code could be one: one line of letters, digits and a few symbols. Never says why not."""
-    return bool(re.fullmatch(r"[A-Za-z0-9_\-#.~=+/]{8,2048}", code))
+    """True if a pasted code could be one: Claude shows it as <code>#<state>, one line of letters, digits and a few
+    symbols. A code missing its #<state> half was cut off when it was copied."""
+    return bool(re.fullmatch(r"[A-Za-z0-9_\-.~=+/]{4,1024}#[A-Za-z0-9_\-.~=+/]{4,1024}", code))
 
 
 class BridgeLogin:
@@ -164,7 +165,13 @@ class BridgeLogin:
         except (OSError, ValueError) as exc:
             self.cancel()
             raise LoginError("Claude Code stopped before it got the code. Press Sign in again.") from exc
-        done = self._wait_for(lambda: proc.poll() is not None, CODE_WAIT)
+        # Claude Code asks again, instead of stopping, when it can't read the code: don't wait the full minute then
+        rejected = lambda: "Invalid code" in clean(self._text()[before:])  # noqa: E731
+        done = self._wait_for(lambda: proc.poll() is not None or rejected(), CODE_WAIT)
+        if rejected():
+            self.cancel()
+            raise LoginError("That code wasn't complete. Press Sign in again, and copy the whole code from the Claude "
+                             "page, including the part after the #.")
         if done:
             self._wait_for(lambda: False, 0.2)  # let the last of the output arrive
         reason = failure_text(self._text()[before:])
