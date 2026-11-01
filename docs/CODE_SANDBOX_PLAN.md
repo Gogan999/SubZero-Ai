@@ -171,6 +171,11 @@ Feasible and small, and it shares the helper from section 3.
 
 ## Recommendation
 
+Update 2026-11-01: the mini PC is Windows Pro and students get free rein, so use a **Hyper-V VM per session** (own
+kernel, per-VM CPU/RAM caps, per-VM firewall and network switch), created from a hash-pinned base disk as a
+differencing disk and deleted at 48 hours. WSL2 is the fallback only if Hyper-V turns out unusable. The sections above
+describe WSL in detail because it was the original question; read its table as the fallback design.
+
 Do it in order, and stop after each milestone for Logan to look:
 
 1. Fix today's gaps and add the model dropdowns (M0 to M2). They are small, safe and useful immediately.
@@ -185,7 +190,7 @@ Do it in order, and stop after each milestone for Logan to look:
   command; add a disk and spend cap; prune unfinished sessions after a limit.
 - **M1 Shared model list helper and Settings dropdowns (about 1 day).** Section 4, plus periodic refresh.
 - **M2 Mentor model picker in New chat (about 1 day).** Section 3, plus the send-time safety re-check.
-- **M3 WSL spike on the mini PC (about half a day, Logan's machine).** One-hour test: service user creates two
+- **M3 Hyper-V (and WSL fallback) spike on the mini PC (about half a day, Logan's machine).** Test Hyper-V first: the service user can create, start and delete a VM from a base differencing disk, per-VM memory/CPU caps apply, a private switch blocks the LAN, and the host can run commands in the guest (PowerShell Direct or SSH). Then, only if that fails, the WSL test below. One-hour test: service user creates two
   distros, they cannot see each other, LAN and host are unreachable, `unregister` removes the disk file, WSL starts
   from the service, and `.wslconfig` is read from the profile of the user running `wsl.exe` (a virtual service account's
   profile is under `C:\Windows\ServiceProfiles\`), so the VM caps apply in that account's or `sandboxrunner`'s profile. Records the Windows edition and spare RAM. Go or no-go for M4.
@@ -220,7 +225,9 @@ Do it in order, and stop after each milestone for Logan to look:
 
 - **D1 (resolved 2026-11-01).** Commands inside a student sandbox run freely with no mentor click. That is why the
   sandbox is needed.
-- **D2.** What Windows edition and version is the mini PC (Home or Pro, Windows 10 or 11)? This decides WSL vs Hyper-V, and with free rein Hyper-V is the safer choice.
+- **D2 (resolved 2026-11-01).** The mini PC runs Windows Pro (version 10 or 11 still to confirm). Hyper-V is available,
+  so the recommended sandbox is **one Hyper-V VM per session**, not WSL. The M3 spike tests Hyper-V first; WSL is the
+  fallback.
 - **D3.** Is it fine to run the service, or a small sandbox helper, under a dedicated local user if M3 shows we need it?
 - **D4.** Which tools first for students: read-only repo browsing and a shell, or also package installs and web access?
 - **D5.** Should a student's Code session need a mentor to approve the starting request (recommended), and who may
