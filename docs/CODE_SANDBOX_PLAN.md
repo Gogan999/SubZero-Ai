@@ -22,7 +22,7 @@ whether model defaults can be dropdowns in Settings. File references are to `mai
 
 Findings (details in the research notes this plan was built from):
 
-- Claude only has seven custom tools: `list_files`, `read_file`, `search` (automatic) and `write_file`, `edit_file`,
+- Claude only has six custom tools: `list_files`, `read_file`, `search` (automatic) and `write_file`, `edit_file`,
   `run_command` (each waits for a mentor). No Bash, no git, no web, no MCP (`code_runner.py:81-116`).
 - `run_command` is a plain `subprocess.Popen` with no shell, only for programs in `code_commands` (default
   `gradlew`), in `DATA_DIR/code/<id>/work` with a whitelisted environment (`code_runner.py:337-395`).
@@ -41,8 +41,10 @@ Problems worth fixing regardless of this plan (ranked):
 
 1. Commands can rewrite the data folder. Either move the DB and `config.env` out of the service account's reach, or
    remove Modify there.
-2. The build-file guard is a name check (`is_build_file`). Names like `gradlew.bat.` or `tools/x.groovy` slip past it,
-   and Gradle `-I` runs any init script. A mentor still sees the command, but the stated guarantee does not hold.
+2. The build-file guard is a regex on file names (`BUILD_FILE_RE`). A trailing-dot name like `gradlew.bat.` slips past
+   it, and Windows drops the dot, so the real `gradlew.bat` is overwritten. Arguments such as `-I` or `--init-script`
+   are passed through to Gradle, so Claude can write an init script and run it. A mentor still sees the command, but the
+   stated guarantee does not hold.
 3. Unbounded command output in memory; no disk or spend quota; unfinished sessions never pruned.
 4. `stop()` does not kill a running command.
 
@@ -85,8 +87,8 @@ not be able to create or see distros at all. Likely fix: run the service (or onl
 as a dedicated local user such as `sandboxrunner`. This changes the install scripts and the account model, and has to be
 proven before anything else. It is the cheapest thing to test and the likeliest to kill the approach.
 
-Other things we do not know yet and must check on the real machine: Windows edition (Home vs Pro, which decides whether
-Hyper-V is available), Windows 10 vs 11 (Hyper-V firewall), whether WSL is installed, free RAM and disk, and whether
+Other things we do not know yet and must check on the real machine: Windows edition (WSL2 runs on Home too; Home vs Pro
+decides whether Hyper-V VMs are available, so D2 chooses between WSL and Hyper-V, not whether WSL works), Windows 10 vs 11 (Hyper-V firewall), whether WSL is installed, free RAM and disk, and whether
 third-party antivirus blocks WSL networking.
 
 ### Alternatives considered
@@ -117,18 +119,19 @@ This is the part that needs Logan's say-so, because it touches the approval flow
 Feasible and small.
 
 - A conversation already stores its model as `provider/model` (`conversations.model`, set from `model_default` at
-  creation in `approvals.py`), and mentors can already change it later (`set_model`, `web.py`, mentor-only). So no
-  migration is needed.
+  creation in `approvals.py`), and mentors can already change it later (`set_model`, `web.py`, mentor-only, but only between `model_default` and
+  `model_hard`). The picker widens that. So no migration is needed.
 - Change: the New chat composer shows a `<select>` for mentors only (students keep the static label). `new_chat`
   (`web.py`) reads a `model` field only when `viewer.is_mentor`; for students it keeps ignoring it.
-- The option list comes from one shared helper used by both New chat and `set_model`. It lists only models that are
+- The option list comes from one shared helper used by both New chat and `set_model`, and `set_model` must apply the
+  same safety-check filter, not just the shared list. It lists only models that are
   (a) from an enabled provider with a key, (b) valid for the active backend (on `anthropic` only Claude models), (c)
   passed the safety check (`requirement_problem`), and (d) not blocked by `check_model`. It also shows cost where the
   gateway reports it.
 - Safety: re-run the requirement check when the chat is created and when a reply is sent, not only when settings are
   saved. Today a model can pass at save time and stay usable after the check changes. Also show a note that students
   replying in a mentor-created chat run on that chat's model.
-- The list is loaded once at startup (`web.py:118`). Add a refresh when providers or keys change in Settings.
+- The list is loaded once at startup (`_load_model_names`, `web.py:116`). Add a refresh when providers or keys change in Settings.
 - Tests: students posting `model` to `/new` are ignored; unchecked or unkeyed models rejected; Anthropic backend lists
   only Claude models.
 
@@ -137,7 +140,8 @@ Feasible and small.
 Feasible and small, and it shares the helper from section 3.
 
 - Today `model_default`, `model_hard`, `model_titles`, `model_screener` and `model_check_judge` are free-text fields
-  (`saved_settings.py`, `kind="model"`). A `kind="choice"` select already exists and can be reused.
+  (`saved_settings.py`, `kind="model"`). A `choice` select exists only for the config.env fields
+  (`server_settings.EnvField`), not in the database-backed `saved_settings.Field`, so M1 must add a choice kind there.
 - Build the options from the same helper, grouped by provider, with a hint when a model has not passed the safety
   check (saving still blocks it as now). The screener and judge lists are narrower: the judge must be a Claude model.
 - Keep a "type another model id" fallback so a new model is not blocked while the list is stale.
@@ -161,7 +165,8 @@ Do it in order, and stop after each milestone for Logan to look:
 - **M2 Mentor model picker in New chat (about 1 day).** Section 3, plus the send-time safety re-check.
 - **M3 WSL spike on the mini PC (about half a day, Logan's machine).** One-hour test: service user creates two
   distros, they cannot see each other, LAN and host are unreachable, `unregister` removes the disk file, WSL starts
-  from the service. Records the Windows edition and spare RAM. Go or no-go for M4.
+  from the service, and `.wslconfig` is read from the profile of the user running `wsl.exe` (a virtual service account's
+  profile is under `C:\Windows\ServiceProfiles\`), so the VM caps apply in that account's or `sandboxrunner`'s profile. Records the Windows edition and spare RAM. Go or no-go for M4.
 - **M4 Sandbox controller (about 3 days).** `sandbox.py`: import, exec, limits, reaper, startup reconcile,
   `sandbox_sessions` migration, audit entries, a fake sandbox for tests so the suite stays offline. Still
   mentor-only, per-step approval unchanged.
