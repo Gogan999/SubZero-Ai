@@ -12,6 +12,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .ai_backend import resolve_backend
@@ -23,6 +24,10 @@ from .model_check import requirement_problem
 log = logging.getLogger("subzero.settings")
 
 EFFORT_CHOICES = (("low", "Low"), ("medium", "Medium"), ("high", "High"))
+SANDBOX_CHOICES = (("off", "Off: commands run on the computer (as before)"),
+                   ("hyperv", "Hyper-V: each session gets its own virtual computer"),
+                   ("fake", "Fake: this computer, no isolation (testing only)"))
+SWITCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}")
 # The dropdown value that means "type the model id under Other"; never a real model id
 OTHER_MODEL = "__other__"
 # provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
@@ -45,12 +50,13 @@ BLOCKED_MODEL_WORDS = ("fable", "mythos")
 class Field:
     name: str
     label: str
-    kind: str  # model, choice, int, bool, lines, ids, providers
+    kind: str  # model, choice, int, bool, lines, ids, providers, path, name
     help: str = ""
     minimum: int = 0
     maximum: int = 0
-    optional: bool = False  # for ids: an empty list is allowed
+    optional: bool = False  # for ids and path: an empty value is allowed
     choices: tuple[tuple[str, str], ...] = ()  # for choice: (saved value, label) pairs
+    error: str = ""  # for path and name: what a value that isn't allowed looks like, in plain words
 
 
 SECTIONS: dict[str, tuple[str, list[Field]]] = {
@@ -120,6 +126,29 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "folder, and a mentor approves each command before it runs."),
         Field("code_command_timeout", "Stop a command after this many seconds", "int",
               "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
+        Field("code_sandbox", "Run Code commands in a sandbox", "choice",
+              "Hyper-V gives each Code session its own virtual computer on a private network, deleted when the "
+              "session ends. Fake runs commands on this computer with no protection, so use it only for testing. "
+              "Changing this applies to the next command.", choices=SANDBOX_CHOICES),
+        Field("sandbox_ttl_hours", "Delete a sandbox this many hours after it was made", "int",
+              "Even if its session is still waiting. The session's copy of the repository is kept, and a new "
+              "sandbox is made when it's needed again.", 1, 168),
+        Field("sandbox_max_sessions", "Sandboxes that can run at the same time", "int",
+              "A new session waits for a free sandbox.", 1, 10),
+        Field("sandbox_memory_mb", "Memory for each sandbox, in MB", "int",
+              "Applies to sandboxes made after the change.", 1024, 16384),
+        Field("sandbox_cpus", "Processors for each sandbox", "int",
+              "Applies to sandboxes made after the change.", 1, 8),
+        Field("sandbox_disk_gb", "Disk space each sandbox can use, in GB", "int",
+              "The base disk must be this small or smaller.", 5, 100),
+        Field("sandbox_min_free_gb", "Keep this much disk free, in GB", "int",
+              "No new sandbox is made while the disk holding the base image has less free space than this.", 1, 500),
+        Field("sandbox_base_image", "Base disk for sandboxes", "path",
+              "The full path to the base disk file (.vhdx) on the mini PC. Leave empty unless sandboxes are on.",
+              optional=True, error="Use the full path to the disk file, like C:\\SubZeroAI\\sandbox\\base.vhdx."),
+        Field("sandbox_switch", "Private network switch for sandboxes", "name",
+              "The Hyper-V switch sandboxes are attached to. A sandbox on any other switch is never started.",
+              error="Use letters, numbers, spaces, dots, dashes and underscores, up to 63 characters."),
     ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),
@@ -201,6 +230,13 @@ def form_text(form: Mapping[str, Any], name: str) -> str:
     if getlist is not None:
         return "\n".join(str(v) for v in getlist(name))
     return str(form.get(name, "") or "")
+
+
+def check_path(raw: str) -> bool:
+    """An absolute Windows or POSIX path with no control characters or quotes that could break a script."""
+    if len(raw) > 260 or any(ord(ch) < 32 or ch in "\"`$;'" for ch in raw):
+        return False
+    return PureWindowsPath(raw).is_absolute() or PurePosixPath(raw).is_absolute()
 
 
 def check_providers(raw: str) -> tuple[tuple[str, ...], str]:
@@ -298,6 +334,13 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 values[f.name] = model
         elif f.kind == "providers":
             continue  # checked above
+        elif f.kind in ("path", "name"):
+            if f.optional and not raw:
+                values[f.name] = ""
+            elif (f.kind == "path" and not check_path(raw)) or (f.kind == "name" and not SWITCH_RE.fullmatch(raw)):
+                errors[f.name] = f.error
+            else:
+                values[f.name] = raw
         elif f.kind == "choice":
             allowed = [value for value, _ in f.choices]
             if raw not in allowed:

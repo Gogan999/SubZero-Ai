@@ -7,8 +7,11 @@ import asyncio
 import json
 import logging
 import re
+import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -63,14 +66,20 @@ def prune_dm_messages(db: Database, days: int = 7, *, now: datetime | None = Non
     return db.execute("DELETE FROM slack_dm_messages WHERE created_at < ?", (cutoff,)).rowcount
 
 
+REAP_SANDBOXES_SECONDS = 600  # how often the sandbox cleanup runs between the nightly jobs
+
+
 class Nightly:
-    """Runs the backup once a night at BACKUP_HOUR, then removes old backups and old chats."""
+    """Runs the backup once a night at BACKUP_HOUR, then removes old backups and old chats. Every few minutes it
+    also runs `reap`, the sandbox cleanup (sandbox.py), which never raises."""
 
     def __init__(self, settings: Settings, db: Database, tz):
         self.settings = settings
         self.db = db
         self.tz = tz
         self._lock = asyncio.Lock()
+        self.reap: Callable[[], Any] | None = None
+        self._last_reap: float | None = None
 
     @property
     def last_backup_at(self) -> str | None:
@@ -80,8 +89,20 @@ class Nightly:
     def last_backup_error(self) -> str | None:
         return self.db.get_kv("last_backup_error")
 
+    async def _reap_if_due(self) -> None:
+        if self.reap is None:
+            return
+        if self._last_reap is not None and time.monotonic() - self._last_reap < REAP_SANDBOXES_SECONDS:
+            return
+        self._last_reap = time.monotonic()
+        try:
+            await asyncio.to_thread(self.reap)
+        except Exception:
+            log.exception("Sandbox cleanup failed")
+
     async def tick(self) -> bool:
         """Called every minute. Returns True if the nightly jobs ran."""
+        await self._reap_if_due()
         if not backup_due(self.last_backup_at, datetime.now(self.tz), self.settings.backup_hour):
             return False
         await self.run()

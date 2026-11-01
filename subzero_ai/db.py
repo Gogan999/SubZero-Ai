@@ -270,6 +270,23 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_slack_dm_messages_message ON slack_dm_messages (message_id);
     """,
+    # Version 14: the sandbox each Code session's commands run in (sandbox.py). A row is kept after the sandbox is
+    # deleted, so there is a record of when it was made and why it went.
+    """
+    CREATE TABLE sandbox_sessions (
+        id INTEGER PRIMARY KEY,
+        code_session_id INTEGER REFERENCES code_sessions(id) ON DELETE SET NULL,
+        backend TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL CHECK (state IN ('creating', 'running', 'expired', 'destroyed', 'failed')),
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        destroyed_at TEXT,
+        note TEXT
+    );
+    CREATE INDEX idx_sandbox_sessions_state ON sandbox_sessions (state, expires_at);
+    CREATE INDEX idx_sandbox_sessions_code ON sandbox_sessions (code_session_id, id);
+    """,
 ]
 
 

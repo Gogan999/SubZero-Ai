@@ -11,7 +11,10 @@ That's why Claude can't change build files (anything a build runs before the cod
 card for a command lists the files Claude changed: tests and the robot code run during a build too.
 
 Code is for mentors only. Each session's copy lives in DATA_DIR/code/<session id>: "base" is the repository as
-downloaded and "work" is Claude's copy, so the changes are the difference between the two."""
+downloaded and "work" is Claude's copy, so the changes are the difference between the two.
+
+When sandboxes are on (Settings, code_sandbox), commands run inside the session's sandbox (sandbox.py) instead, against
+a copy of "work"; approved edits are written to both copies, and the patch still comes from the host copy."""
 
 from __future__ import annotations
 
@@ -24,15 +27,15 @@ import os
 import re
 import shlex
 import shutil
-import signal
 import sqlite3
 import subprocess
 import threading
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .ai_backend import capabilities_for, resolve_backend
 from .claude import ClaudeError
@@ -40,9 +43,14 @@ from .config import Settings
 from .connectors import ConnectorError, GitHub
 from .db import Database, utcnow
 from .live import Tasks
+from .sandbox import (
+    COPY_SKIP, GUEST_HOME, GUEST_PATH, MAX_OUTPUT_CHARS, ExitResult, OutputTail, SandboxError, SandboxHandle,
+    SandboxManager, changed_in_archive, kill_process_tree, pack_tree, read_output,
+)
 from .store import Viewer
 
 log = logging.getLogger("subzero.code")
+_OutputTail = OutputTail  # the output tail used by run_program and the tests
 
 MAX_TURNS = 40  # Claude replies per run, so a confused session can't spend without limit
 MAX_REPO_ZIP = 100 * 1024 * 1024
@@ -50,7 +58,6 @@ MAX_REPO_FILES = 20_000
 MAX_REPO_BYTES = 400 * 1024 * 1024
 MAX_READ_BYTES = 200 * 1024
 MAX_WRITE_BYTES = 500 * 1024
-MAX_OUTPUT_CHARS = 20_000
 MAX_TASK_CHARS = 8000
 MAX_TOKENS = 16000
 KEEP_COPIES_DAYS = 14  # finished sessions' repository copies are deleted after this
@@ -61,6 +68,9 @@ MAX_OPEN_SESSIONS = 5  # per mentor: sessions waiting or running at the same tim
 STUCK_SESSION_DAYS = 3  # waiting, running or preparing this long with no activity: stopped, copy deleted
 REAP_SECONDS = 5  # after a command exits, how long its output may stay open (a background child process)
 SKIP_DIRS = {".git", ".gradle", "build", "bin", "node_modules", "__pycache__", ".idea", ".vscode"}
+FINISHED = ("done", "stopped", "failed")  # a session in one of these states has no more commands to run
+# What a command in a sandbox gets: a fixed, Linux-style environment (the host's Windows variables don't apply)
+SANDBOX_ENV = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, "LANG": "C.UTF-8", "GRADLE_OPTS": "-Dorg.gradle.daemon=false"}
 # Only what a build needs from the app's environment. API keys, tokens and the rest stay out.
 SAFE_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME",
             "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
@@ -368,9 +378,8 @@ class Workspace:
         return out
 
 
-def parse_command(command: str, allowed: tuple[str, ...], work: Path) -> list[str]:
-    """The command as arguments, if it starts with an allowed program. The program is looked up in the
-    repository folder first (for the Gradle wrapper), then on PATH. No shell is involved."""
+def split_command(command: str, allowed: tuple[str, ...]) -> tuple[str, list[str]]:
+    """The program's name and its arguments, if the command starts with an allowed program. No shell is involved."""
     try:
         args = shlex.split(command, posix=os.name != "nt")
     except ValueError as exc:
@@ -388,14 +397,21 @@ def parse_command(command: str, allowed: tuple[str, ...], work: Path) -> list[st
         if _blocked_option(option):
             raise ToolProblem(f"Claude can't pass {option} to the build, because it loads other scripts or picks "
                               "other build files. Describe the change in your summary so a mentor can run it by hand.")
+    return name, args[1:]
+
+
+def parse_command(command: str, allowed: tuple[str, ...], work: Path) -> list[str]:
+    """The command as arguments, if it starts with an allowed program. The program is looked up in the
+    repository folder first (for the Gradle wrapper), then on PATH. No shell is involved."""
+    name, rest = split_command(command, allowed)
     local = [work / (name + ".bat"), work / name] if os.name == "nt" else [work / name]
     found = next((p for p in local if p.is_file()), None)
     resolved = str(found) if found else shutil.which(name)
     if not resolved:
         raise ToolProblem(f"{name} isn't installed on this computer.")
     if found is not None and os.name != "nt" and not os.access(found, os.X_OK):
-        return ["sh", resolved, *args[1:]]
-    return [resolved, *args[1:]]
+        return ["sh", resolved, *rest]
+    return [resolved, *rest]
 
 
 def _blocked_option(arg: str) -> bool:
@@ -430,53 +446,36 @@ def stop_command(session_id: int) -> bool:
         if running is None:
             return False
         running.stopped = True
-    _kill_tree(running.proc)
+    kill_process_tree(running.proc)
     return True
 
 
-class _OutputTail:
-    """Keeps only the end of a command's output, so a chatty build can't fill the app's memory."""
-
-    def __init__(self, limit: int):
-        self.limit = limit
-        self.data = bytearray()
-        self.cut = False
-
-    def add(self, chunk: bytes) -> None:
-        self.data += chunk
-        if len(self.data) > self.limit:
-            del self.data[:len(self.data) - self.limit]
-            self.cut = True
-
-    def text(self) -> str:
-        text = self.data.decode("utf-8", errors="replace")
-        if self.cut or len(text) > MAX_OUTPUT_CHARS:
-            return "(…earlier output cut)\n" + text[-MAX_OUTPUT_CHARS:]
-        return text
-
-
-def _read_into(stream, tail: _OutputTail) -> None:
-    """Read a command's output as it comes, in a worker thread, so nothing waits for the command to end."""
+@contextmanager
+def command_slot() -> Iterator[None]:
+    """Hold one of the MAX_RUNNING_COMMANDS slots for a command, or refuse once the wait is too long."""
+    if not _COMMAND_SLOTS.acquire(timeout=COMMAND_WAIT_SECONDS):
+        raise ToolProblem("Too many commands are running on the computer right now. Ask Claude to try again in "
+                          "a few minutes.")
     try:
-        while True:
-            chunk = stream.read1(65536)
-            if not chunk:
-                return
-            tail.add(chunk)
-    except (OSError, ValueError):
-        return
+        yield
+    finally:
+        _COMMAND_SLOTS.release()
+
+
+def command_report(text: str, exit_code: int | None, *, stopped: bool, timed_out: bool, timeout: int) -> str:
+    """The end of a command's output, with a line saying how it ended."""
+    if stopped:
+        return text + "\n(Stopped by a mentor.)"
+    if timed_out:
+        return text + f"\n(Stopped after {timeout} seconds.)"
+    return text + f"\n(Exit code {exit_code}.)"
 
 
 def run_program(args: list[str], cwd: Path, timeout: int, session_id: int | None = None) -> str:
     """Run one program in cwd for at most `timeout` seconds and return the end of its output. At most
     MAX_RUNNING_COMMANDS run at once across the app; a command waits for a free slot, then is refused."""
-    if not _COMMAND_SLOTS.acquire(timeout=COMMAND_WAIT_SECONDS):
-        raise ToolProblem("Too many commands are running on the computer right now. Ask Claude to try again in "
-                          "a few minutes.")
-    try:
+    with command_slot():
         return _run_in_slot(args, cwd, timeout, session_id)
-    finally:
-        _COMMAND_SLOTS.release()
 
 
 def _run_in_slot(args: list[str], cwd: Path, timeout: int, session_id: int | None) -> str:
@@ -497,15 +496,15 @@ def _run_in_slot(args: list[str], cwd: Path, timeout: int, session_id: int | Non
     if session_id is not None:
         with _RUNNING_LOCK:
             _RUNNING[session_id] = running
-    tail = _OutputTail(MAX_OUTPUT_CHARS * 4)  # 4 bytes is the most a character takes in UTF-8
-    reader = threading.Thread(target=_read_into, args=(proc.stdout, tail), daemon=True)
+    tail = OutputTail(MAX_OUTPUT_CHARS * 4)  # 4 bytes is the most a character takes in UTF-8
+    reader = threading.Thread(target=read_output, args=(proc.stdout, tail, None), daemon=True)
     reader.start()
     timed_out = False
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill_tree(proc)
+        kill_process_tree(proc)
         proc.wait()
     finally:
         if session_id is not None:
@@ -514,28 +513,11 @@ def _run_in_slot(args: list[str], cwd: Path, timeout: int, session_id: int | Non
                     del _RUNNING[session_id]
     reader.join(REAP_SECONDS)
     if reader.is_alive():  # a child process still holds the output open: stop everything it started
-        _kill_tree(proc)
+        kill_process_tree(proc)
         reader.join(REAP_SECONDS)
     if not reader.is_alive():
         proc.stdout.close()
-    text = tail.text()
-    if running.stopped:
-        return text + "\n(Stopped by a mentor.)"
-    if timed_out:
-        return text + f"\n(Stopped after {timeout} seconds.)"
-    return text + f"\n(Exit code {proc.returncode}.)"
-
-
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Stop the command and everything it started (on Windows, gradlew.bat's cmd.exe and the JVM under it)."""
-    try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=30)
-        else:
-            os.killpg(proc.pid, signal.SIGKILL)
-    except (OSError, subprocess.SubprocessError):
-        proc.kill()
+    return command_report(tail.text(), proc.returncode, stopped=running.stopped, timed_out=timed_out, timeout=timeout)
 
 
 def short_title(task: str) -> str:
@@ -545,17 +527,24 @@ def short_title(task: str) -> str:
 
 # --------------------------------------------------------------------------- sessions
 class CodeRunner:
-    def __init__(self, *, settings: Settings, db: Database, claude, github: GitHub, tasks: Tasks):
+    def __init__(self, *, settings: Settings, db: Database, claude, github: GitHub, tasks: Tasks,
+                 sandboxes: SandboxManager | None = None):
         self.settings = settings
         self.db = db
         self.claude = claude
         self.github = github
         self.tasks = tasks
+        self.sandboxes = sandboxes
         self._busy: set[int] = set()
 
     @property
     def available(self) -> bool:
         return self.github.configured
+
+    @property
+    def sandboxed(self) -> bool:
+        """True when commands run in a sandbox (code_sandbox is set to hyperv or fake), not on this computer."""
+        return self.sandboxes is not None and self.sandboxes.enabled
 
     def workspace(self, session_id: int) -> Workspace:
         return Workspace(self.settings.data_dir / "code" / str(session_id))
@@ -600,6 +589,11 @@ class CodeRunner:
         if len(task) > MAX_TASK_CHARS:
             raise CodeError(f"Keep the task under {MAX_TASK_CHARS:,} characters.")
         self._check_open_limit(viewer.id)
+        if self.sandboxed:
+            try:
+                self.sandboxes.check_capacity()
+            except SandboxError as exc:
+                raise CodeError(str(exc)) from exc
         now = utcnow()
         transcript = [{"role": "user", "content": task}]
         with self.db.transaction() as conn:
@@ -671,6 +665,8 @@ class CodeRunner:
         self._set(session_id, status="stopped")
         if row["status"] == "waiting":
             self._answer_turn(session_id)  # so the transcript stays valid for a follow-up
+        if self.sandboxes is not None:
+            self.tasks.spawn(self._end_sandbox(session_id), name=f"code-{session_id}")
 
     def decide(self, viewer: Viewer, step_id: int, approve: bool, note: str = "") -> int:
         if not viewer.is_mentor:
@@ -706,6 +702,13 @@ class CodeRunner:
         self._note(session_id, 0, f"Copied {count:,} files from {self.settings.connector_github_repo}"
                                   f"{' (' + self.settings.connector_github_branch + ')' if self.settings.connector_github_branch else ''}.")
         self._set(session_id, status="running")
+        if self.sandboxed:
+            try:
+                await asyncio.to_thread(self._sandbox_for, session_id, workspace)
+            except (SandboxError, CodeError) as exc:
+                self._set(session_id, status="failed", error=str(exc))
+                await asyncio.to_thread(self._settle_sandbox, session_id)
+                return
         await self._run(session_id)
 
     async def _resume(self, session_id: int) -> None:
@@ -756,6 +759,13 @@ class CodeRunner:
         return True
 
     def _execute(self, workspace: Workspace, tool: str, args: dict, session_id: int | None = None) -> str:
+        try:
+            return self._run_tool(workspace, tool, args, session_id)
+        except SandboxError as exc:
+            raise ToolProblem(str(exc)) from exc
+
+    def _run_tool(self, workspace: Workspace, tool: str, args: dict, session_id: int | None) -> str:
+        sandboxed = self.sandboxed and session_id is not None
         if tool == "list_files":
             return workspace.list_files(str(args.get("path", "")))
         if tool == "read_file":
@@ -763,12 +773,108 @@ class CodeRunner:
         if tool == "search":
             return workspace.search(str(args.get("pattern", "")), str(args.get("path", "")))
         if tool in ("write_file", "edit_file"):
-            return workspace.apply(tool, args)
+            output = workspace.apply(tool, args)  # the host copy holds the approved change, and the patch comes from it
+            if sandboxed:
+                self._mirror_edit(session_id, workspace, str(args.get("path", "")))
+            return output
         if tool == "run_command":
+            if sandboxed:
+                return self._run_in_sandbox(session_id, workspace, str(args.get("command", "")))
             command = parse_command(str(args.get("command", "")), self.settings.code_commands, workspace.work)
             workspace.check_room()
             return run_program(command, workspace.work, self.settings.code_command_timeout, session_id)
         raise ToolProblem(f"There's no tool called {tool}.")
+
+    # ---- sandboxes (see sandbox.py): commands run in the session's sandbox, the host copy keeps the changes
+    def _sandbox_for(self, session_id: int, workspace: Workspace) -> SandboxHandle:
+        """The session's running sandbox. With none (the first command, or after the session finished), a new one
+        is made with a fresh copy of the host's repository, which already has every approved change."""
+        if self.get(session_id)["status"] == "stopped":
+            raise SandboxError("The session was stopped.")
+        with self.sandboxes.lock:
+            row = self.sandboxes.live_for_session(session_id)
+            if row is not None:
+                return self.sandboxes.handle_of(row)
+            owner = self.get(session_id)["created_by"]
+            handle = self.sandboxes.create_for_session(session_id, actor_id=owner)
+            try:
+                self.sandboxes.backend(handle.backend).put_archive(
+                    handle, pack_tree(workspace.work, COPY_SKIP), dest="work")
+            except Exception as exc:
+                self._drop_sandbox(session_id, "the copy failed")
+                raise SandboxError("Couldn't copy the repository into the sandbox.") from exc
+        self._note(session_id, 0, "Made a sandbox for this session. Commands run there, and it is deleted when the "
+                                  "session ends.")
+        return handle
+
+    def _mirror_edit(self, session_id: int, workspace: Workspace, path: str) -> None:
+        """Copy an approved edit into the sandbox. A sandbox made just now already has it, so it is copied again."""
+        handle = self._sandbox_for(session_id, workspace)
+        target = workspace.path(path)
+        try:
+            self.sandboxes.backend(handle.backend).put_file(handle, f"work/{workspace.rel(target)}",
+                                                            target.read_bytes())
+        except Exception as exc:
+            self._drop_sandbox(session_id, "the edit couldn't be copied")
+            raise SandboxError("The sandbox couldn't be updated, so it was deleted. The next command makes a new "
+                               "one.") from exc
+
+    def _run_in_sandbox(self, session_id: int, workspace: Workspace, command: str) -> str:
+        name, rest = split_command(command, self.settings.code_commands)
+        workspace.check_room()
+        handle = self._sandbox_for(session_id, workspace)
+        backend = self.sandboxes.backend(handle.backend)
+        with command_slot():
+            result: ExitResult = backend.run(handle, [f"./{name}", *rest], cwd="work", env=SANDBOX_ENV,
+                                             timeout=self.settings.code_command_timeout)
+        return command_report(result.output, result.exit_code, stopped=result.stopped, timed_out=result.timed_out,
+                              timeout=self.settings.code_command_timeout)
+
+    def _drop_sandbox(self, session_id: int, why: str) -> None:
+        try:
+            self.sandboxes.destroy_for_session(session_id, reason=f"deleted: {why}")
+        except SandboxError:
+            log.warning("Code session %s: its sandbox couldn't be deleted yet", session_id, exc_info=True)
+
+    def _kill_sandbox_command(self, session_id: int) -> None:
+        row = self.sandboxes.live_for_session(session_id)
+        if row is None:
+            return
+        try:
+            self.sandboxes.backend(row["backend"]).kill(self.sandboxes.handle_of(row))
+        except Exception:
+            log.warning("Code session %s: couldn't stop the command in its sandbox", session_id, exc_info=True)
+
+    async def _end_sandbox(self, session_id: int) -> None:
+        """After a Stop: kill the command running in the sandbox, then delete the sandbox."""
+        await asyncio.to_thread(self._kill_sandbox_command, session_id)
+        await asyncio.to_thread(self._settle_sandbox, session_id)
+
+    def _settle_sandbox(self, session_id: int) -> None:
+        """Delete the session's sandbox once the session has finished. Its files are saved to the host first."""
+        row = self.get(session_id)
+        if self.sandboxes is None or row is None or row["status"] not in FINISHED:
+            return
+        box = self.sandboxes.live_for_session(session_id)
+        if box is None:
+            return
+        workspace = self.workspace(session_id)
+        try:
+            self.sandboxes.destroy_record(box, reason="session finished",
+                                          before=lambda handle: self._export_sandbox(session_id, workspace, handle))
+        except SandboxError:
+            log.warning("Code session %s: its sandbox will be deleted on the next cleanup", session_id, exc_info=True)
+
+    def _export_sandbox(self, session_id: int, workspace: Workspace, handle: SandboxHandle) -> None:
+        """Keep a copy of the sandbox's repository on the host, and say which files commands changed there.
+        The patch still comes from the host copy, which only holds approved edits."""
+        data = self.sandboxes.backend(handle.backend).get_archive(handle, src="work", exclude=COPY_SKIP)
+        (workspace.root / "sandbox-export.zip").write_bytes(data)
+        drift = changed_in_archive(data, workspace.work, COPY_SKIP)
+        if drift:
+            listed = ", ".join(drift[:20]) + (" and more" if len(drift) > 20 else "")
+            self._note(session_id, 0, f"Commands changed files in the sandbox that the patch doesn't include: {listed}. "
+                                      "The patch only has changes made through approved edits, so check these by hand.")
 
     async def _run(self, session_id: int) -> None:
         if session_id in self._busy:
@@ -781,6 +887,8 @@ class CodeRunner:
             self._set(session_id, status="failed", error=f"Something went wrong ({type(exc).__name__}).")
         finally:
             self._busy.discard(session_id)
+        if self.sandboxes is not None:
+            await asyncio.to_thread(self._settle_sandbox, session_id)
 
     async def _loop(self, session_id: int) -> None:
         workspace = self.workspace(session_id)
@@ -824,7 +932,10 @@ class CodeRunner:
                 if tool in APPROVAL_TOOLS:
                     try:
                         if tool == "run_command":
-                            parse_command(str(args.get("command", "")), self.settings.code_commands, workspace.work)
+                            if self.sandboxed:
+                                split_command(str(args.get("command", "")), self.settings.code_commands)
+                            else:
+                                parse_command(str(args.get("command", "")), self.settings.code_commands, workspace.work)
                             output = str(args.get("command", ""))
                         else:
                             output = workspace.preview(tool, args)

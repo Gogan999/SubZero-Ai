@@ -52,6 +52,27 @@ new model is still missing.
 | Approval window, screener on, screener model, students who always wait | `APPROVAL_WINDOW_MINUTES`, `SCREENER_ENABLED`, `MODEL_SCREENER`, `ALWAYS_REVIEW_SLACK_IDS` |
 | Retention, days of backups kept | `RETENTION_DAYS`, `BACKUP_KEEP_DAYS` |
 | Code commands and timeout | `CODE_COMMANDS`, `CODE_COMMAND_TIMEOUT` |
+
+## Code sandboxes (database)
+
+Each Code session's commands can run in their own disposable sandbox (`subzero_ai/sandbox.py`) instead of on the mini
+PC. With **Off**, commands run on the mini PC as before. **Hyper-V** gives each session a virtual computer made from
+one base disk and attached only to the private switch below. **Fake** runs commands in a folder on the mini PC with no
+protection and is for testing only.
+
+| Setting | config.env key |
+| --- | --- |
+| Run Code commands in a sandbox (off, hyperv, fake) | `CODE_SANDBOX` |
+| Delete a sandbox this many hours after it was made (1 to 168) | `SANDBOX_TTL_HOURS` |
+| Sandboxes that can run at the same time (1 to 10) | `SANDBOX_MAX_SESSIONS` |
+| Memory per sandbox, processors per sandbox, disk per sandbox | `SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_DISK_GB` |
+| Keep this much disk free before a new sandbox is made, in GB | `SANDBOX_MIN_FREE_GB` |
+| Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
+| Private network switch | `SANDBOX_SWITCH` (default `szsandbox-private`) |
+
+A new session waits for a free sandbox, and a new sandbox is refused while the disk is below the free-space limit.
+A sandbox is deleted when its Code session finishes, after its time limit, and when no record of it is left. Every
+sandbox is written to the audit log (`sandbox_created`, `sandbox_destroyed`, `sandbox_reaped`).
 | Subteams, admins | `SUBTEAMS`, `ADMIN_SLACK_IDS` |
 
 ## AI engine (config.env)

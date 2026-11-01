@@ -55,6 +55,7 @@ from .auth import LoginError, SlackLogin, profile_from_claims
 from .ai_backend import Capabilities, capabilities_for, make_client, resolve_backend
 from .claude import ClaudeClient
 from .code_runner import CodeRunner
+from .sandbox import SandboxManager, reap_sandboxes
 from .config import Settings, load_settings, normalize_model_id
 from .connectors import ConnectorError, Drive, GitHub
 from .db import Database
@@ -197,6 +198,7 @@ class Services:
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
+    sandboxes: SandboxManager | None = None  # where Code sessions' commands run (sandbox.py)
 
     def capabilities(self, model: str) -> Capabilities:
         """What this model can do with the backend in use: the one place templates and routes ask."""
@@ -216,6 +218,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     if claude is None:
         claude = make_client(settings)
     broker, tasks = Broker(), Tasks()
+    sandboxes = SandboxManager(settings, db)
     attachments = Attachments(db, settings.data_dir / "files")
     projects = Projects(db, settings.data_dir / "files")
     github = GitHub(settings)
@@ -232,7 +235,9 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     svc = Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
                    Shares(db), github, Drive(settings),
-                   CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks))
+                   CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks,
+                              sandboxes=sandboxes), sandboxes=sandboxes)
+    svc.nightly.reap = lambda: reap_sandboxes(svc)
     runner.capabilities_of = svc.capabilities
     if slack is not None:
         dms = SlackDMs(settings=settings, store=store, approvals=approvals, directory=directory, slack=slack,
@@ -1611,6 +1616,10 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         s.db.execute("UPDATE code_sessions SET status = 'failed', error = 'The server restarted while Claude was "
                      "working. Send a follow-up to carry on.' WHERE status IN ('preparing', 'running')")
         await ensure_team_id(s)
+        try:
+            await asyncio.to_thread(reap_sandboxes, s)  # sandboxes left by the last run, before any session starts
+        except Exception:
+            log.exception("Sandbox cleanup failed at startup")
         stop = asyncio.Event()
         loops: list[asyncio.Task] = []
         if background:

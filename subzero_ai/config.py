@@ -143,6 +143,17 @@ class Settings:
     # Code: Claude works in a copy of the GitHub repository above; a mentor approves each change and command
     code_commands: tuple[str, ...] = ("gradlew",)  # programs Claude may ask to run, by name
     code_command_timeout: int = 600  # seconds
+    # Each Code session runs its commands in its own sandbox (sandbox.py): off, hyperv, or fake (this computer,
+    # with no isolation, for tests only)
+    code_sandbox: str = "off"
+    sandbox_ttl_hours: int = 48  # a sandbox is deleted this long after it was made, whatever its session is doing
+    sandbox_max_sessions: int = 3  # sandboxes alive at once; a new one waits for a slot
+    sandbox_memory_mb: int = 2048
+    sandbox_cpus: int = 2
+    sandbox_disk_gb: int = 10  # the most a sandbox's own disk may grow
+    sandbox_min_free_gb: int = 20  # no new sandbox while the disk holding the base image has less free
+    sandbox_base_image: str = ""  # the base disk (a .vhdx) that every sandbox is made from
+    sandbox_switch: str = "szsandbox-private"  # the only network switch a sandbox may be attached to
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200
