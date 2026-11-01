@@ -44,7 +44,8 @@ from .connectors import ConnectorError, GitHub
 from .db import Database, utcnow
 from .live import Tasks
 from .sandbox import (
-    COPY_SKIP, GUEST_HOME, GUEST_PATH, MAX_OUTPUT_CHARS, ExitResult, OutputTail, SandboxError, SandboxHandle,
+    COPY_SKIP, GUEST_HOME, GUEST_PATH, MAX_OUTPUT_CHARS, MAX_SESSION_BYTES, ExitResult, OutputTail, SandboxError,
+    SandboxHandle,
     SandboxManager, changed_in_archive, kill_process_tree, pack_tree, read_output,
 )
 from .store import Viewer
@@ -61,7 +62,6 @@ MAX_WRITE_BYTES = 500 * 1024
 MAX_TASK_CHARS = 8000
 MAX_TOKENS = 16000
 KEEP_COPIES_DAYS = 14  # finished sessions' repository copies are deleted after this
-MAX_SESSION_BYTES = 800 * 1024 * 1024  # one session's two copies together, build output included
 MAX_RUNNING_COMMANDS = 2  # across the whole app: a second build slows the first one down
 COMMAND_WAIT_SECONDS = 60  # how long a command waits for a free slot before it is refused
 MAX_OPEN_SESSIONS = 5  # per mentor: sessions waiting or running at the same time
@@ -417,7 +417,10 @@ def parse_command(command: str, allowed: tuple[str, ...], work: Path) -> list[st
 def _blocked_option(arg: str) -> bool:
     """Gradle options that load another script or pick another build file: -I, -c, -b, their attached forms
     (-Ipath), and the long forms with or without `=`."""
-    if any(arg == opt or arg.startswith(opt + "=") for opt in ("--init-script", "--settings-file", "--build-file", "--gradle-user-home")):
+    if any(arg == opt or arg.startswith(opt + "=") for opt in ("--init-script", "--settings-file", "--build-file", "--gradle-user-home", "--project-dir",
+                                              "--project-cache-dir")):
+        return True
+    if arg.startswith("-p") and not arg.startswith("--"):  # -p <dir>: another project's build scripts
         return True
     if arg == "-g" or arg.startswith("-Dgradle.user.home") or arg.startswith("-Dorg.gradle.user.home"):
         return True
@@ -791,7 +794,9 @@ class CodeRunner:
         is made with a fresh copy of the host's repository, which already has every approved change."""
         if self.get(session_id)["status"] == "stopped":
             raise SandboxError("The session was stopped.")
-        with self.sandboxes.lock:
+        # One session at a time here (so two commands can't each make a sandbox); the manager's lock is not held
+        # while the VM boots.
+        with self.sandboxes.session_lock(session_id):
             row = self.sandboxes.live_for_session(session_id)
             if row is not None:
                 return self.sandboxes.handle_of(row)
@@ -869,6 +874,8 @@ class CodeRunner:
         """Keep a copy of the sandbox's repository on the host, and say which files commands changed there.
         The patch still comes from the host copy, which only holds approved edits."""
         data = self.sandboxes.backend(handle.backend).get_archive(handle, src="work", exclude=COPY_SKIP)
+        if len(data) > MAX_SESSION_BYTES:  # each backend already refuses this; checked again before anything is written
+            raise SandboxError("The sandbox's files are too big to save, so they weren't kept.")
         (workspace.root / "sandbox-export.zip").write_bytes(data)
         drift = changed_in_archive(data, workspace.work, COPY_SKIP)
         if drift:

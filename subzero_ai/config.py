@@ -153,7 +153,8 @@ class Settings:
     sandbox_disk_gb: int = 10  # the most a sandbox's own disk may grow
     sandbox_min_free_gb: int = 20  # no new sandbox while the disk holding the base image has less free
     sandbox_base_image: str = ""  # the base disk (a .vhdx) that every sandbox is made from
-    sandbox_switch: str = "szsandbox-private"  # the only network switch a sandbox may be attached to
+    # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24
+    sandbox_switch: str = "szsandbox-internal"
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200

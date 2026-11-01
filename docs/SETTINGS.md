@@ -57,8 +57,11 @@ new model is still missing.
 
 Each Code session's commands can run in their own disposable sandbox (`subzero_ai/sandbox.py`) instead of on the mini
 PC. With **Off**, commands run on the mini PC as before. **Hyper-V** gives each session a virtual computer made from
-one base disk and attached only to the private switch below. **Fake** runs commands in a folder on the mini PC with no
-protection and is for testing only.
+one base disk and attached only to the internal switch below. The host has a virtual adapter on that switch at
+10.77.0.1/24, and the host must firewall that adapter so sandboxes can reach only the host and nothing else on the
+mini PC's network. Each sandbox's adapter is also locked to the host (static MAC, DHCP and router guards, and ACLs that
+block the other sandboxes); those cmdlets are not yet tested on the mini PC. See `docs/CODE_SANDBOX_PLAN.md`.
+**Fake** runs commands in a folder on the mini PC with no protection and is for testing only.
 
 | Setting | config.env key |
 | --- | --- |
@@ -68,7 +71,7 @@ protection and is for testing only.
 | Memory per sandbox, processors per sandbox, disk per sandbox | `SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_DISK_GB` |
 | Keep this much disk free before a new sandbox is made, in GB | `SANDBOX_MIN_FREE_GB` |
 | Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
-| Private network switch | `SANDBOX_SWITCH` (default `szsandbox-private`) |
+| Internal network switch (the host's vNIC is 10.77.0.1/24) | `SANDBOX_SWITCH` (default `szsandbox-internal`) |
 
 A new session waits for a free sandbox, and a new sandbox is refused while the disk is below the free-space limit.
 A sandbox is deleted when its Code session finishes, after its time limit, and when no record of it is left. Every
@@ -148,3 +151,11 @@ claude-login` on the mini PC still works too. The Cloudflare Tunnel itself is ma
 | `HOST`, `PORT` | The tunnel points at 127.0.0.1:8787; changing them from the page would cut the page off. |
 | `DEV_LOGIN` | Test sign-in lets anyone on the mini PC sign in as anyone. |
 | `SESSION_SECRET` | Made automatically; changing it signs everyone out. |
+
+## Notes added with the sandbox work
+
+- After a model-check suite update, the default and hard-problem models keep working even though their old check result
+  is out of date; run the check again to refresh it. A current check that failed still blocks a model.
+- A Code session that has waited for a mentor, or run, for 3 days is stopped and cleaned up by the nightly job.
+- An existing install that already saved `sandbox_switch` keeps that value: change it to `szsandbox-internal` on the
+  Settings page.

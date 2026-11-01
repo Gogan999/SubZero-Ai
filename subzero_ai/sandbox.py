@@ -3,8 +3,10 @@
 A Code session's commands run inside its own sandbox instead of on the mini PC. The mentor's copy of the repository
 stays on the host (reads, approvals and the patch download all use it), and every approved edit is written to both
 copies. A sandbox is a Hyper-V virtual machine made from one shared base disk as a differencing disk, so the base is
-only ever read. It is attached only to the private switch named in Settings, and it is deleted when its session
-finishes, after its time limit, and when no record of it is left in the database.
+only ever read. It is attached only to the internal switch named in Settings (default szsandbox-internal), whose host
+vNIC is 10.77.0.1/24. The host must firewall that adapter; see docs/CODE_SANDBOX_PLAN.md. Each VM also gets its own
+network ACLs, DHCP and router guards and a static MAC (see new_vm_script and isolation_script). A sandbox is deleted
+when its session finishes, after its time limit, and when no record of it is left in the database.
 
 FakeSandbox does the same job with folders and subprocesses on this computer. It exists for the tests and is not
 isolated at all. HyperVSandbox builds its PowerShell and SSH commands with pure functions and takes the two runners
@@ -30,7 +32,7 @@ import subprocess
 import threading
 import time
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,6 +52,12 @@ STALE_CREATING = timedelta(minutes=30)  # a sandbox still "being made" after thi
 MAX_SLOTS = 200  # sandboxes get a numbered slot; the slot picks the guest's static address
 GUEST_ADDRESS = "10.77.0.{}"
 GUEST_FIRST_SLOT_HOST = 10  # 10.77.0.10 is the first guest address; .1 is the host's
+HOST_ADDRESS = "10.77.0.1"  # the host's vNIC on the internal switch
+GUEST_SUBNET = "10.77.0.0/24"
+MAX_SESSION_BYTES = 800 * 1024 * 1024  # one session's two copies together, build output included; also the archive cap
+SSH = "ssh"  # the ssh program on the host (a test can point it at a fake)
+SSH_KEYSCAN = "ssh-keyscan"  # reads a guest's host key over the internal switch, once, right after it boots
+HOST_KEY_LINE = re.compile(r"^\S+ ssh-ed25519 [A-Za-z0-9+/=]+$")
 # TODO: the guest account and home folder come from the base image (not built yet).
 GUEST_USER = "szrunner"
 GUEST_HOME = "/home/szrunner"
@@ -110,9 +118,9 @@ def slot_of(name: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def next_slot(names: list[str]) -> int:
-    """The lowest slot no existing sandbox uses."""
-    used = {slot for slot in (slot_of(name) for name in names) if slot is not None}
+def next_slot(names: list[str], reserved: Iterable[int] = ()) -> int:
+    """The lowest slot no existing sandbox uses and no sandbox that is being made has reserved."""
+    used = {slot for slot in (slot_of(name) for name in names) if slot is not None} | set(reserved)
     for slot in range(MAX_SLOTS):
         if slot not in used:
             return slot
@@ -127,7 +135,7 @@ def check_name(name: str) -> str:
 
 
 def guest_address(slot: int) -> str:
-    """The static address on the private network for a slot (10.77.0.10 and up)."""
+    """The static address on the internal switch for a slot (10.77.0.10 and up)."""
     if not 0 <= slot < MAX_SLOTS:
         raise SandboxError("That sandbox slot doesn't exist.")
     return GUEST_ADDRESS.format(GUEST_FIRST_SLOT_HOST + slot)
@@ -145,11 +153,18 @@ def safe_rel(rel: str) -> str:
 
 
 # --------------------------------------------------------------------------- archives and output
-def pack_tree(root: Path, exclude: frozenset[str] | set[str] = frozenset()) -> bytes:
+def archive_too_big() -> SandboxError:
+    return SandboxError(f"The sandbox's files are bigger than {MAX_SESSION_BYTES // (1024 * 1024)} MB, so they weren't "
+                        "copied out. Ask a mentor to check them by hand.")
+
+
+def pack_tree(root: Path, exclude: frozenset[str] | set[str] = frozenset(), limit: int | None = None) -> bytes:
     """A zip of a folder's files, with their permissions. Folders named in `exclude` are skipped at any depth,
-    and symbolic links are never followed (a link could point at the mini PC's own files)."""
+    and symbolic links are never followed (a link could point at the mini PC's own files). With `limit`, the
+    files' total size is checked before anything is read, and too much raises SandboxError."""
     root = Path(root)
     buf = io.BytesIO()
+    total = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
         if root.is_dir():
             for dirpath, dirnames, filenames in os.walk(root):
@@ -158,6 +173,10 @@ def pack_tree(root: Path, exclude: frozenset[str] | set[str] = frozenset()) -> b
                     path = Path(dirpath) / name
                     if path.is_symlink() or not path.is_file():
                         continue
+                    if limit is not None:
+                        total += path.stat().st_size
+                        if total > limit:
+                            raise archive_too_big()
                     info = zipfile.ZipInfo(path.relative_to(root).as_posix())
                     info.external_attr = (path.stat().st_mode & 0o777) << 16
                     info.compress_type = zipfile.ZIP_DEFLATED
@@ -246,6 +265,19 @@ def read_output(stream, tail: OutputTail, on_output: Callable[[str], None] | Non
         return
 
 
+def read_capped(stream, limit: int, sink: bytearray) -> None:
+    """Read a stream into `sink` until it ends or holds more than `limit` bytes. Reading stops there, so the caller
+    can refuse the data without ever holding all of it."""
+    try:
+        while len(sink) <= limit:
+            chunk = stream.read1(65536)
+            if not chunk:
+                return
+            sink += chunk
+    except (OSError, ValueError):
+        return
+
+
 def kill_process_tree(proc: subprocess.Popen) -> None:
     """Stop a command and everything it started (on Windows, the cmd.exe and JVM under it)."""
     try:
@@ -273,6 +305,7 @@ class FakeSandbox:
     def __init__(self, root: Path):
         self.root = Path(root)
         self._runs: dict[str, set[_Run]] = {}
+        self._reserved: set[int] = set()  # slots of sandboxes being made right now
         self._lock = threading.Lock()
 
     def _home(self, handle: SandboxHandle) -> Path:
@@ -286,8 +319,15 @@ class FakeSandbox:
         return target
 
     def create(self, session_id: int | str) -> SandboxHandle:
-        name = make_name(session_id, next_slot(self.list_existing()))
-        self._home(SandboxHandle(name, self.name, "")).mkdir(parents=True)
+        with self._lock:
+            slot = next_slot(self.list_existing(), self._reserved)
+            self._reserved.add(slot)
+        try:
+            name = make_name(session_id, slot)
+            self._home(SandboxHandle(name, self.name, "")).mkdir(parents=True)
+        finally:
+            with self._lock:
+                self._reserved.discard(slot)
         return SandboxHandle(name, self.name, utcnow())
 
     def run(self, handle, argv, *, cwd, env, timeout, on_output=None) -> ExitResult:
@@ -355,7 +395,7 @@ class FakeSandbox:
         unpack_tree(data, target)
 
     def get_archive(self, handle, *, src, exclude) -> bytes:
-        return pack_tree(self._path(handle, src), exclude)
+        return pack_tree(self._path(handle, src), exclude, limit=MAX_SESSION_BYTES)
 
     def destroy(self, handle) -> None:
         self.kill(handle)
@@ -402,7 +442,7 @@ def new_vhd_script(child: Path, base: str | Path, disk_gb: int) -> str:
 
 
 def new_vm_script(name: str, child: Path, switch: str, memory_mb: int, cpus: int, vm_dir: Path) -> str:
-    """A generation 2 VM with fixed memory and CPUs, one network adapter on the private switch, and the child disk."""
+    """A generation 2 VM with fixed memory and CPUs, one network adapter on the internal switch, and the child disk."""
     vm = ps_quote(check_name(name))
     # TODO: Set-VMFirmware -EnableSecureBoot depends on the base image's OS; set once the image is known.
     return "\n".join([
@@ -416,13 +456,41 @@ def new_vm_script(name: str, child: Path, switch: str, memory_mb: int, cpus: int
     ])
 
 
+def mac_for_slot(slot: int) -> str:
+    """A static MAC for a slot: Microsoft's 00:15:5D prefix, then the guest's last address octet, so the MAC and the
+    address always go together. Twelve hex digits, no separators, as Set-VMNetworkAdapter expects."""
+    return f"00155D77{GUEST_FIRST_SLOT_HOST + slot:04X}"
+
+
+def isolation_script(name: str, slot: int) -> str:
+    """Lock one VM's adapter down before it starts: a static MAC, DHCP and router messages from the guest dropped, and
+    traffic limited to the host's address. The host is allowed; the rest of the guest subnet, where other sandboxes
+    live, is denied in both directions.
+
+    UNVERIFIED: none of these cmdlets, the -Weight ordering (higher weight is meant to win) or the CIDR form of
+    -RemoteIPAddress has been run yet. Test them on the mini PC (docs/CODE_SANDBOX_PLAN.md, M3) and read the rules back
+    with Get-VMNetworkAdapterExtendedAcl before trusting this. Until then, the host firewall is the real boundary."""
+    vm = ps_quote(check_name(name))
+    host = ps_quote(f"{HOST_ADDRESS}/32")
+    subnet = ps_quote(GUEST_SUBNET)
+    return "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        f"Set-VMNetworkAdapter -VMName {vm} -StaticMacAddress {ps_quote(mac_for_slot(slot))} "
+        "-DhcpGuard On -RouterGuard On",
+        f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action Allow -Direction Both -RemoteIPAddress {host} "
+        "-Weight 200",
+        f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action Deny -Direction Both -RemoteIPAddress {subnet} "
+        "-Weight 100",
+    ])
+
+
 def adapters_script(name: str) -> str:
     return (f"Get-VMNetworkAdapter -VMName {ps_quote(check_name(name))} | "
             "Select-Object -Property Name, SwitchName | ConvertTo-Json -Compress")
 
 
 def check_adapters(output: str, switch: str) -> None:
-    """Refuse a VM with no adapter, or with any adapter not on the private switch."""
+    """Refuse a VM with no adapter, or with any adapter not on the internal switch."""
     text = (output or "").strip()
     rows = json.loads(text) if text else []
     if isinstance(rows, dict):
@@ -510,10 +578,92 @@ GUEST_UNPACK = (
 
 
 def ssh_argv(address: str, remote: str, *, key: str, known_hosts: str) -> list[str]:
-    # TODO: pin the guest's host key from the base image instead of accepting the first one seen.
-    return ["ssh", "-i", key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={known_hosts}",
+    """The ssh command to a guest. The host key must match the one pinned in this sandbox's own known_hosts file."""
+    return [SSH, "-i", key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known_hosts}",
             f"{GUEST_USER}@{address}", remote]
+
+
+def keyscan_argv(address: str) -> list[str]:
+    return [SSH_KEYSCAN, "-T", "10", "-t", "ed25519", address]
+
+
+def host_key_line(output: bytes, address: str) -> str:
+    """The known_hosts line for a guest, from ssh-keyscan's output. Refuses anything that isn't one ed25519 key."""
+    for raw in output.decode("ascii", errors="replace").splitlines():
+        line = raw.strip()
+        if HOST_KEY_LINE.match(line) and line.split(" ", 1)[0] == address:
+            return line
+    raise SandboxError("The sandbox's host key couldn't be read yet.")
+
+
+def _run_pipes(argv: list[str], *, stdin: bytes | None, timeout: int, on_output: Callable[[str], None] | None,
+               limit: int | None) -> tuple[int, bytes, bytes]:
+    """Run a command with pipes. Its stderr and stdout are read as they arrive: with on_output, each chunk is passed on
+    as it comes; without it, only the last MAX_OUTPUT_CHARS * 4 bytes of each stream are kept. With `limit`, stdout is
+    kept only up to limit + 1 bytes (the archive case), and the command is killed once it goes past that."""
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                               else {"start_new_session": True}))
+    keep = MAX_OUTPUT_CHARS * 4
+    out_tail, err_tail, archive = OutputTail(keep), OutputTail(keep), bytearray()
+    emit_lock = threading.Lock()  # the two readers and the callback never run at the same time
+
+    def emit(text: str) -> None:
+        if on_output is not None:
+            with emit_lock:
+                on_output(text)
+
+    def feed() -> None:
+        try:
+            proc.stdin.write(stdin)
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass  # the command ended before it read everything it was sent
+
+    def capture_archive() -> None:
+        read_capped(proc.stdout, limit, archive)
+        if len(archive) > limit:
+            kill_process_tree(proc)  # stop the guest sending more; the caller refuses the archive
+
+    threads = [threading.Thread(target=read_output, args=(proc.stderr, err_tail, emit), daemon=True)]
+    if limit is None:
+        threads.append(threading.Thread(target=read_output, args=(proc.stdout, out_tail, emit), daemon=True))
+    else:
+        threads.append(threading.Thread(target=capture_archive, daemon=True))
+    if stdin is not None:
+        threads.append(threading.Thread(target=feed, daemon=True))
+    for thread in threads:
+        thread.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc)
+        proc.wait()
+        raise
+    finally:
+        for thread in threads:
+            thread.join(REAP_SECONDS)
+        if any(thread.is_alive() for thread in threads):  # something still holds a pipe open
+            kill_process_tree(proc)
+            for thread in threads:
+                thread.join(REAP_SECONDS)
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+    if limit is None:
+        return proc.returncode, bytes(out_tail.data), bytes(err_tail.data)
+    return proc.returncode, bytes(archive[:limit + 1]), bytes(err_tail.data)
+
+
+def default_run_keyscan(address: str) -> bytes:
+    """ssh-keyscan's output for a guest. Empty when nothing answers yet."""
+    proc = subprocess.run(keyscan_argv(address), capture_output=True, timeout=30)
+    return proc.stdout[:4096] if proc.returncode == 0 else b""
 
 
 def default_run_powershell(script: str) -> str:
@@ -527,40 +677,53 @@ def default_run_powershell(script: str) -> str:
     return proc.stdout
 
 
-def make_default_run_ssh(key: str, known_hosts: str) -> Callable[..., tuple[int, bytes, bytes]]:
-    def run_ssh(address: str, remote: str, *, stdin: bytes | None, timeout: int) -> tuple[int, bytes, bytes]:
-        proc = subprocess.run(ssh_argv(address, remote, key=key, known_hosts=known_hosts), input=stdin,
-                              capture_output=True, timeout=timeout)
-        return proc.returncode, proc.stdout, proc.stderr
+def make_default_run_ssh(key: str) -> Callable[..., tuple[int, bytes, bytes]]:
+    """The real runner. See _run_pipes: output is streamed and bounded, and an archive is capped at `limit`."""
+    def run_ssh(address: str, remote: str, *, known_hosts: str, stdin: bytes | None, timeout: int,
+                on_output: Callable[[str], None] | None = None, limit: int | None = None) -> tuple[int, bytes, bytes]:
+        return _run_pipes(ssh_argv(address, remote, key=key, known_hosts=known_hosts), stdin=stdin, timeout=timeout,
+                          on_output=on_output, limit=limit)
     return run_ssh
 
 
 # --------------------------------------------------------------------------- HyperVSandbox
 class HyperVSandbox:
-    """One Hyper-V VM per session. The host runs PowerShell; the VM is reached over SSH on the private network.
+    """One Hyper-V VM per session. The host runs PowerShell; the VM is reached over SSH on the internal switch.
 
-    The two runners are injected: run_powershell(script) -> output text, and
-    run_ssh(address, remote_command, stdin=..., timeout=...) -> (exit code, stdout, stderr)."""
+    Each sandbox has its own known_hosts file in known_dir (named after the sandbox). Its host key is read once,
+    right after the VM boots, with ssh-keyscan over the host-only link, and then checked on every connection. That
+    first read is trust on first use, so it is only as good as the link: the host must firewall the internal adapter
+    (docs/CODE_SANDBOX_PLAN.md). The base image should also carry a fixed host key, which would remove that step.
+
+    The runners are injected: run_powershell(script) -> output text; run_keyscan(address) -> bytes; and
+    run_ssh(address, remote_command, *, known_hosts, stdin, timeout, on_output=None, limit=None) -> (exit code,
+    stdout, stderr). With `limit`, stdout is cut off past limit + 1 bytes and the caller refuses it."""
 
     name = "hyperv"
 
     def __init__(self, *, base_image: str, switch: str, memory_mb: int, cpus: int, disk_gb: int,
-                 vm_dir: str = "", ssh_key: str = "", known_hosts: str = "",
+                 vm_dir: str = "", ssh_key: str = "", known_dir: str = "",
                  run_powershell: Callable[[str], str] | None = None,
+                 run_keyscan: Callable[[str], bytes] | None = None,
                  run_ssh: Callable[..., tuple[int, bytes, bytes]] | None = None,
-                 ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep):
+                 ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep,
+                 archive_limit: int = MAX_SESSION_BYTES):
         if not base_image:
             raise SandboxRefused("Set the sandbox base image in Settings first.")
         self.base_image = base_image
         self.switch = switch
         self.memory_mb, self.cpus, self.disk_gb = memory_mb, cpus, disk_gb
         self.vm_dir = Path(vm_dir) if vm_dir else Path(base_image).parent / "szsandbox-vm-config"
+        self.known_dir = Path(known_dir) if known_dir else Path(base_image).parent / "szsandbox-known-hosts"
         self.run_powershell = run_powershell or default_run_powershell
-        self.run_ssh = run_ssh or make_default_run_ssh(ssh_key, known_hosts)
+        self.run_keyscan = run_keyscan or default_run_keyscan
+        self.run_ssh = run_ssh or make_default_run_ssh(ssh_key)
         self.ready_seconds = ready_seconds
         self.sleep = sleep
-        self._lock = threading.RLock()
+        self.archive_limit = archive_limit
+        self._lock = threading.Lock()  # guards _killed and _reserved only; never held across a VM or SSH call
         self._killed: set[str] = set()
+        self._reserved: set[int] = set()  # slots of sandboxes being made right now
 
     # ---- plumbing
     def _ps(self, script: str) -> str:
@@ -571,11 +734,31 @@ class HyperVSandbox:
         except Exception as exc:
             raise SandboxError(f"Hyper-V command failed: {exc}") from exc
 
-    def _ssh(self, name: str, remote: str, *, stdin: bytes | None = None, timeout: int = 60) -> tuple[int, bytes, bytes]:
+    def _known_hosts(self, name: str) -> str:
+        return str(self.known_dir / check_name(name))
+
+    def _ssh(self, name: str, remote: str, *, stdin: bytes | None = None, timeout: int = 60,
+             on_output: Callable[[str], None] | None = None, limit: int | None = None) -> tuple[int, bytes, bytes]:
         try:
-            return self.run_ssh(self._address(name), remote, stdin=stdin, timeout=timeout)
+            return self.run_ssh(self._address(name), remote, known_hosts=self._known_hosts(name), stdin=stdin,
+                                timeout=timeout, on_output=on_output, limit=limit)
+        except SandboxError:
+            raise
         except Exception as exc:
             raise SandboxError(f"Couldn't reach the sandbox: {exc}") from exc
+
+    def _pin_host_key(self, name: str) -> None:
+        """Read the guest's host key once and write it to the sandbox's own known_hosts file. Until this succeeds,
+        nothing else connects to the guest."""
+        address = self._address(name)
+        try:
+            line = host_key_line(self.run_keyscan(address), address)
+        except SandboxError:
+            raise
+        except Exception as exc:
+            raise SandboxError(f"Couldn't reach the sandbox: {exc}") from exc
+        self.known_dir.mkdir(parents=True, exist_ok=True)
+        Path(self._known_hosts(name)).write_text(line + "\n", encoding="ascii")
 
     def _address(self, name: str) -> str:
         slot = slot_of(check_name(name))
@@ -587,60 +770,82 @@ class HyperVSandbox:
         return child_disk_path(self.base_image, check_name(name))
 
     def _wait_ready(self, name: str) -> None:
+        """Wait until the guest's SSH answers. The host key is pinned on the first answer that gives one, and every
+        check after that is strict, so a different key later is refused rather than trusted."""
         deadline = time.monotonic() + self.ready_seconds
+        pinned = False
         while True:
-            code, _, _ = self._ssh(name, "true", timeout=15)
-            if code == 0:
-                return
+            try:
+                if not pinned:
+                    self._pin_host_key(name)
+                    pinned = True
+                code, _, _ = self._ssh(name, "true", timeout=15)
+                if code == 0:
+                    return
+            except SandboxError:
+                pass  # not up yet; the deadline below decides when to give up
             if time.monotonic() >= deadline:
                 raise SandboxError("The sandbox didn't start in time.")
             self.sleep(3)
 
     def _destroy_name(self, name: str) -> None:
         self._ps(destroy_script(name, self._child(name)))
+        Path(self._known_hosts(name)).unlink(missing_ok=True)
 
     # ---- lifecycle
     def create(self, session_id: int | str) -> SandboxHandle:
+        # Only the slot is chosen under the lock. The VM takes minutes to boot, so it is made outside it, and the
+        # reaper and other sandboxes are never held up by it.
         with self._lock:
-            name = make_name(session_id, next_slot(self.list_existing()))
+            slot = next_slot(self.list_existing(), self._reserved)
+            self._reserved.add(slot)
+        try:
+            return self._make(make_name(session_id, slot), slot)
+        finally:
+            with self._lock:
+                self._reserved.discard(slot)
+
+    def _make(self, name: str, slot: int) -> SandboxHandle:
+        try:
+            child = self._child(name)
+            self._ps(new_vhd_script(child, self.base_image, self.disk_gb))
+            self._ps(new_vm_script(name, child, self.switch, self.memory_mb, self.cpus, self.vm_dir))
+            self._ps(isolation_script(name, slot))
+            check_adapters(self._ps(adapters_script(name)), self.switch)
+            self._ps(start_script(name))
+            self._wait_ready(name)
+        except Exception as exc:
             try:
-                child = self._child(name)
-                self._ps(new_vhd_script(child, self.base_image, self.disk_gb))
-                self._ps(new_vm_script(name, child, self.switch, self.memory_mb, self.cpus, self.vm_dir))
-                check_adapters(self._ps(adapters_script(name)), self.switch)
-                self._ps(start_script(name))
-                self._wait_ready(name)
-            except Exception as exc:
-                try:
-                    self._destroy_name(name)  # don't leave a half-made VM behind
-                except Exception:
-                    log.warning("Couldn't clean up sandbox %s after a failed start", name, exc_info=True)
-                if isinstance(exc, SandboxError):
-                    raise
-                raise SandboxError(f"The sandbox couldn't be started: {exc}") from exc
-            return SandboxHandle(name, self.name, utcnow())
+                self._destroy_name(name)  # don't leave a half-made VM behind
+            except Exception:
+                log.warning("Couldn't clean up sandbox %s after a failed start", name, exc_info=True)
+            if isinstance(exc, SandboxError):
+                raise
+            raise SandboxError(f"The sandbox couldn't be started: {exc}") from exc
+        return SandboxHandle(name, self.name, utcnow())
 
     def destroy(self, handle: SandboxHandle) -> None:
-        with self._lock:
-            self._destroy_name(handle.name)
+        self._destroy_name(handle.name)
 
     def list_existing(self) -> list[str]:
         return parse_vm_names(self._ps(list_vms_script()))
 
     # ---- running and files
     def run(self, handle, argv, *, cwd, env, timeout, on_output=None) -> ExitResult:
-        self._killed.discard(handle.name)
+        with self._lock:
+            self._killed.discard(handle.name)
         remote = guest_run_command(argv, cwd, env, timeout)
-        code, out, err = self._ssh(handle.name, remote, timeout=timeout + 60)
-        text = (out + err).decode("utf-8", errors="replace")
-        if on_output is not None and text:
-            on_output(text)
+        # The runner streams the output to on_output as it comes and keeps only its end, so this stays bounded.
+        code, out, err = self._ssh(handle.name, remote, timeout=timeout + 60, on_output=on_output)
         tail = OutputTail(MAX_OUTPUT_CHARS * 4)
-        tail.add((out + err)[-MAX_OUTPUT_CHARS * 4:])
-        return ExitResult(code, tail.text(), timed_out=code == 124, stopped=handle.name in self._killed)
+        tail.add(out + err)
+        with self._lock:
+            stopped = handle.name in self._killed
+        return ExitResult(code, tail.text(), timed_out=code == 124, stopped=stopped)
 
     def kill(self, handle) -> None:
-        self._killed.add(handle.name)
+        with self._lock:
+            self._killed.add(handle.name)
         self._ssh(handle.name, f"pkill -KILL -u {GUEST_USER} || true", timeout=30)
 
     def put_file(self, handle, rel, data) -> None:
@@ -671,23 +876,37 @@ class HyperVSandbox:
     def get_archive(self, handle, *, src, exclude) -> bytes:
         skip = " ".join(shlex.quote(name) for name in sorted(exclude))
         code, out, _ = self._ssh(handle.name, f"python3 -c {shlex.quote(GUEST_PACK)} {shlex.quote(guest_path(src))} "
-                                              f"{skip}", timeout=600)
+                                              f"{skip}", timeout=600, limit=self.archive_limit)
+        if len(out) > self.archive_limit:  # the runner stopped reading here and killed the command
+            raise SandboxError(f"The sandbox's files are bigger than {self.archive_limit // (1024 * 1024)} MB, so they "
+                               "weren't copied out. Ask a mentor to check them by hand.")
         if code != 0:
             raise SandboxError("Couldn't copy the sandbox's files out.")
         return out
 
 
 # --------------------------------------------------------------------------- factory
+def backend_fingerprint(settings: Settings, kind: str) -> tuple:
+    """The settings a backend of this kind is built from. A cached backend is rebuilt when these change."""
+    if kind == "fake":
+        return (str(settings.data_dir),)
+    if kind == "hyperv":
+        return (str(settings.data_dir), settings.sandbox_base_image, settings.sandbox_switch,
+                settings.sandbox_memory_mb, settings.sandbox_cpus, settings.sandbox_disk_gb)
+    return ()
+
+
 def make_backend(settings: Settings, kind: str) -> SandboxBackend:
-    """The backend for a code_sandbox value. Built from the settings each time it's needed."""
+    """The backend for a code_sandbox value, built from the current settings (see SandboxManager.backend)."""
     if kind == "fake":
         return FakeSandbox(settings.data_dir / "sandbox-fake")
     if kind == "hyperv":
-        keys = settings.data_dir / "sandbox"  # TODO: create the SSH key pair and bake its public half into the base image
+        # TODO: create the SSH key pair and bake its public half into the base image
+        keys = settings.data_dir / "sandbox"
         return HyperVSandbox(base_image=settings.sandbox_base_image, switch=settings.sandbox_switch,
                              memory_mb=settings.sandbox_memory_mb, cpus=settings.sandbox_cpus,
                              disk_gb=settings.sandbox_disk_gb, ssh_key=str(keys / "id_ed25519"),
-                             known_hosts=str(keys / "known_hosts"))
+                             known_dir=str(keys / "known_hosts"))
     raise SandboxError(f"There's no sandbox kind called {kind}.")
 
 
@@ -708,6 +927,16 @@ class SandboxStore:
     def update(self, row_id: int, **fields: Any) -> None:
         sql = ", ".join(f"{key} = ?" for key in fields)
         self.db.execute(f"UPDATE sandbox_sessions SET {sql} WHERE id = ?", (*fields.values(), row_id))
+
+    def start(self, row_id: int, name: str) -> bool:
+        """Record a made sandbox as running. False if its record was closed meanwhile (the reaper gave up on it)."""
+        with self.db.transaction() as conn:
+            cur = conn.execute("UPDATE sandbox_sessions SET name = ?, state = 'running' "
+                               "WHERE id = ? AND state = 'creating'", (name, row_id))
+            return cur.rowcount == 1
+
+    def any_creating(self) -> bool:
+        return self.db.one("SELECT 1 AS found FROM sandbox_sessions WHERE state = 'creating' LIMIT 1") is not None
 
     def get(self, row_id: int):
         return self.db.one("SELECT * FROM sandbox_sessions WHERE id = ?", (row_id,))
@@ -739,8 +968,9 @@ class SandboxStore:
 
 
 class SandboxManager:
-    """Makes, uses and deletes sandboxes, and keeps their records in step. One lock covers every change, so
-    the reaper never looks for orphans while a sandbox is being made."""
+    """Makes, uses and deletes sandboxes, and keeps their records in step. `lock` covers the records and every
+    destroy, and it is never held while a VM boots: a sandbox's slot is reserved under the lock as a record in state
+    'creating' (which counts toward the limit), and the VM is made after the lock is released."""
 
     def __init__(self, settings: Settings, db: Database,
                  backend_factory: Callable[[str], SandboxBackend] | None = None):
@@ -749,6 +979,9 @@ class SandboxManager:
         self.store = SandboxStore(db)
         self.backend_factory = backend_factory or (lambda kind: make_backend(settings, kind))
         self.lock = threading.RLock()
+        self._backends: dict[str, tuple[tuple, SandboxBackend]] = {}
+        self._session_locks: dict[int, threading.RLock] = {}
+        self._state_lock = threading.Lock()  # guards _backends and _session_locks only
 
     @property
     def enabled(self) -> bool:
@@ -757,7 +990,21 @@ class SandboxManager:
         return self.settings.code_sandbox.strip().lower() not in OFF_VALUES
 
     def backend(self, kind: str) -> SandboxBackend:
-        return self.backend_factory(kind)
+        """The one backend of this kind that everyone shares, so its state (a running command, a stop request) is
+        seen by every caller. It is rebuilt only when the settings it is built from, or the factory, change."""
+        key = (self.backend_factory, backend_fingerprint(self.settings, kind))
+        with self._state_lock:
+            cached = self._backends.get(kind)
+            if cached is None or cached[0] != key:
+                cached = (key, self.backend_factory(kind))
+                self._backends[kind] = cached
+            return cached[1]
+
+    def session_lock(self, code_session_id: int) -> threading.RLock:
+        """Serializes the sandbox work of one Code session (making its sandbox and copying the repository in), so two
+        commands can't each make one. Other sessions are not held up by it."""
+        with self._state_lock:
+            return self._session_locks.setdefault(code_session_id, threading.RLock())
 
     def kinds_in_use(self) -> set[str]:
         kinds = self.store.kinds_in_use()
@@ -792,27 +1039,37 @@ class SandboxManager:
                                  "to free some space.")
 
     def create_for_session(self, code_session_id: int, *, actor_id: int | None) -> SandboxHandle:
-        """Make a sandbox for a Code session. Raises SandboxRefused or SandboxError."""
+        """Make a sandbox for a Code session. Raises SandboxRefused or SandboxError. The lock is held only to check
+        the limit and record the reservation; the VM is made outside it, so the reaper is never held up."""
+        kind = self.settings.code_sandbox
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(hours=self.settings.sandbox_ttl_hours)
         with self.lock:
-            self.check_capacity()
-            kind = self.settings.code_sandbox
-            now = datetime.now(timezone.utc)
-            expires = now + timedelta(hours=self.settings.sandbox_ttl_hours)
-            row_id = self.store.insert(code_session_id, kind, state="creating", created_at=now.isoformat(timespec="seconds"),
+            self.check_capacity()  # counts sandboxes being made too, so parallel requests can't exceed the limit
+            row_id = self.store.insert(code_session_id, kind, state="creating",
+                                       created_at=now.isoformat(timespec="seconds"),
                                        expires_at=expires.isoformat(timespec="seconds"))
+        try:
+            handle = self.backend(kind).create(code_session_id)
+        except SandboxError as exc:
+            self.store.update(row_id, state="failed", note=str(exc)[:300])
+            raise
+        except Exception as exc:
+            self.store.update(row_id, state="failed", note=str(exc)[:300])
+            raise SandboxError(f"The sandbox couldn't be made: {exc}") from exc
+        with self.lock:
+            recorded = self.store.start(row_id, handle.name)
+        if not recorded:  # the reaper closed this record while the VM was being made: don't keep the VM
             try:
-                handle = self.backend(kind).create(code_session_id)
-            except SandboxError as exc:
-                self.store.update(row_id, state="failed", note=str(exc)[:300])
-                raise
-            except Exception as exc:
-                self.store.update(row_id, state="failed", note=str(exc)[:300])
-                raise SandboxError(f"The sandbox couldn't be made: {exc}") from exc
-            self.store.update(row_id, name=handle.name, state="running")
-            self.db.audit("sandbox_created", actor_id=actor_id, target_type="sandbox", target_id=row_id,
-                          details={"name": handle.name, "backend": kind, "code_session": code_session_id,
-                                   "expires_at": expires.isoformat(timespec="seconds")})
-            return SandboxHandle(handle.name, kind, handle.created_at)
+                self.backend(kind).destroy(handle)
+            except Exception:
+                log.warning("Couldn't delete sandbox %s, which was made after its record was closed", handle.name,
+                            exc_info=True)
+            raise SandboxError("The sandbox took too long to start, so it was deleted. Try again.")
+        self.db.audit("sandbox_created", actor_id=actor_id, target_type="sandbox", target_id=row_id,
+                      details={"name": handle.name, "backend": kind, "code_session": code_session_id,
+                               "expires_at": expires.isoformat(timespec="seconds")})
+        return SandboxHandle(handle.name, kind, handle.created_at)
 
     def destroy_record(self, row, *, reason: str, actor_id: int | None = None,
                        before: Callable[[SandboxHandle], None] | None = None) -> None:
@@ -895,6 +1152,8 @@ def _reap_row(manager: SandboxManager, row, stamp: str, report: dict[str, int]) 
 
 
 def _reap_orphans(manager: SandboxManager, report: dict[str, int]) -> None:
+    if manager.store.any_creating():
+        return  # a VM can exist before its record has a name, so nothing is an orphan until the makes finish
     known = manager.store.known_names()
     for kind in sorted(manager.kinds_in_use()):
         try:

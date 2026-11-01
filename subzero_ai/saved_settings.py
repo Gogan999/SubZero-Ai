@@ -127,7 +127,7 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("code_command_timeout", "Stop a command after this many seconds", "int",
               "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
         Field("code_sandbox", "Run Code commands in a sandbox", "choice",
-              "Hyper-V gives each Code session its own virtual computer on a private network, deleted when the "
+              "Hyper-V gives each Code session its own virtual computer on an internal network, deleted when the "
               "session ends. Fake runs commands on this computer with no protection, so use it only for testing. "
               "Changing this applies to the next command.", choices=SANDBOX_CHOICES),
         Field("sandbox_ttl_hours", "Delete a sandbox this many hours after it was made", "int",
@@ -146,8 +146,9 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("sandbox_base_image", "Base disk for sandboxes", "path",
               "The full path to the base disk file (.vhdx) on the mini PC. Leave empty unless sandboxes are on.",
               optional=True, error="Use the full path to the disk file, like C:\\SubZeroAI\\sandbox\\base.vhdx."),
-        Field("sandbox_switch", "Private network switch for sandboxes", "name",
-              "The Hyper-V switch sandboxes are attached to. A sandbox on any other switch is never started.",
+        Field("sandbox_switch", "Internal network switch for sandboxes", "name",
+              "The Hyper-V internal switch sandboxes are attached to, with the host on 10.77.0.1. The host must "
+              "firewall that adapter. A sandbox on any other switch is never started.",
               error="Use letters, numbers, spaces, dots, dashes and underscores, up to 63 characters."),
     ]),
     "people": ("Subteams and admins", [

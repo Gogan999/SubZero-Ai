@@ -4,11 +4,13 @@ no PowerShell, no SSH and no Hyper-V are ever started."""
 
 from __future__ import annotations
 
+import atexit
 import io
 import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -34,9 +36,13 @@ from subzero_ai.sandbox import (
     check_adapters,
     child_disk_path,
     guest_address,
+    host_key_line,
+    isolation_script,
+    mac_for_slot,
     pack_tree,
     ps_quote,
     reap_sandboxes,
+    ssh_argv,
     unpack_tree,
 )
 
@@ -44,9 +50,13 @@ from .helpers import MENTOR, Harness
 from .test_features import FakeResponse, FakeWeb, repo_zip
 
 BASE = "/srv/sandbox/base.vhdx"
-SWITCH = "szsandbox-private"
-GOOD_ADAPTERS = '[{"Name":"Network Adapter","SwitchName":"szsandbox-private"}]'
+SWITCH = "szsandbox-internal"
+GOOD_ADAPTERS = '[{"Name":"Network Adapter","SwitchName":"szsandbox-internal"}]'
 DESTRUCTIVE = ("Remove-Item", "Remove-VM", "Stop-VM", "Set-VHD", "Optimize-VHD", "Convert-VHD", "Resize-VHD")
+# Known-hosts files for the fake sandboxes go here, never under the base image's folder
+KNOWN_ROOT = Path(tempfile.mkdtemp(prefix="sandbox-known-test-"))
+atexit.register(shutil.rmtree, KNOWN_ROOT, True)
+HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEKEYFORTESTSONLY"
 
 
 # --------------------------------------------------------------------------- the fake sandbox
@@ -183,13 +193,17 @@ class FakeSandboxLifecycleTest(unittest.TestCase):
 
 # --------------------------------------------------------------------------- Hyper-V: fakes and command checks
 class FakeHost:
-    """Stands in for PowerShell and SSH. Records every script and command; never runs anything."""
+    """Stands in for PowerShell, ssh-keyscan and SSH. Records every script and command; never runs anything."""
 
-    def __init__(self, adapters: str = GOOD_ADAPTERS, vms: str = "[]", ssh_codes: dict[str, int] | None = None):
+    def __init__(self, adapters: str = GOOD_ADAPTERS, vms: str = "[]", ssh_codes: dict[str, int] | None = None,
+                 keyscan_answers: int = 0):
         self.scripts: list[str] = []
         self.remote: list[tuple[str, str]] = []
+        self.known_hosts: list[str] = []
+        self.keyscans: list[str] = []
         self.adapters, self.vms = adapters, vms
         self.ssh_codes = ssh_codes or {}
+        self.keyscan_silent_for = keyscan_answers  # the first this-many keyscans get no answer (still booting)
 
     def powershell(self, script: str) -> str:
         self.scripts.append(script)
@@ -199,8 +213,16 @@ class FakeHost:
             return self.vms
         return ""
 
-    def ssh(self, address: str, remote: str, *, stdin: bytes | None, timeout: int) -> tuple[int, bytes, bytes]:
+    def keyscan(self, address: str) -> bytes:
+        self.keyscans.append(address)
+        if len(self.keyscans) <= self.keyscan_silent_for:
+            return b""
+        return f"{address} {HOST_KEY}\n".encode()
+
+    def ssh(self, address: str, remote: str, *, known_hosts: str, stdin: bytes | None, timeout: int,
+            on_output=None, limit: int | None = None) -> tuple[int, bytes, bytes]:
         self.remote.append((address, remote))
+        self.known_hosts.append(known_hosts)
         for prefix, code in self.ssh_codes.items():
             if remote.startswith(prefix):
                 return code, b"", b""
@@ -212,7 +234,8 @@ class FakeHost:
 
 def hyperv(host: FakeHost, **overrides) -> HyperVSandbox:
     options = dict(base_image=BASE, switch=SWITCH, memory_mb=2048, cpus=2, disk_gb=10, run_powershell=host.powershell,
-                   run_ssh=host.ssh, ready_seconds=0, sleep=lambda _s: None)
+                   run_keyscan=host.keyscan, run_ssh=host.ssh, known_dir=str(KNOWN_ROOT), ready_seconds=0,
+                   sleep=lambda _s: None)
     options.update(overrides)
     return HyperVSandbox(**options)
 
@@ -236,7 +259,7 @@ class HyperVCommandTest(unittest.TestCase):
                     self.assertTrue("Get-VHD" in line or "-ParentPath" in line, line)
                     self.assertFalse(any(word in line for word in DESTRUCTIVE), line)
 
-    def test_the_vm_is_attached_only_to_the_private_switch_with_caps(self):
+    def test_the_vm_is_attached_only_to_the_internal_switch_with_caps(self):
         host = FakeHost()
         hyperv(host, memory_mb=3072, cpus=3).create(7)
         [new_vm] = host.sent("New-VM ")
@@ -246,8 +269,8 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertIn("-DynamicMemoryEnabled $false", host.sent("Set-VMMemory")[0])
         self.assertIn("-Count 3", host.sent("Set-VMProcessor")[0])
         for script in host.scripts:
-            self.assertFalse(re.search(r"Connect-VMNetworkAdapter|Add-VMNetworkAdapter|-SwitchName(?!.*szsandbox)",
-                                       script), script)
+            self.assertFalse(re.search(r"Connect-VMNetworkAdapter|Add-VMNetworkAdapter(?!ExtendedAcl)|"
+                                       r"-SwitchName(?!.*szsandbox)", script), script)
 
     def test_a_vm_with_an_adapter_on_another_switch_is_never_started(self):
         host = FakeHost(adapters='[{"Name":"Network Adapter","SwitchName":"TrueNAS"}]')
@@ -257,9 +280,40 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertEqual(host.sent("Start-VM"), [], "the VM is never started")
         self.assertTrue(host.sent("Remove-VM"), "the half-made VM is removed again")
 
+    def test_the_adapter_is_locked_down_before_the_vm_starts(self):
+        host = FakeHost()
+        hyperv(host).create(7)
+        isolated = [i for i, s in enumerate(host.scripts) if "-DhcpGuard On" in s]
+        started = [i for i, s in enumerate(host.scripts) if "Start-VM -Name" in s]
+        self.assertEqual(len(isolated), 1)
+        self.assertEqual(len(started), 1)
+        self.assertLess(isolated[0], started[0], "the isolation is applied before the VM starts")
+
+    def test_isolation_script_text(self):
+        name = "szsandbox-7-s003-abcdef"
+        script = isolation_script(name, 3)
+        self.assertIn(f"Set-VMNetworkAdapter -VMName {ps_quote(name)} -StaticMacAddress '00155D77000D'", script)
+        self.assertIn("-DhcpGuard On -RouterGuard On", script)
+        self.assertIn("Add-VMNetworkAdapterExtendedAcl", script)
+        self.assertIn("-Action Allow -Direction Both -RemoteIPAddress '10.77.0.1/32' -Weight 200", script)
+        self.assertIn("-Action Deny -Direction Both -RemoteIPAddress '10.77.0.0/24' -Weight 100", script)
+        self.assertLess(script.index("-Action Allow"), script.index("-Action Deny"), "the host is allowed first")
+        self.assertNotIn("-Action Allow -Direction Both -RemoteIPAddress '10.77.0.0/24'", script)
+        self.assertNotIn("Remove-", script)
+        with self.assertRaises(SandboxError):
+            isolation_script("Production DB", 3)
+
+    def test_static_macs_are_unique_and_follow_the_address(self):
+        macs = {mac_for_slot(slot) for slot in range(sandbox.MAX_SLOTS)}
+        self.assertEqual(len(macs), sandbox.MAX_SLOTS)
+        for slot in (0, 3, 199):
+            mac = mac_for_slot(slot)
+            self.assertRegex(mac, r"^[0-9A-F]{12}$")
+            self.assertTrue(mac.endswith(f"{sandbox.GUEST_FIRST_SLOT_HOST + slot:04X}"))
+
     def test_check_adapters_refuses_no_adapter_and_any_other_switch(self):
         check_adapters(GOOD_ADAPTERS, SWITCH)
-        check_adapters('{"Name":"a","SwitchName":"szsandbox-private"}', SWITCH)
+        check_adapters('{"Name":"a","SwitchName":"szsandbox-internal"}', SWITCH)
         for bad in ("", "[]", '[{"SwitchName":"Default Switch"}]', '[{"SwitchName":null}]',
                     f'[{GOOD_ADAPTERS[1:-1]},{{"SwitchName":"External"}}]'):
             with self.assertRaises(SandboxError, msg=bad):
@@ -318,7 +372,7 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertEqual(remote.count("PATH="), 1, "one PATH only")
         self.assertTrue(result.timed_out, "exit code 124 means the time limit stopped it")
 
-    def test_guest_addresses_stay_in_the_private_network(self):
+    def test_guest_addresses_stay_on_the_internal_network(self):
         addresses = {guest_address(slot) for slot in range(sandbox.MAX_SLOTS)}
         self.assertEqual(len(addresses), sandbox.MAX_SLOTS)
         for address in addresses:
@@ -336,6 +390,276 @@ class HyperVCommandTest(unittest.TestCase):
     def test_a_base_image_must_be_set(self):
         with self.assertRaises(SandboxRefused):
             HyperVSandbox(base_image="", switch=SWITCH, memory_mb=1024, cpus=1, disk_gb=5)
+
+
+# --------------------------------------------------------------------------- host keys
+class HostKeyTest(unittest.TestCase):
+    def test_ssh_is_strict_and_uses_the_sandboxs_own_known_hosts_file(self):
+        argv = ssh_argv("10.77.0.10", "true", key="/k/id", known_hosts="/kh/szsandbox-7-s000-abcdef")
+        self.assertIn("StrictHostKeyChecking=yes", argv)
+        self.assertNotIn("StrictHostKeyChecking=accept-new", argv)
+        self.assertIn("UserKnownHostsFile=/kh/szsandbox-7-s000-abcdef", argv)
+
+    def test_only_one_ed25519_key_for_the_right_address_is_accepted(self):
+        self.assertEqual(host_key_line(f"10.77.0.10 {HOST_KEY}\n".encode(), "10.77.0.10"), f"10.77.0.10 {HOST_KEY}")
+        bad = [b"", f"10.77.0.11 {HOST_KEY}\n".encode(), b"10.77.0.10 ssh-rsa AAAAB3NzaC1yc2E\n",
+               b"10.77.0.10 ssh-ed25519 AA BB\n", b"not a key at all\n"]
+        for output in bad:
+            with self.assertRaises(SandboxError, msg=output):
+                host_key_line(output, "10.77.0.10")
+
+    def test_the_host_key_is_read_once_pinned_and_used_for_every_connection(self):
+        host = FakeHost()
+        backend = hyperv(host)
+        handle = backend.create(7)
+        pinned = KNOWN_ROOT / handle.name
+        self.assertEqual(pinned.read_text(encoding="ascii"), f"10.77.0.10 {HOST_KEY}\n")
+        self.assertEqual(host.keyscans, ["10.77.0.10"], "the key is read once")
+        self.assertEqual(set(host.known_hosts), {str(pinned)}, "every connection checks this sandbox's own file")
+        backend.destroy(handle)
+        self.assertFalse(pinned.exists(), "the file goes with the sandbox")
+
+    def test_keyscan_is_retried_until_the_guest_answers(self):
+        host = FakeHost(keyscan_answers=2)
+        handle = hyperv(host, ready_seconds=60).create(7)
+        self.assertEqual(len(host.keyscans), 3)
+        self.assertEqual(host.remote[0], ("10.77.0.10", "true"))
+        (KNOWN_ROOT / handle.name).unlink(missing_ok=True)
+
+    def test_a_guest_that_gives_no_key_is_never_connected_to(self):
+        host = FakeHost(keyscan_answers=10 ** 6)
+        with self.assertRaises(SandboxError):
+            hyperv(host, ready_seconds=0).create(7)
+        self.assertEqual(host.remote, [], "nothing connects without a pinned key")
+        self.assertTrue(host.sent("Remove-VM"), "the half-made VM is removed")
+
+
+# --------------------------------------------------------------------------- guest output and archives
+@unittest.skipIf(os.name == "nt", "the fake ssh is a POSIX script")
+class GuestOutputTest(unittest.TestCase):
+    """The real runner, against a fake ssh program that writes whatever the test says."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sandbox-guest-"))
+        self.ssh_program = self.tmp / "fake-ssh"
+        self.handle = SandboxHandle("szsandbox-7-s000-abcdef", "hyperv", "")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def fake_ssh(self, body: str) -> None:
+        self.ssh_program.write_text(f"#!{sys.executable}\nimport sys, time\n{body}\n")
+        self.ssh_program.chmod(0o755)
+
+    def run_ssh(self, **kwargs):
+        with mock.patch.object(sandbox, "SSH", str(self.ssh_program)):
+            runner = sandbox.make_default_run_ssh(key="/k/id")
+            return runner("10.77.0.10", "true", known_hosts="/kh/x", stdin=None,
+                          timeout=kwargs.pop("timeout", 60), **kwargs)
+
+    def backend(self, **overrides) -> HyperVSandbox:
+        with mock.patch.object(sandbox, "SSH", str(self.ssh_program)):
+            return hyperv(FakeHost(), run_ssh=sandbox.make_default_run_ssh(key="/k/id"), **overrides)
+
+    def test_a_chatty_command_is_streamed_as_it_comes_and_only_its_end_is_kept(self):
+        self.fake_ssh("sys.stdout.write('a' * (20 * 1024 * 1024)); sys.stderr.write('e' * (2 * 1024 * 1024))")
+        chunks: list[str] = []
+        code, out, err = self.run_ssh(on_output=chunks.append)
+        self.assertEqual(code, 0)
+        self.assertEqual(sum(len(chunk) for chunk in chunks), 22 * 1024 * 1024, "every byte was passed on")
+        keep = sandbox.MAX_OUTPUT_CHARS * 4
+        self.assertLessEqual(len(out), keep)
+        self.assertLessEqual(len(err), keep)
+        self.assertEqual(out, b"a" * len(out))
+        self.assertEqual(err, b"e" * len(err))
+
+    def test_run_reports_a_bounded_output_tail_to_claude(self):
+        self.fake_ssh("sys.stdout.write('x' * (10 * 1024 * 1024))")
+        with mock.patch.object(sandbox, "SSH", str(self.ssh_program)):
+            backend = hyperv(FakeHost(), run_ssh=sandbox.make_default_run_ssh(key="/k/id"))
+            result = backend.run(self.handle, ["./gradlew"], cwd="work", env={}, timeout=60)
+        self.assertLessEqual(len(result.output), sandbox.MAX_OUTPUT_CHARS + 40)
+        self.assertIn("earlier output cut", result.output)
+
+    def test_a_command_past_its_time_limit_is_killed_not_waited_for(self):
+        self.fake_ssh("time.sleep(60)")
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.run_ssh(timeout=1)
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_a_small_archive_comes_back_whole(self):
+        self.fake_ssh("sys.stdout.buffer.write(b'PK-small')")
+        backend = self.backend(archive_limit=1024)
+        with mock.patch.object(sandbox, "SSH", str(self.ssh_program)):
+            self.assertEqual(backend.get_archive(self.handle, src="work", exclude=frozenset()), b"PK-small")
+
+    def test_a_huge_archive_is_cut_off_and_refused_without_being_held(self):
+        self.fake_ssh("sys.stdout.buffer.write(b'z' * (8 * 1024 * 1024)); sys.stdout.flush(); time.sleep(60)")
+        backend = self.backend(archive_limit=1024 * 1024)
+        started = time.monotonic()
+        with mock.patch.object(sandbox, "SSH", str(self.ssh_program)):
+            with self.assertRaises(SandboxError) as caught:
+                backend.get_archive(self.handle, src="work", exclude=frozenset())
+        self.assertIn("bigger than 1 MB", str(caught.exception))
+        self.assertLess(time.monotonic() - started, 20, "the guest's command is killed past the limit")
+
+    def test_the_archive_limit_is_the_session_limit_by_default(self):
+        self.assertIs(code_runner.MAX_SESSION_BYTES, sandbox.MAX_SESSION_BYTES)
+        self.assertEqual(hyperv(FakeHost()).archive_limit, sandbox.MAX_SESSION_BYTES)
+
+    def test_the_local_archive_is_refused_past_the_limit(self):
+        source = self.tmp / "work"
+        source.mkdir()
+        (source / "big.bin").write_bytes(b"x" * 2000)
+        self.assertTrue(zipfile.is_zipfile(io.BytesIO(pack_tree(source, limit=5000))))
+        with self.assertRaises(SandboxError):
+            pack_tree(source, limit=1000)
+
+
+# --------------------------------------------------------------------------- one shared backend per kind
+class SharedBackendTest(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness(code_sandbox="fake", sandbox_min_free_gb=0)
+        self.services = self.h.services
+        self.manager = self.services.sandboxes
+
+    def tearDown(self):
+        self.h.close()
+
+    def test_stop_from_another_call_kills_a_running_command(self):
+        first = self.manager.backend("fake")
+        handle = first.create(9)
+        first.put_file(handle, "work/x.txt", b"")
+        holder: dict[str, sandbox.ExitResult] = {}
+        command = [sys.executable, "-c", "import time; time.sleep(5)"]
+        worker = threading.Thread(target=lambda: holder.update(r=self.manager.backend("fake").run(
+            handle, command, cwd="work", env={}, timeout=60)))
+        started = time.monotonic()
+        worker.start()
+        for _ in range(500):  # wait until the command is running
+            if first._runs.get(handle.name):
+                break
+            time.sleep(0.01)
+        self.assertIs(self.manager.backend("fake"), first, "every call gets the same backend")
+        self.manager.backend("fake").kill(handle)
+        worker.join(20)
+        self.assertFalse(worker.is_alive())
+        self.assertLess(time.monotonic() - started, 4, "the command stopped well before its 5 seconds")
+        self.assertTrue(holder["r"].stopped)
+
+    def test_a_backend_is_rebuilt_only_when_a_setting_it_uses_changes(self):
+        settings = self.services.settings
+        first = self.manager.backend("fake")
+        settings.sandbox_max_sessions = 4
+        self.assertIs(self.manager.backend("fake"), first, "a limit is not a backend setting")
+        settings.sandbox_base_image = BASE
+        hyperv_first = self.manager.backend("hyperv")
+        self.assertIs(self.manager.backend("hyperv"), hyperv_first)
+        settings.sandbox_switch = "szsandbox-other"
+        self.assertIsNot(self.manager.backend("hyperv"), hyperv_first, "the switch is a backend setting")
+        self.assertIs(self.manager.backend("fake"), first, "the other kind is not rebuilt")
+        self.assertEqual(self.manager.backend("hyperv").known_dir, settings.data_dir / "sandbox" / "known_hosts")
+
+
+# --------------------------------------------------------------------------- creating does not hold the lock
+class ParallelCreateTest(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness(code_sandbox="fake", sandbox_min_free_gb=0, sandbox_max_sessions=2)
+        self.services = self.h.services
+        self.db = self.services.db
+        self.manager = self.services.sandboxes
+        self.owner = self.h.login(MENTOR).user["id"]
+        self.root = self.services.settings.data_dir / "sandbox-fake"
+        self.gate = threading.Event()  # closed: the VM is "still booting" until the test opens it
+        self.made = threading.Semaphore(0)  # released once a slow create has made its folder
+        test = self
+
+        class SlowCreate(FakeSandbox):
+            def create(self, session_id):
+                handle = super().create(session_id)  # the folder exists, as a VM would by now
+                test.made.release()
+                test.gate.wait(20)
+                return handle
+
+        self.manager.backend_factory = lambda kind: SlowCreate(self.root)
+
+    def tearDown(self):
+        self.gate.set()
+        self.h.close()
+
+    def make_session(self) -> int:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.db.transaction() as conn:
+            return conn.execute("INSERT INTO code_sessions (title, task, status, model, repo, created_by, created_at, "
+                                "updated_at) VALUES ('t', 't', 'running', 'anthropic/x', 'team/robot', ?, ?, ?)",
+                                (self.owner, now, now)).lastrowid
+
+    def test_the_lock_is_free_and_the_reaper_runs_while_a_sandbox_is_made(self):
+        outcome: dict = {}
+        worker = threading.Thread(target=lambda: outcome.update(
+            handle=self.manager.create_for_session(self.make_session(), actor_id=self.owner)))
+        worker.start()
+        self.assertTrue(self.made.acquire(timeout=10))
+        self.assertTrue(self.manager.lock.acquire(timeout=2), "the manager's lock is not held during the create")
+        self.manager.lock.release()
+        started = time.monotonic()
+        report = reap_sandboxes(self.services)
+        self.assertLess(time.monotonic() - started, 5, "the reaper is not held up")
+        self.assertEqual(report, {"expired": 0, "orphans": 0, "failed": 0}, "the sandbox being made is not an orphan")
+        self.assertTrue(list(self.root.glob("szsandbox-*")), "its folder is still there")
+        self.gate.set()
+        worker.join(20)
+        [row] = self.db.all("SELECT * FROM sandbox_sessions")
+        self.assertEqual((row["state"], row["name"]), ("running", outcome["handle"].name))
+
+    def test_parallel_creates_never_exceed_the_limit(self):
+        outcomes: list[str] = []
+        guard = threading.Lock()
+
+        def attempt(session_id: int) -> None:
+            try:
+                self.manager.create_for_session(session_id, actor_id=self.owner)
+                result = "ok"
+            except SandboxRefused:
+                result = "refused"
+            with guard:
+                outcomes.append(result)
+
+        threads = [threading.Thread(target=attempt, args=(self.make_session(),)) for _ in range(5)]
+        for thread in threads:
+            thread.start()
+        for _ in range(2):
+            self.assertTrue(self.made.acquire(timeout=10))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with guard:
+                if outcomes.count("refused") == 3:
+                    break
+            time.sleep(0.01)
+        self.gate.set()
+        for thread in threads:
+            thread.join(20)
+        self.assertEqual(sorted(outcomes), ["ok", "ok", "refused", "refused", "refused"])
+        self.assertEqual(self.manager.store.alive_count(), 2)
+
+    def test_a_sandbox_whose_record_closed_while_it_was_made_is_deleted(self):
+        outcome: dict = {}
+
+        def attempt() -> None:
+            try:
+                self.manager.create_for_session(self.make_session(), actor_id=self.owner)
+            except SandboxError as exc:
+                outcome["error"] = str(exc)
+
+        worker = threading.Thread(target=attempt)
+        worker.start()
+        self.assertTrue(self.made.acquire(timeout=10))
+        self.db.execute("UPDATE sandbox_sessions SET state = 'destroyed' WHERE state = 'creating'")  # reaper gave up
+        self.gate.set()
+        worker.join(20)
+        self.assertIn("took too long", outcome["error"])
+        self.assertEqual(list(self.root.glob("szsandbox-*")), [], "the VM made after its record closed is deleted")
 
 
 # --------------------------------------------------------------------------- database
@@ -397,13 +721,13 @@ class SandboxSettingsTest(unittest.TestCase):
         self.assertEqual(fresh.code_sandbox, "off")
         self.assertEqual((fresh.sandbox_ttl_hours, fresh.sandbox_max_sessions), (48, 3))
         self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (2048, 2, 10))
-        self.assertEqual((fresh.sandbox_min_free_gb, fresh.sandbox_switch), (20, "szsandbox-private"))
+        self.assertEqual((fresh.sandbox_min_free_gb, fresh.sandbox_switch), (20, "szsandbox-internal"))
 
     def test_valid_values_are_accepted(self):
         values, errors = saved_settings.validate("code", self.form(
             code_sandbox="hyperv", sandbox_ttl_hours="24", sandbox_max_sessions="2", sandbox_memory_mb="4096",
             sandbox_cpus="4", sandbox_disk_gb="12", sandbox_min_free_gb="25",
-            sandbox_base_image="C:\\SubZeroAI\\sandbox\\base.vhdx", sandbox_switch="szsandbox-private"),
+            sandbox_base_image="C:\\SubZeroAI\\sandbox\\base.vhdx", sandbox_switch="szsandbox-internal"),
             settings=self.settings, db=self.db)
         self.assertEqual(errors, {})
         self.assertEqual(values["code_sandbox"], "hyperv")

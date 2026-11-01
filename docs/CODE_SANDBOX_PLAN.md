@@ -107,17 +107,33 @@ third-party antivirus blocks WSL networking.
 - Remote Control sessions run non-elevated (UAC), so Hyper-V cmdlets fail there; the spike needs an elevated PowerShell.
 
 - **M3 Hyper-V spike result (2026-11-01, elevated, all cleaned up): passed.** A gen 2 VM with 1 GB RAM, 1 vCPU and a
-  50% CPU cap was created and the caps applied while running. A Private switch with no host adapter worked. A
+  50% CPU cap was created and the caps applied while running. A Private switch with no host adapter worked (but the host cannot talk to a VM on a Private switch, so the real design uses an Internal switch; see "Network design"). A
   differencing disk was created from a parent and deleting the child left the parent unchanged. Not tested: PowerShell
   Direct (needs a guest OS image), traffic from a real guest, and adding `NT SERVICE\SubZeroAI` to Hyper-V
   Administrators (its name resolves to a valid SID, so it looks possible).
 - The PC also has an External switch (`TrueNAS`), an Internal one (`Default Switch`) and a `TrueNas` VM. Sandbox VMs must
-  attach only to their own private switch, and the controller must verify that before starting a VM.
+  attach only to their own internal switch (`szsandbox-internal`), and the controller must verify that before starting a VM.
 
 Sizing from this: **disk is the tightest limit.** Plan 2 to 4 cores and 4 to 8 GB RAM for all VMs together, 2 to 3
 concurrent sessions at 2 GB RAM and 1 to 2 cores each, a shared read-only base disk with a differencing disk per
 session capped near 10 GB, and refuse new sessions when free disk drops under about 20 GB. Raise limits only after
 measuring. Another option if demand grows: run sessions on a second small machine.
+
+### Network design (Hyper-V)
+
+- A Hyper-V **Private** switch carries traffic only between VMs; the host has no adapter on it, so the app could not
+  reach the guest. The sandbox therefore uses an **Internal** switch (`szsandbox-internal`) with a host adapter at
+  10.77.0.1/24, no gateway, no NAT, IP forwarding off. The guest gets a fixed address 10.77.0.<slot>.
+- An Internal switch lets a guest reach every port the host listens on (SMB, RDP and so on). The host therefore needs
+  Windows Firewall rules scoped to that adapter: block all inbound from 10.77.0.0/24 except the egress proxy port (M5).
+  The adapter's network profile is set to Public. Nothing in the app creates these rules yet; they are an install step
+  that an administrator runs once, and the Settings overview should warn when they are missing.
+- Sessions must not reach each other: each VM adapter gets a static MAC, DHCP and router guard, and extended ACLs that
+  allow only 10.77.0.1/32 and deny the rest of 10.77.0.0/24. The cmdlets are written but unverified until the M3b test
+  on the mini PC.
+- The guest is driven over SSH from the host with a per-session host key (scanned once over the host-only link) and
+  `StrictHostKeyChecking=yes`. Guest output is streamed into a bounded tail and archives are capped, so a guest cannot
+  fill the host's memory or disk.
 
 ### Alternatives considered
 
@@ -218,7 +234,7 @@ Do it in order, and stop after each milestone for Logan to look:
   command; add a disk and spend cap; prune unfinished sessions after a limit.
 - **M1 Shared model list helper and Settings dropdowns (about 1 day).** Section 4, plus periodic refresh.
 - **M2 Mentor model picker in New chat (about 1 day).** Section 3, plus the send-time safety re-check.
-- **M3 Hyper-V (and WSL fallback) spike on the mini PC (about half a day, Logan's machine).** Test Hyper-V first: the service user can create, start and delete a VM from a base differencing disk, per-VM memory/CPU caps apply, a private switch blocks the LAN, and the host can run commands in the guest (PowerShell Direct or SSH). Then, only if that fails, the WSL test below. One-hour test: service user creates two
+- **M3 Hyper-V (and WSL fallback) spike on the mini PC (about half a day, Logan's machine).** Test Hyper-V first: the service user can create, start and delete a VM from a base differencing disk, per-VM memory/CPU caps apply, an Internal switch with a host adapter at 10.77.0.1 reaches only the host, host firewall rules block the host's other ports from that adapter, per-VM ACLs stop one VM reaching another, and the host can run commands in the guest over SSH (PowerShell Direct is Windows-guest only). Then, only if that fails, the WSL test below. One-hour test: service user creates two
   distros, they cannot see each other, LAN and host are unreachable, `unregister` removes the disk file, WSL starts
   from the service, and `.wslconfig` is read from the profile of the user running `wsl.exe` (a virtual service account's
   profile is under `C:\Windows\ServiceProfiles\`), so the VM caps apply in that account's or `sandboxrunner`'s profile. Records the Windows edition and spare RAM. Go or no-go for M4.

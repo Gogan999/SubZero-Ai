@@ -82,6 +82,13 @@ def _rules_problem(settings: Settings, model: str, purpose: str) -> str:
     return ""
 
 
+def _grandfathered(db: Database, model: str) -> bool:
+    """True when the model was never checked, or its newest check is out of date (the check suite changed since).
+    A check of the current version that failed still blocks."""
+    result = latest_result(db, model)
+    return result is None or not result["current"]
+
+
 def _check_problem(db: Database, model: str, purpose: str, settings: Settings | None = None) -> str:
     """Why the Model safety check doesn't allow this purpose yet, or '' (purposes without a check always pass).
     The models set now as default and hard-problem keep working without a check: they ran before the check existed,
@@ -89,8 +96,8 @@ def _check_problem(db: Database, model: str, purpose: str, settings: Settings | 
     if purpose not in CHECKED_PURPOSES:
         return ""
     if settings is not None and not CHECKED_PURPOSES[purpose] and model in {
-            normalize_model_id(settings.model_default), normalize_model_id(settings.model_hard)} and latest_result(db, model) is None:
-        return ""  # never checked: allowed. A check that ran and failed still blocks it
+            normalize_model_id(settings.model_default), normalize_model_id(settings.model_hard)} and _grandfathered(db, model):
+        return ""
     return requirement_problem(db, model, screener=CHECKED_PURPOSES[purpose])
 
 
