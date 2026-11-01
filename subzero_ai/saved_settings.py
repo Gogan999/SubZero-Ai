@@ -153,6 +153,10 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("sandbox_proxy_port", "Host port sandboxes may reach", "int",
               "The one port on this PC that a sandbox may reach over the internal switch, for the egress proxy. "
               "The sandbox network setup script and the check both use it.", 1, 65535),
+        Field("sandbox_guest_sudo", "Let the sandbox's user use sudo (root inside the sandbox)", "bool",
+              "Off by default. When on, a student's commands in a sandbox can run as root, but only inside that "
+              "disposable virtual computer. It does not reach the mini PC. Applies to sandboxes made after the "
+              "change."),
     ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),

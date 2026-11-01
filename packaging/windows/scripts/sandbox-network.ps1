@@ -5,7 +5,8 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Install
 #   powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Remove
 # Install: creates the Internal switch if it's missing, gives the host's adapter for it 10.77.0.1/24 with no gateway,
-# turns IP forwarding and IPv6 off on it, sets its network profile to Public, and adds the firewall rules below.
+# turns IP forwarding and IPv6 off on it, sets its network profile to Public, puts it on the private VLAN pair 100 and
+# 200 in promiscuous mode, and adds the firewall rules below. (Each sandbox's adapter is isolated on the same pair.)
 # Remove: deletes only the szsandbox-* firewall rules and, when no VM is attached to it, the switch.
 # Check: changes nothing and lists what is missing. Only objects named szsandbox-* are ever changed; other adapters,
 # switches, VMs and rules are never touched.
@@ -15,7 +16,7 @@
 # opens only TCP to the proxy port from 10.77.0.0/24. Together they leave nothing open but the proxy. Other allow rules
 # on the host need no change, because these interface-scoped blocks take precedence. IPv6 is also unbound from the
 # host's adapter, so the host has no IPv6 address there. Check also reads the Public profile's default inbound action,
-# which must be Block.
+# which must be Block. The private VLAN matters because ACLs don't stop non-IP frames between sandboxes.
 # The checks here must match host_network_check_script in subzero_ai/sandbox.py. Keep both in step (a test compares
 # the problem codes, the rule names and the helper functions).
 
@@ -39,6 +40,8 @@ $BlockIcmp4 = "szsandbox-block-icmp4"
 $BlockIcmp6 = "szsandbox-block-icmp6"
 $BlockProtocols = @(2, 41, 47, 50, 51)  # IP protocols with no ports, blocked whole: generated from sandbox.BLOCK_PROTOCOLS
 $ProxyRule = "szsandbox-allow-proxy"
+$VlanPrimary = 100  # the private VLAN pair: each sandbox's adapter is isolated in it, and the host's is promiscuous
+$VlanSecondary = 200
 
 if (-not $Switch.StartsWith($Prefix)) {
     throw "The switch name must start with $Prefix, so this script only ever changes sandbox objects."
@@ -50,6 +53,7 @@ $Messages = @{
     'switch-missing' = "The sandbox switch $Switch doesn't exist yet"
     'switch-not-internal' = "The sandbox switch $Switch isn't an Internal switch"
     'host-adapter-missing' = "The host has no network adapter for $Switch"
+    'host-vlan-missing' = "The host's adapter for the sandboxes isn't on private VLAN 100 with 200 in promiscuous mode, so sandboxes could still reach each other"
     'host-address' = "The host's adapter for the sandboxes doesn't have the address $HostAddress/24"
     'host-gateway' = "The host's adapter for the sandboxes has a default gateway, and it must have none"
     'forwarding-on' = "IP forwarding is on for the host's adapter for the sandboxes, and it must be off"
@@ -141,6 +145,10 @@ function Get-SandboxProblems {
             if (-not $isPublic) { $problems.Add('profile-not-public') }
             $binding = Get-NetAdapterBinding -Name $Alias -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
             if (-not $binding -or $binding.Enabled) { $problems.Add('ipv6-enabled') }
+            $vlan = Get-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName $Switch -ErrorAction SilentlyContinue
+            $secondary = @($vlan.SecondaryVlanIdList | ForEach-Object { [string]$_ })
+            $vlanOk = $vlan -and ([string]$vlan.OperationMode -eq "Private") -and ([string]$vlan.PrivateVlanMode -eq "Promiscuous") -and ([string]$vlan.PrimaryVlanId -eq "$VlanPrimary") -and ($secondary -contains "$VlanSecondary")
+            if (-not $vlanOk) { $problems.Add('host-vlan-missing') }
         }
 
         $publicProfile = Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop
@@ -233,6 +241,10 @@ function Install-SandboxNetwork {
     Write-Step "Turning IPv6 off on the host's adapter"
     Disable-NetAdapterBinding -Name $Alias -ComponentID ms_tcpip6 -Confirm:$false
     Write-Ok "Turned IPv6 off on $Alias."
+
+    Write-Step "Putting the host's adapter on private VLAN $VlanPrimary with $VlanSecondary (promiscuous)"
+    Set-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName $Switch -Promiscuous -PrimaryVlanId $VlanPrimary -SecondaryVlanIdList $VlanSecondary
+    Write-Ok "Set the private VLAN on $Switch."
 
     Write-Step "Adding the firewall rules"
     Get-SandboxRules | Remove-NetFirewallRule

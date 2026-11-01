@@ -59,8 +59,10 @@ Each Code session's commands can run in their own disposable sandbox (`subzero_a
 PC. With **Off**, commands run on the mini PC as before. **Hyper-V** gives each session a virtual computer made from
 one base disk and attached only to the internal switch below. The host has a virtual adapter on that switch at
 10.77.0.1/24, and the host must firewall that adapter so sandboxes can reach only the host and nothing else on the
-mini PC's network. Each sandbox's adapter is also locked to the host (static MAC, DHCP and router guards, and ACLs that
-block the other sandboxes); those cmdlets are not yet tested on the mini PC. See `docs/CODE_SANDBOX_PLAN.md`.
+mini PC's network. Each sandbox's adapter is also locked down: a static MAC, DHCP and router guards, ACLs that allow only the host, and
+a private VLAN (100 with 200, isolated) so sandboxes can't reach each other, even with non-IP frames. Each sandbox
+has its own SSH host key, made on the host and delivered on a small seed disk that is deleted once the guest is up.
+See `docs/CODE_SANDBOX_PLAN.md`.
 **Fake** runs commands in a folder on the mini PC with no protection and is for testing only.
 
 | Setting | config.env key |
@@ -73,6 +75,7 @@ block the other sandboxes); those cmdlets are not yet tested on the mini PC. See
 | Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
 | Internal network switch (the host's vNIC is 10.77.0.1/24) | `SANDBOX_SWITCH` (default `szsandbox-internal`) |
 | Host port sandboxes may reach, for the egress proxy (default 3128) | `SANDBOX_PROXY_PORT` |
+| Let the sandbox's user use sudo, root inside the sandbox only (off by default) | `SANDBOX_GUEST_SUDO` |
 
 **One-time administrator step.** Before the first Hyper-V sandbox, an administrator runs the sandbox network setup
 script once, in an administrator PowerShell on the mini PC, from the SubZero AI folder:
@@ -82,7 +85,8 @@ powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Ins
 ```
 
 It creates the internal switch if it's missing, gives the host's adapter for it 10.77.0.1/24 with no gateway, turns
-IP forwarding and IPv6 off on it, sets its network profile to Public, and adds the firewall rules that block all
+IP forwarding and IPv6 off on it, sets its network profile to Public, puts it on the private VLAN 100 with 200 in
+promiscuous mode, and adds the firewall rules that block all
 inbound traffic to the sandboxes except the proxy port (`szsandbox-block-tcp-below`, `szsandbox-block-tcp-above`,
 `szsandbox-block-udp`, `szsandbox-block-icmp4`, `szsandbox-block-icmp6`, and `szsandbox-block-proto-2`, `-41`, `-47`,
 `-50`, `-51` for IGMP, IPv6 in IPv4, GRE, ESP and AH) and the one that allows the proxy port
@@ -93,6 +97,10 @@ adapters, switches, VMs and rules are never touched. The
 app never runs it. `-Action Check` lists anything missing, and `-Action Remove` deletes the sandbox rules and the switch
 (it refuses while a VM still uses the switch). If you change `SANDBOX_SWITCH` or `SANDBOX_PROXY_PORT`, run `-Action
 Install` again with the same `-Switch` and `-ProxyPort`.
+
+`SANDBOX_GUEST_SUDO` (off by default) gives the sandbox's user `sudo` without a password. Turn it on only if students
+need root inside a sandbox. It gives root inside that disposable virtual computer only, never on the mini PC, and it
+applies to sandboxes made after the change.
 
 Creating a sandbox checks this network first. **Create refuses until the check passes**, with a message that names
 what is missing, and the Settings overview shows the same check. A passing check is kept for one minute; a failure is
@@ -182,8 +190,34 @@ claude-login` on the mini PC still works too. The Cloudflare Tunnel itself is ma
 - After a model-check suite update, the default and hard-problem models keep working even though their old check result
   is out of date; run the check again to refresh it. A current check that failed still blocks a model.
 - A Code session that has waited for a mentor, or run, for 3 days is stopped and cleaned up by the nightly job.
+- After this update, run `sandbox-network.ps1 -Action Install` once more, which puts the host's adapter on the private
+  VLAN. Until then `-Action Check` reports `host-vlan-missing`, and Create refuses.
 - An existing install that already saved `sandbox_switch` keeps that value: change it to `szsandbox-internal` on the
   Settings page.
 - The sandbox network script's Install does not turn Windows Firewall on. If the Public profile is off, Check reports
   `firewall-off` and no sandbox can start. Turn it on with `Set-NetFirewallProfile -Profile Public -Enabled True`
   (the sandbox adapter is always on the Public profile).
+
+## Sandbox base image (one-time administrator step)
+
+Every Hyper-V sandbox is made from one base disk, set by `SANDBOX_BASE_IMAGE`. An administrator builds it once, on the
+mini PC, in an administrator PowerShell, from the SubZero AI folder:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\sandbox-image.ps1 -Action Build -ReleaseDate 20261015
+```
+
+Use the newest dated release folder under https://cloud-images.ubuntu.com/noble/ (eight digits, such as 20261015).
+`current` is not accepted, so the image never changes under the app. Build needs 45 GB free on the drive that holds the
+disk, because the Ubuntu disk image is 30 GB while it is converted. It downloads the image, checks its SHA-256 against
+that release's `SHA256SUMS`, converts it to a read-only dynamic disk at
+`C:\ProgramData\SubZeroAI\sandbox\images\sandbox-base.vhdx`, and changes its boot menu so cloud-init reads the sandbox's
+seed (`ci.ds=NoCloud`). It prints the path and the SHA-256. Set `SANDBOX_BASE_IMAGE` to that path. Build never overwrites
+an existing base disk; if one must be replaced, run `-Action Remove` first, only when no sandbox uses it.
+
+`-Action Check` changes nothing and reports whether the disk is present, read-only and dynamic. `-Action Remove`
+deletes only the base disk, and refuses while any VM disk still uses it as its parent. The app never runs this script.
+
+IPv6 inside the guest is not turned off by this step, and the app's cloud-init user-data does not turn it off either.
+The host side is the protection: the sandbox's virtual adapter rules deny all IPv6 (see `isolation_script` in
+`subzero_ai/sandbox.py`), and those rules are not yet tested on the mini PC.

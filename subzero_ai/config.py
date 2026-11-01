@@ -156,6 +156,7 @@ class Settings:
     # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24
     sandbox_switch: str = "szsandbox-internal"
     sandbox_proxy_port: int = 3128  # the one host TCP port a sandbox may reach (the egress proxy, not built yet)
+    sandbox_guest_sudo: bool = False  # the sandbox's user may use sudo: root inside that disposable VM only
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200

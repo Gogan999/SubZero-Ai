@@ -5,15 +5,21 @@ stays on the host (reads, approvals and the patch download all use it), and ever
 copies. A sandbox is a Hyper-V virtual machine made from one shared base disk as a differencing disk, so the base is
 only ever read. It is attached only to the internal switch named in Settings (default szsandbox-internal), whose host
 vNIC is 10.77.0.1/24. The host must firewall that adapter; see docs/CODE_SANDBOX_PLAN.md. Each VM also gets its own
-network ACLs, DHCP and router guards and a static MAC (see new_vm_script and isolation_script). A sandbox is deleted
-when its session finishes, after its time limit, and when no record of it is left in the database.
+network ACLs, DHCP and router guards, a static MAC and a private VLAN (see new_vm_script and isolation_script). ACLs
+alone don't stop non-IP frames, so the private VLAN is what keeps sandboxes apart. A sandbox is deleted when its
+session finishes, after its time limit, and when no record of it is left in the database.
+
+Each sandbox gets its own SSH host key pair, made on the host. The public half goes into the sandbox's known_hosts
+file, and the private half reaches the guest on a small NoCloud seed disk (a CIDATA disk that cloud-init reads on
+first boot). Nothing is read over the network, so ssh-keyscan isn't used (it fails with Windows OpenSSH). Once SSH
+answers, the seed disk is detached and deleted and the host's copy of the private key is deleted.
 
 FakeSandbox does the same job with folders and subprocesses on this computer. It exists for the tests and is not
-isolated at all. HyperVSandbox builds its PowerShell and SSH commands with pure functions and takes the two runners
+isolated at all. HyperVSandbox builds its PowerShell, SSH and key commands with pure functions and takes its runners
 as parameters, so the tests can check every command without touching a real host.
 
-Guest image details that are not known yet are marked TODO (the Linux user, the static address setup, the SSH key
-and host key, python3 and the base disk's path). See docs/CODE_SANDBOX_PLAN.md, milestone M3 and M4.
+Guest image details that are not known yet are marked TODO (python3 and the base disk's path). The base image must
+have NoCloud enabled (the image script does this once). See docs/CODE_SANDBOX_PLAN.md, milestones M3, M3b and M4.
 """
 
 from __future__ import annotations
@@ -57,11 +63,23 @@ GUEST_SUBNET = "10.77.0.0/24"
 IPV6_ANY = "::/0"  # every IPv6 address: the sandboxes get no IPv6 path at all
 MAX_SESSION_BYTES = 800 * 1024 * 1024  # one session's two copies together, build output included; also the archive cap
 SSH = "ssh"  # the ssh program on the host (a test can point it at a fake)
-SSH_KEYSCAN = "ssh-keyscan"  # reads a guest's host key over the internal switch, once, right after it boots
-HOST_KEY_LINE = re.compile(r"^\S+ ssh-ed25519 [A-Za-z0-9+/=]+$")
-# TODO: the guest account and home folder come from the base image (not built yet).
-GUEST_USER = "szrunner"
-GUEST_HOME = "/home/szrunner"
+SSH_KEYGEN = "ssh-keygen.exe"  # makes each sandbox's host key pair and the app's client key (on the host)
+ICACLS = "icacls"  # locks a key file to the account that runs the app
+PUBLIC_KEY_LINE = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/=]+(?: [A-Za-z0-9._@-]+)?$")
+PRIVATE_KEY_BEGIN = "-----BEGIN OPENSSH PRIVATE KEY-----"
+PRIVATE_KEY_END = "-----END OPENSSH PRIVATE KEY-----"
+CLIENT_KEY_COMMENT = "szsandbox-client"
+HOST_KEY_FILE = "ssh_host_ed25519_key"  # the host key pair's file name inside a sandbox's staging folder
+SEED_LABEL = "CIDATA"  # the NoCloud seed's volume label, which cloud-init looks for
+SEED_FILES = ("meta-data", "network-config", "user-data")  # the files on the seed disk, in this order
+SEED_SIZE_MB = 64
+PRIVATE_VLAN_PRIMARY = 100  # the private VLAN pair every sandbox adapter and the host's adapter use
+PRIVATE_VLAN_SECONDARY = 200
+# Waits in the guest until cloud-init has read the seed, so the seed can be detached without breaking its reads
+CLOUD_INIT_WAIT = "cloud-init status --wait >/dev/null 2>&1; true"
+# The guest account, from the seed's user-data. It is the same in every sandbox, so the base image can rely on it.
+GUEST_USER = "sandbox"
+GUEST_HOME = "/home/sandbox"
 GUEST_PATH = "/usr/local/bin:/usr/bin:/bin"
 # A PowerShell single quote, including the typographic ones PowerShell also reads as quotes
 PS_QUOTES = {"'": "''", "\u2018": "''", "\u2019": "''", "\u201a": "''", "\u201b": "''"}
@@ -472,12 +490,10 @@ def isolation_script(name: str, slot: int) -> str:
     traffic limited to the host's address. The host is allowed (IPv4 only); the rest of the guest subnet, where other
     sandboxes live, is denied in both directions. All IPv6 is denied too (weight 150, below the host allow), so a
     guest can't reach another sandbox over fe80:: link-local addresses. The base image should also turn IPv6 off
-    (docs/CODE_SANDBOX_PLAN.md).
-
-    UNVERIFIED: none of these cmdlets, the -Weight ordering (higher weight is meant to win) or the CIDR form of
-    -RemoteIPAddress (including ::/0 for IPv6) has been run yet. Test them on the mini PC (docs/CODE_SANDBOX_PLAN.md,
-    M3) and read the rules back with Get-VMNetworkAdapterExtendedAcl before trusting this. Until then, the host
-    firewall is the real boundary."""
+    (docs/CODE_SANDBOX_PLAN.md). Last, the adapter goes into the private VLAN pair (100 primary, 200 secondary, isolated
+    mode). ACLs don't stop non-IP frames, so the VLAN is what keeps one sandbox's frames away from another's. The
+    host's adapter is promiscuous on the same pair (sandbox-network.ps1 Install). Measured on the mini PC, see
+    docs/CODE_SANDBOX_PLAN.md (M3b). The VLAN mode is read back after the VM starts (check_vm_vlan)."""
     vm = ps_quote(check_name(name))
     host = ps_quote(f"{HOST_ADDRESS}/32")
     subnet = ps_quote(GUEST_SUBNET)
@@ -491,6 +507,8 @@ def isolation_script(name: str, slot: int) -> str:
         "-Weight 100",
         f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action Deny -Direction Both "
         f"-RemoteIPAddress {ps_quote(IPV6_ANY)} -Weight 150",
+        f"Set-VMNetworkAdapterVlan -VMName {vm} -Isolated -PrimaryVlanId {PRIVATE_VLAN_PRIMARY} "
+        f"-SecondaryVlanId {PRIVATE_VLAN_SECONDARY}",
     ])
 
 
@@ -520,10 +538,11 @@ def list_vms_script() -> str:
     return "Get-VM | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
 
 
-def destroy_script(name: str, child: Path) -> str:
-    """Turn the VM off, remove it, and delete its child disk. Safe to run twice. The base disk is never named."""
+def destroy_script(name: str, child: Path, seed: Path) -> str:
+    """Turn the VM off, remove it, and delete its child disk and its seed disk (if one was left). Safe to run twice.
+    The base disk is never named."""
     vm = ps_quote(check_name(name))
-    disk = ps_quote(str(child))
+    disks = f"@({ps_quote(check_path(child))}, {ps_quote(check_path(seed))})"
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
         f"$vm = Get-VM -Name {vm} -ErrorAction SilentlyContinue",
@@ -531,7 +550,8 @@ def destroy_script(name: str, child: Path) -> str:
         "  if ($vm.State -ne 'Off') { Stop-VM -Name " + vm + " -TurnOff -Force }",
         f"  Remove-VM -Name {vm} -Force",
         "}",
-        f"if (Test-Path -LiteralPath {disk}) {{ Remove-Item -LiteralPath {disk} -Force }}",
+        f"foreach ($disk in {disks}) {{ if (Test-Path -LiteralPath $disk) {{ "
+        "Remove-Item -LiteralPath $disk -Force } }",
     ])
 
 
@@ -542,6 +562,208 @@ def parse_vm_names(output: str) -> list[str]:
     value = json.loads(text)
     names = [value] if isinstance(value, str) else list(value or [])
     return sorted(str(n) for n in names if str(n).startswith(PREFIX))
+
+
+# --------------------------------------------------------------------------- Hyper-V: VLAN, seed disk and host keys
+def vm_vlan_script(name: str) -> str:
+    """Read back one VM's adapters' VLAN settings, as a JSON list (one object per adapter)."""
+    return "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        f"ConvertTo-Json -Compress -InputObject @(Get-VMNetworkAdapterVlan -VMName {ps_quote(check_name(name))} | "
+        "ForEach-Object { [pscustomobject]@{ OperationMode = [string]$_.OperationMode; "
+        "PrivateVlanMode = [string]$_.PrivateVlanMode; PrimaryVlanId = [string]$_.PrimaryVlanId; "
+        "SecondaryVlanId = [string]$_.SecondaryVlanId } })",
+    ])
+
+
+def check_vm_vlan(output: str) -> None:
+    """Refuse a VM whose adapters are not all isolated in the private VLAN pair. Nothing is accepted by default: an
+    empty answer, or any adapter that reads back differently, stops the VM."""
+    text = (output or "").strip()
+    rows = json.loads(text) if text else []
+    if isinstance(rows, dict):
+        rows = [rows]
+    good = bool(rows) and all(
+        isinstance(row, dict) and str(row.get("OperationMode")) == "Private"
+        and str(row.get("PrivateVlanMode")) == "Isolated" and str(row.get("PrimaryVlanId")) == str(PRIVATE_VLAN_PRIMARY)
+        and str(row.get("SecondaryVlanId")) == str(PRIVATE_VLAN_SECONDARY) for row in rows)
+    if not good:
+        raise SandboxError("The sandbox's network isn't on its own isolated private VLAN, so it wasn't started.")
+
+
+def check_path(value: str | Path) -> str:
+    """A host path for a PowerShell script or a file write. Refuses an empty path, control characters and '..'."""
+    text = str(value)
+    if not text or any(ord(ch) < 32 for ch in text) or ".." in re.split(r"[\\/]", text):
+        raise SandboxError("A file path for the sandbox has a character that isn't allowed, so it wasn't used.")
+    return text
+
+
+def seed_disk_path(base: str | Path, name: str) -> Path:
+    """The NoCloud seed disk for a sandbox: next to the base disk and the child disk, never the base disk itself."""
+    base = Path(base)
+    check_name(name)
+    seed = base.with_name(f"{name}-seed.vhdx")
+    if seed == base or seed.suffix.lower() != ".vhdx" or not seed.name.startswith(PREFIX):
+        raise SandboxError("The seed disk would have replaced the base disk, so it wasn't made.")
+    return seed
+
+
+def seed_disk_script(seed: Path, staging: Path) -> str:
+    """Build the seed disk with built-in tools only: a 64 MB dynamic disk, one MBR partition formatted FAT32 with the
+    label CIDATA, and the three seed files copied from the staging folder onto it. The image is dismounted at the end,
+    even when a step fails. A seed that already exists is never overwritten."""
+    disk = ps_quote(check_path(seed))
+    lines = [
+        "$ErrorActionPreference = 'Stop'",
+        f"if (Test-Path -LiteralPath {disk}) {{ throw 'The seed disk is already there.' }}",
+        f"New-VHD -Path {disk} -SizeBytes {SEED_SIZE_MB}MB -Dynamic -BlockSizeBytes 1MB | Out-Null",
+        f"$image = Mount-VHD -Path {disk} -Passthru | Get-Disk",
+        "try {",
+        "  Initialize-Disk -Number $image.Number -PartitionStyle MBR",
+        "  $part = New-Partition -DiskNumber $image.Number -UseMaximumSize -AssignDriveLetter",
+        f"  Format-Volume -Partition $part -FileSystem FAT32 -NewFileSystemLabel {ps_quote(SEED_LABEL)} "
+        "-Confirm:$false | Out-Null",
+        "  $letter = (Get-Partition -DiskNumber $image.Number -PartitionNumber $part.PartitionNumber).DriveLetter",
+        "  if (-not $letter) { throw 'Windows gave the seed disk no drive letter.' }",
+    ]
+    for file in SEED_FILES:
+        source = ps_quote(check_path(Path(staging) / file))
+        lines.append(f"  Copy-Item -LiteralPath {source} -Destination (\"{{0}}:\\" + file + "\" -f $letter)")
+    lines += ["} finally {", f"  Dismount-VHD -Path {disk}", "}"]
+    return "\n".join(lines)
+
+
+def attach_seed_script(name: str, seed: Path) -> str:
+    return "\n".join(["$ErrorActionPreference = 'Stop'",
+                      f"Add-VMHardDiskDrive -VMName {ps_quote(check_name(name))} -Path {ps_quote(check_path(seed))}"])
+
+
+def release_seed_script(name: str, seed: Path) -> str:
+    """Detach the seed disk from the VM and delete it. Safe to run twice."""
+    vm = ps_quote(check_name(name))
+    disk = ps_quote(check_path(seed))
+    return "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        f"Get-VMHardDiskDrive -VMName {vm} | Where-Object {{ $_.Path -eq {disk} }} | Remove-VMHardDiskDrive",
+        f"if (Test-Path -LiteralPath {disk}) {{ Remove-Item -LiteralPath {disk} -Force }}",
+    ])
+
+
+def lf_text(text: str) -> str:
+    """Line endings as the guest reads them: LF only."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def write_lf(path: Path, text: str) -> None:
+    """Write a seed or known_hosts file as UTF-8 without a byte order mark, with LF line endings only."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(lf_text(text).encode("utf-8"))
+
+
+def public_key_text(value: str) -> str:
+    """An ed25519 public key line (as ssh-keygen writes it). Anything else is refused."""
+    text = (value or "").strip()
+    if not PUBLIC_KEY_LINE.match(text):
+        raise SandboxError("The sandbox's SSH public key isn't an ed25519 key, so it wasn't used.")
+    return text
+
+
+def private_key_text(value: str) -> str:
+    """An OpenSSH private key file, LF line endings, one key only. Anything else is refused."""
+    lines = lf_text(value or "").strip("\n").split("\n")
+    body = lines[1:-1]
+    if (lines[0] != PRIVATE_KEY_BEGIN or lines[-1] != PRIVATE_KEY_END or not body
+            or not all(line and line.isascii() and line.isprintable() for line in body)):
+        raise SandboxError("The sandbox's SSH host key couldn't be read, so it wasn't used.")
+    return "\n".join(lines) + "\n"
+
+
+def meta_data(name: str) -> str:
+    check_name(name)
+    return f"instance-id: {name}\nlocal-hostname: {name}\n"
+
+
+def network_config(slot: int) -> str:
+    """Network config (version 2): the one wired adapter gets the sandbox's static address and no gateway."""
+    return "\n".join([
+        "version: 2",
+        "ethernets:",
+        "  eth0:",
+        "    match:",
+        '      name: "e*"',
+        "    dhcp4: false",
+        "    dhcp6: false",
+        "    addresses:",
+        f"      - {guest_address(slot)}/24",
+        "",
+    ])
+
+
+def user_data(client_public: str, host_public: str, host_private: str, *, guest_sudo: bool) -> str:
+    """The cloud-init user-data for a sandbox. The guest user accepts only the app's client key. Passwords are never
+    enabled (locked password, password login off). The host key pair is the one this sandbox's known_hosts file was
+    written from. sudo is off unless guest_sudo is set."""
+    private = private_key_text(host_private).rstrip("\n").split("\n")
+    lines = [
+        "#cloud-config",
+        "users:",
+        f"  - name: {GUEST_USER}",
+        "    lock_passwd: true",
+        "    sudo: " + ("ALL=(ALL) NOPASSWD:ALL" if guest_sudo else "false"),
+        "    ssh_authorized_keys:",
+        f"      - {public_key_text(client_public)}",
+        "ssh_pwauth: false",
+        # IPv6 off in the guest, as early as cloud-init allows and again from sysctl.d on every later boot
+        "bootcmd:",
+        "  - [sh, -c, \"sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1\"]",
+        "write_files:",
+        "  - path: /etc/sysctl.d/99-sandbox-no-ipv6.conf",
+        "    content: |",
+        "      net.ipv6.conf.all.disable_ipv6 = 1",
+        "      net.ipv6.conf.default.disable_ipv6 = 1",
+        "ssh_deletekeys: true",
+        "ssh_genkeytypes: []",
+        "ssh_keys:",
+        "  ed25519_private: |",
+        *(f"    {line}" for line in private),
+        f"  ed25519_public: {public_key_text(host_public)}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def known_hosts_line(host_public: str, address: str) -> str:
+    """The known_hosts line that pins a guest's host key: its address, the key type and the key (no comment)."""
+    key_type, blob = public_key_text(host_public).split(" ")[:2]
+    return f"{address} {key_type} {blob}"
+
+
+def keygen_argv(path: Path, comment: str) -> list[str]:
+    """ssh-keygen for one ed25519 pair with no passphrase, written quietly to path and path.pub."""
+    return [SSH_KEYGEN, "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", check_path(path)]
+
+
+def icacls_argv(path: Path, account: str) -> list[str]:
+    """Lock a file to one account: inherited permissions removed, full control for that account only."""
+    if not account or any(ord(ch) < 32 for ch in account):
+        raise SandboxError("The account that runs the app has a name that can't be used to lock a key file.")
+    return [ICACLS, check_path(path), "/inheritance:r", "/grant:r", f"{account}:F"]
+
+
+def shred_file(path: Path) -> None:
+    """Overwrite a file with zeros, then delete it. A missing file is fine."""
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return
+    try:
+        with open(path, "r+b") as handle:
+            handle.write(b"\0" * size)
+            handle.flush()
+            os.fsync(handle.fileno())
+        path.unlink()
+    except OSError as exc:
+        raise SandboxError(f"Couldn't delete a sandbox key file: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- Hyper-V: host network check
@@ -568,6 +790,8 @@ NETWORK_PROBLEMS = {
     "switch-missing": "The sandbox switch doesn't exist yet",
     "switch-not-internal": "The sandbox switch isn't an Internal switch",
     "host-adapter-missing": "The host has no network adapter for the sandbox switch",
+    "host-vlan-missing": "The host's adapter for the sandboxes isn't on private VLAN 100 with 200 in promiscuous mode, "
+                         "so sandboxes could still reach each other",
     "host-address": "The host's adapter for the sandboxes doesn't have the address 10.77.0.1/24",
     "host-gateway": "The host's adapter for the sandboxes has a default gateway, and it must have none",
     "forwarding-on": "IP forwarding is on for the host's adapter for the sandboxes, and it must be off",
@@ -675,6 +899,12 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
         "    if (-not $isPublic) { $problems.Add('profile-not-public') }",
         "    $binding = Get-NetAdapterBinding -Name $alias -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue",
         "    if (-not $binding -or $binding.Enabled) { $problems.Add('ipv6-enabled') }",
+        f"    $vlan = Get-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName {sw} -ErrorAction SilentlyContinue",
+        "    $secondary = @($vlan.SecondaryVlanIdList | ForEach-Object { [string]$_ })",
+        "    $vlanOk = $vlan -and ([string]$vlan.OperationMode -eq 'Private') -and "
+        "([string]$vlan.PrivateVlanMode -eq 'Promiscuous') -and ([string]$vlan.PrimaryVlanId -eq '100') -and "
+        "($secondary -contains '200')",
+        "    if (-not $vlanOk) { $problems.Add('host-vlan-missing') }",
         "  }",
         "  $publicProfile = Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop",
         "  if ($publicProfile.Enabled -ne 'True') { $problems.Add('firewall-off') }",
@@ -802,19 +1032,6 @@ def ssh_argv(address: str, remote: str, *, key: str, known_hosts: str) -> list[s
             f"{GUEST_USER}@{address}", remote]
 
 
-def keyscan_argv(address: str) -> list[str]:
-    return [SSH_KEYSCAN, "-T", "10", "-t", "ed25519", address]
-
-
-def host_key_line(output: bytes, address: str) -> str:
-    """The known_hosts line for a guest, from ssh-keyscan's output. Refuses anything that isn't one ed25519 key."""
-    for raw in output.decode("ascii", errors="replace").splitlines():
-        line = raw.strip()
-        if HOST_KEY_LINE.match(line) and line.split(" ", 1)[0] == address:
-            return line
-    raise SandboxError("The sandbox's host key couldn't be read yet.")
-
-
 def _run_pipes(argv: list[str], *, stdin: bytes | None, timeout: int, on_output: Callable[[str], None] | None,
                limit: int | None) -> tuple[int, bytes, bytes]:
     """Run a command with pipes. Its stderr and stdout are read as they arrive: with on_output, each chunk is passed on
@@ -878,10 +1095,24 @@ def _run_pipes(argv: list[str], *, stdin: bytes | None, timeout: int, on_output:
     return proc.returncode, bytes(archive[:limit + 1]), bytes(err_tail.data)
 
 
-def default_run_keyscan(address: str) -> bytes:
-    """ssh-keyscan's output for a guest. Empty when nothing answers yet."""
-    proc = subprocess.run(keyscan_argv(address), capture_output=True, timeout=30)
-    return proc.stdout[:4096] if proc.returncode == 0 else b""
+def default_run_keygen(argv: list[str]) -> None:
+    """Run ssh-keygen (on Windows, ssh-keygen.exe from OpenSSH). Raises SandboxError with its reason on failure."""
+    try:
+        proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SandboxError(f"ssh-keygen couldn't run: {exc}") from exc
+    if proc.returncode != 0:
+        raise SandboxError((proc.stderr or "ssh-keygen failed").strip()[-200:])
+
+
+def default_run_icacls(argv: list[str]) -> None:
+    """Run icacls to lock a file. Raises SandboxError with its reason on failure."""
+    try:
+        proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SandboxError(f"icacls couldn't run: {exc}") from exc
+    if proc.returncode != 0:
+        raise SandboxError((proc.stderr or proc.stdout or "icacls failed").strip()[-200:])
 
 
 def default_run_powershell(script: str, timeout: int = 900) -> str:
@@ -908,21 +1139,25 @@ def make_default_run_ssh(key: str) -> Callable[..., tuple[int, bytes, bytes]]:
 class HyperVSandbox:
     """One Hyper-V VM per session. The host runs PowerShell; the VM is reached over SSH on the internal switch.
 
-    Each sandbox has its own known_hosts file in known_dir (named after the sandbox). Its host key is read once,
-    right after the VM boots, with ssh-keyscan over the host-only link, and then checked on every connection. That
-    first read is trust on first use, so it is only as good as the link: the host must firewall the internal adapter
-    (docs/CODE_SANDBOX_PLAN.md). The base image should also carry a fixed host key, which would remove that step.
+    Making a sandbox: a fresh ed25519 host key pair is made on the host (ssh-keygen) and locked to the app's account.
+    Its public half is written to the sandbox's own known_hosts file. Its private half goes to the guest on a NoCloud
+    seed disk, with the app's client public key for the guest user. The seed is attached before the VM starts. Once SSH
+    answers (with strict host key checking, so the pinned key must be the one in use), cloud-init is allowed to finish
+    reading the seed, then the seed is detached and deleted and the host's copy of the private key is shredded.
+    Destroy deletes whatever is left: the VM, its disks, the seed, the staged files and the known_hosts file.
 
-    The runners are injected: run_powershell(script) -> output text; run_keyscan(address) -> bytes; and
-    run_ssh(address, remote_command, *, known_hosts, stdin, timeout, on_output=None, limit=None) -> (exit code,
-    stdout, stderr). With `limit`, stdout is cut off past limit + 1 bytes and the caller refuses it."""
+    The runners are injected: run_powershell(script) -> output text; run_keygen(argv) makes a key pair (ssh-keygen);
+    run_icacls(argv) locks a file to an account; and run_ssh(address, remote_command, *, known_hosts, stdin, timeout,
+    on_output=None, limit=None) -> (exit code, stdout, stderr). With `limit`, stdout is cut off past limit + 1 bytes and
+    the caller refuses it."""
 
     name = "hyperv"
 
     def __init__(self, *, base_image: str, switch: str, memory_mb: int, cpus: int, disk_gb: int,
-                 vm_dir: str = "", ssh_key: str = "", known_dir: str = "",
-                 run_powershell: Callable[[str], str] | None = None,
-                 run_keyscan: Callable[[str], bytes] | None = None,
+                 vm_dir: str = "", ssh_key: str = "", known_dir: str = "", staging_dir: str = "", account: str = "",
+                 guest_sudo: bool = False, run_powershell: Callable[[str], str] | None = None,
+                 run_keygen: Callable[[list[str]], None] | None = None,
+                 run_icacls: Callable[[list[str]], None] | None = None,
                  run_ssh: Callable[..., tuple[int, bytes, bytes]] | None = None,
                  ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep,
                  archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128):
@@ -931,16 +1166,23 @@ class HyperVSandbox:
         self.base_image = base_image
         self.switch = switch
         self.memory_mb, self.cpus, self.disk_gb = memory_mb, cpus, disk_gb
-        self.vm_dir = Path(vm_dir) if vm_dir else Path(base_image).parent / "szsandbox-vm-config"
-        self.known_dir = Path(known_dir) if known_dir else Path(base_image).parent / "szsandbox-known-hosts"
+        base_dir = Path(base_image).parent
+        self.vm_dir = Path(vm_dir) if vm_dir else base_dir / "szsandbox-vm-config"
+        self.known_dir = Path(known_dir) if known_dir else base_dir / "szsandbox-known-hosts"
+        self.staging_dir = Path(staging_dir) if staging_dir else base_dir / "szsandbox-staging"
+        self.ssh_key = ssh_key or str(base_dir / "szsandbox-keys" / "id_ed25519")
+        self.account = account or os.environ.get("USERNAME", "")
+        self.guest_sudo = bool(guest_sudo)
         self.run_powershell = run_powershell or default_run_powershell
-        self.run_keyscan = run_keyscan or default_run_keyscan
-        self.run_ssh = run_ssh or make_default_run_ssh(ssh_key)
+        self.run_keygen = run_keygen or default_run_keygen
+        self.run_icacls = run_icacls or default_run_icacls
+        self.run_ssh = run_ssh or make_default_run_ssh(self.ssh_key)
         self.ready_seconds = ready_seconds
         self.sleep = sleep
         self.archive_limit = archive_limit
         self.proxy_port = proxy_port
         self._lock = threading.Lock()  # guards _killed, _reserved and _network_ok_until; never held across a VM call
+        self._key_lock = threading.Lock()  # makes the app's client key once, even when two sandboxes start together
         self._killed: set[str] = set()
         self._reserved: set[int] = set()  # slots of sandboxes being made right now
         self._network_ok_until = 0.0  # monotonic time until which a passing host network check is trusted
@@ -957,6 +1199,13 @@ class HyperVSandbox:
     def _known_hosts(self, name: str) -> str:
         return str(self.known_dir / check_name(name))
 
+    def _staging(self, name: str) -> Path:
+        """The sandbox's folder of files for the seed (they include the host private key, so it is removed early)."""
+        return self.staging_dir / check_name(name)
+
+    def _seed(self, name: str) -> Path:
+        return seed_disk_path(self.base_image, check_name(name))
+
     def _ssh(self, name: str, remote: str, *, stdin: bytes | None = None, timeout: int = 60,
              on_output: Callable[[str], None] | None = None, limit: int | None = None) -> tuple[int, bytes, bytes]:
         try:
@@ -967,19 +1216,6 @@ class HyperVSandbox:
         except Exception as exc:
             raise SandboxError(f"Couldn't reach the sandbox: {exc}") from exc
 
-    def _pin_host_key(self, name: str) -> None:
-        """Read the guest's host key once and write it to the sandbox's own known_hosts file. Until this succeeds,
-        nothing else connects to the guest."""
-        address = self._address(name)
-        try:
-            line = host_key_line(self.run_keyscan(address), address)
-        except SandboxError:
-            raise
-        except Exception as exc:
-            raise SandboxError(f"Couldn't reach the sandbox: {exc}") from exc
-        self.known_dir.mkdir(parents=True, exist_ok=True)
-        Path(self._known_hosts(name)).write_text(line + "\n", encoding="ascii")
-
     def _address(self, name: str) -> str:
         slot = slot_of(check_name(name))
         if slot is None:
@@ -989,16 +1225,55 @@ class HyperVSandbox:
     def _child(self, name: str) -> Path:
         return child_disk_path(self.base_image, check_name(name))
 
+    def _run_keygen(self, path: Path, comment: str) -> None:
+        """Make one key pair at path (path.pub is the public half) and lock the private file to the app's account."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for stale in (path, Path(str(path) + ".pub")):
+            stale.unlink(missing_ok=True)  # ssh-keygen would ask before overwriting
+        try:
+            self.run_keygen(keygen_argv(path, comment))
+        except SandboxError:
+            raise
+        except Exception as exc:
+            raise SandboxError(f"Couldn't make the sandbox's SSH keys: {exc}") from exc
+        if not self.account:
+            raise SandboxRefused("The app's Windows account isn't known, so the sandbox key files can't be locked.")
+        try:
+            self.run_icacls(icacls_argv(path, self.account))
+        except SandboxError:
+            raise
+        except Exception as exc:
+            raise SandboxError(f"Couldn't lock a sandbox key file: {exc}") from exc
+
+    def _client_public_key(self) -> str:
+        """The app-wide client key that signs in to every sandbox. It is made the first time it is needed."""
+        key = Path(self.ssh_key)
+        with self._key_lock:
+            if not (key.is_file() and Path(str(key) + ".pub").is_file()):
+                self._run_keygen(key, CLIENT_KEY_COMMENT)
+        return Path(str(key) + ".pub").read_text(encoding="ascii", errors="replace")
+
+    def _stage_seed(self, name: str, slot: int) -> None:
+        """Make the sandbox's host key pair, and write the seed's three files and its known_hosts file. Nothing goes to
+        the guest yet."""
+        client_public = self._client_public_key()
+        staging = self._staging(name)
+        host_key = staging / HOST_KEY_FILE
+        self._run_keygen(host_key, name)
+        host_public = Path(str(host_key) + ".pub").read_text(encoding="ascii", errors="replace")
+        host_private = host_key.read_bytes().decode("ascii", errors="replace")
+        write_lf(staging / "meta-data", meta_data(name))
+        write_lf(staging / "network-config", network_config(slot))
+        write_lf(staging / "user-data", user_data(client_public, host_public, host_private,
+                                                  guest_sudo=self.guest_sudo))
+        write_lf(Path(self._known_hosts(name)), known_hosts_line(host_public, guest_address(slot)) + "\n")
+
     def _wait_ready(self, name: str) -> None:
-        """Wait until the guest's SSH answers. The host key is pinned on the first answer that gives one, and every
-        check after that is strict, so a different key later is refused rather than trusted."""
+        """Wait until the guest's SSH answers. Every try is strict about the pinned host key, so a guest that presents
+        any other key is never trusted."""
         deadline = time.monotonic() + self.ready_seconds
-        pinned = False
         while True:
             try:
-                if not pinned:
-                    self._pin_host_key(name)
-                    pinned = True
                 code, _, _ = self._ssh(name, "true", timeout=15)
                 if code == 0:
                     return
@@ -1008,9 +1283,30 @@ class HyperVSandbox:
                 raise SandboxError("The sandbox didn't start in time.")
             self.sleep(3)
 
+    def _release_seed(self, name: str) -> None:
+        """Once the guest is up: detach the seed disk and delete it, then shred the host's private key and delete the
+        staged files. The known_hosts file stays, since every later connection checks it."""
+        self._ps(release_seed_script(name, self._seed(name)))
+        key = self._staging(name) / HOST_KEY_FILE
+        shred_file(key)
+        self._remove_staging(name)
+
+    def _remove_staging(self, name: str) -> None:
+        folder = self._staging(name)
+        try:
+            if folder.exists():
+                shutil.rmtree(folder)
+        except OSError as exc:
+            raise SandboxError(f"Couldn't delete the sandbox's staged files: {exc}") from exc
+
     def _destroy_name(self, name: str) -> None:
-        self._ps(destroy_script(name, self._child(name)))
-        Path(self._known_hosts(name)).unlink(missing_ok=True)
+        try:
+            self._ps(destroy_script(name, self._child(name), self._seed(name)))
+        finally:
+            try:
+                self._remove_staging(name)  # the staged files hold a private key: removed even if the VM didn't go
+            finally:
+                Path(self._known_hosts(name)).unlink(missing_ok=True)
 
     # ---- lifecycle
     def check_network(self) -> None:
@@ -1041,16 +1337,22 @@ class HyperVSandbox:
 
     def _make(self, name: str, slot: int) -> SandboxHandle:
         try:
-            child = self._child(name)
+            child, seed = self._child(name), self._seed(name)
+            self._stage_seed(name, slot)
             self._ps(new_vhd_script(child, self.base_image, self.disk_gb))
             self._ps(new_vm_script(name, child, self.switch, self.memory_mb, self.cpus, self.vm_dir))
             self._ps(isolation_script(name, slot))
             check_adapters(self._ps(adapters_script(name)), self.switch)
+            self._ps(seed_disk_script(seed, self._staging(name)))
+            self._ps(attach_seed_script(name, seed))
             self._ps(start_script(name))
+            check_vm_vlan(self._ps(vm_vlan_script(name)))  # after the start, as the read-back is of the running VM
             self._wait_ready(name)
+            self._ssh(name, CLOUD_INIT_WAIT, timeout=180)
+            self._release_seed(name)
         except Exception as exc:
             try:
-                self._destroy_name(name)  # don't leave a half-made VM behind
+                self._destroy_name(name)  # don't leave a half-made VM, or its key files, behind
             except Exception:
                 log.warning("Couldn't clean up sandbox %s after a failed start", name, exc_info=True)
             if isinstance(exc, SandboxError):
@@ -1127,7 +1429,7 @@ def backend_fingerprint(settings: Settings, kind: str) -> tuple:
     if kind == "hyperv":
         return (str(settings.data_dir), settings.sandbox_base_image, settings.sandbox_switch,
                 settings.sandbox_memory_mb, settings.sandbox_cpus, settings.sandbox_disk_gb,
-                settings.sandbox_proxy_port)
+                settings.sandbox_proxy_port, settings.sandbox_guest_sudo)
     return ()
 
 
@@ -1136,12 +1438,13 @@ def make_backend(settings: Settings, kind: str) -> SandboxBackend:
     if kind == "fake":
         return FakeSandbox(settings.data_dir / "sandbox-fake")
     if kind == "hyperv":
-        # TODO: create the SSH key pair and bake its public half into the base image
+        # The app's client key and every sandbox's host key are made on the host, on first use (see HyperVSandbox)
         keys = settings.data_dir / "sandbox"
         return HyperVSandbox(base_image=settings.sandbox_base_image, switch=settings.sandbox_switch,
                              memory_mb=settings.sandbox_memory_mb, cpus=settings.sandbox_cpus,
                              disk_gb=settings.sandbox_disk_gb, ssh_key=str(keys / "id_ed25519"),
-                             known_dir=str(keys / "known_hosts"), proxy_port=settings.sandbox_proxy_port)
+                             known_dir=str(keys / "known_hosts"), staging_dir=str(keys / "staging"),
+                             guest_sudo=settings.sandbox_guest_sudo, proxy_port=settings.sandbox_proxy_port)
     raise SandboxError(f"There's no sandbox kind called {kind}.")
 
 

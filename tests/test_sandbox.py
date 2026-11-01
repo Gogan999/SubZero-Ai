@@ -46,18 +46,34 @@ from subzero_ai.sandbox import (
     child_disk_path,
     block_rule_specs,
     describe_network_problem,
+    attach_seed_script,
+    check_path,
+    check_vm_vlan,
     guest_address,
-    host_key_line,
     host_network_check_script,
     host_network_problems,
+    icacls_argv,
     isolation_script,
+    keygen_argv,
+    known_hosts_line,
+    lf_text,
     mac_for_slot,
+    make_backend,
+    backend_fingerprint,
+    meta_data,
+    network_config,
     pack_tree,
     parse_host_network_check,
     ps_quote,
     reap_sandboxes,
+    release_seed_script,
+    seed_disk_path,
+    seed_disk_script,
+    shred_file,
     ssh_argv,
     unpack_tree,
+    user_data,
+    write_lf,
 )
 
 from .helpers import MENTOR, Harness
@@ -68,10 +84,13 @@ SWITCH = "szsandbox-internal"
 GOOD_ADAPTERS = '[{"Name":"Network Adapter","SwitchName":"szsandbox-internal"}]'
 PASSING_NETWORK = "[]"  # the host network check's output when everything is in place
 DESTRUCTIVE = ("Remove-Item", "Remove-VM", "Stop-VM", "Set-VHD", "Optimize-VHD", "Convert-VHD", "Resize-VHD")
-# Known-hosts files for the fake sandboxes go here, never under the base image's folder
-KNOWN_ROOT = Path(tempfile.mkdtemp(prefix="sandbox-known-test-"))
-atexit.register(shutil.rmtree, KNOWN_ROOT, True)
+GOOD_VLAN = ('[{"OperationMode":"Private","PrivateVlanMode":"Isolated","PrimaryVlanId":"100",'
+             '"SecondaryVlanId":"200"}]')
+# Key files and known_hosts files for the fake sandboxes go in folders made per test, never under the base image's
+KEYS_ROOT = Path(tempfile.mkdtemp(prefix="sandbox-keys-test-"))
+atexit.register(shutil.rmtree, KEYS_ROOT, True)
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEKEYFORTESTSONLY"
+PRIVATE_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEKEYFORTESTSONLY\n-----END OPENSSH PRIVATE KEY-----\n"
 
 
 # --------------------------------------------------------------------------- the fake sandbox
@@ -207,44 +226,73 @@ class FakeSandboxLifecycleTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- Hyper-V: fakes and command checks
+class FakeKeygen:
+    """Stands in for ssh-keygen and icacls. Writes a fixed fake key pair (the comment is the one asked for) and records
+    every command. With fail=True, ssh-keygen fails."""
+
+    def __init__(self, fail: bool = False):
+        self.commands: list[list[str]] = []
+        self.fail = fail
+
+    def keygen(self, argv: list[str]) -> None:
+        self.commands.append(list(argv))
+        if self.fail:
+            raise sandbox.SandboxError("ssh-keygen failed for the test")
+        path = Path(argv[argv.index("-f") + 1])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(PRIVATE_KEY.replace("\n", "\r\n"), encoding="ascii")  # CRLF on purpose: the seed must be LF
+        Path(str(path) + ".pub").write_text(f"{HOST_KEY} {argv[argv.index('-C') + 1]}\r\n", encoding="ascii")
+
+    def icacls(self, argv: list[str]) -> None:
+        self.commands.append(list(argv))
+
+
 class FakeHost:
-    """Stands in for PowerShell, ssh-keyscan and SSH. Records every script and command; never runs anything."""
+    """Stands in for PowerShell and SSH. Records every script and command, in order, in `events`; never runs anything.
+    The seed's files are copied out of the staging folder when the seed script runs, so tests can read them."""
 
     def __init__(self, adapters: str = GOOD_ADAPTERS, vms: str = "[]", ssh_codes: dict[str, int] | None = None,
-                 keyscan_answers: int = 0, network: str | Exception = PASSING_NETWORK):
+                 ssh_fail_first: int = 0, network: str | Exception = PASSING_NETWORK, vlan: str = GOOD_VLAN,
+                 keygen_fails: bool = False):
+        self.root = Path(tempfile.mkdtemp(prefix="host-", dir=KEYS_ROOT))
         self.scripts: list[str] = []
         self.remote: list[tuple[str, str]] = []
         self.known_hosts: list[str] = []
-        self.keyscans: list[str] = []
-        self.adapters, self.vms = adapters, vms
+        self.events: list[tuple[str, str]] = []  # ("ps", script) or ("ssh", remote command), in the order they ran
+        self.adapters, self.vms, self.vlan = adapters, vms, vlan
         self.ssh_codes = ssh_codes or {}
-        self.keyscan_silent_for = keyscan_answers  # the first this-many keyscans get no answer (still booting)
+        self.ssh_fail_first = ssh_fail_first  # the first this-many "true" checks fail (the guest is still booting)
         self.network = network  # what the host network check answers, or the error it raises
         self.network_checks = 0
+        self.keygen = FakeKeygen(fail=keygen_fails)
+        self.seed_files: dict[str, bytes] = {}  # the seed's files, as they were copied onto it
 
     def powershell(self, script: str) -> str:
         self.scripts.append(script)
+        self.events.append(("ps", script))
+        for path in re.findall(r"Copy-Item -LiteralPath '([^']+)'", script):
+            self.seed_files[Path(path).name] = Path(path).read_bytes()
         if NETWORK_CHECK_MARK in script:
             self.network_checks += 1
             if isinstance(self.network, Exception):
                 raise self.network
             return self.network
+        if "Get-VMNetworkAdapterVlan -VMName" in script:
+            return self.vlan
         if script.startswith("Get-VMNetworkAdapter") or "Get-VMNetworkAdapter -VMName" in script:
             return self.adapters
         if "Select-Object -ExpandProperty Name" in script:
             return self.vms
         return ""
 
-    def keyscan(self, address: str) -> bytes:
-        self.keyscans.append(address)
-        if len(self.keyscans) <= self.keyscan_silent_for:
-            return b""
-        return f"{address} {HOST_KEY}\n".encode()
-
     def ssh(self, address: str, remote: str, *, known_hosts: str, stdin: bytes | None, timeout: int,
             on_output=None, limit: int | None = None) -> tuple[int, bytes, bytes]:
         self.remote.append((address, remote))
         self.known_hosts.append(known_hosts)
+        self.events.append(("ssh", remote))
+        if remote == "true" and self.ssh_fail_first > 0:
+            self.ssh_fail_first -= 1
+            return 255, b"", b"Connection refused"
         for prefix, code in self.ssh_codes.items():
             if remote.startswith(prefix):
                 return code, b"", b""
@@ -253,11 +301,23 @@ class FakeHost:
     def sent(self, word: str) -> list[str]:
         return [s for s in self.scripts if word in s]
 
+    def index(self, kind: str, text: str) -> int:
+        """The position of the first event of this kind that holds the text (an ssh command must be equal to it)."""
+        for position, (event_kind, body) in enumerate(self.events):
+            if event_kind == kind and ((body == text) if kind == "ssh" else (text in body)):
+                return position
+        raise AssertionError(f"no {kind} event with {text!r}")
+
+    def last_index(self, kind: str, text: str) -> int:
+        return max(position for position, (event_kind, body) in enumerate(self.events)
+                   if event_kind == kind and ((body == text) if kind == "ssh" else (text in body)))
+
 
 def hyperv(host: FakeHost, **overrides) -> HyperVSandbox:
     options = dict(base_image=BASE, switch=SWITCH, memory_mb=2048, cpus=2, disk_gb=10, run_powershell=host.powershell,
-                   run_keyscan=host.keyscan, run_ssh=host.ssh, known_dir=str(KNOWN_ROOT), ready_seconds=0,
-                   sleep=lambda _s: None)
+                   run_keygen=host.keygen.keygen, run_icacls=host.keygen.icacls, run_ssh=host.ssh,
+                   ssh_key=str(host.root / "keys" / "id_ed25519"), staging_dir=str(host.root / "staging"),
+                   known_dir=str(host.root / "known"), account="mentor", ready_seconds=0, sleep=lambda _s: None)
     options.update(overrides)
     return HyperVSandbox(**options)
 
@@ -267,7 +327,7 @@ class HyperVCommandTest(unittest.TestCase):
         host = FakeHost()
         backend = hyperv(host)
         backend.create(7)
-        [new_vhd] = host.sent("New-VHD")
+        [new_vhd] = host.sent("-Differencing")
         self.assertIn("-Differencing", new_vhd)
         self.assertIn(f"-ParentPath {ps_quote(BASE)}", new_vhd)
         child = re.search(r"New-VHD -Path '([^']+)'", new_vhd).group(1)
@@ -310,6 +370,8 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertEqual(len(isolated), 1)
         self.assertEqual(len(started), 1)
         self.assertLess(isolated[0], started[0], "the isolation is applied before the VM starts")
+        self.assertLess(host.index("ps", "Add-VMHardDiskDrive"), host.index("ps", "Start-VM -Name"),
+                        "the seed is attached before the VM starts")
 
     def test_isolation_script_text(self):
         name = "szsandbox-7-s003-abcdef"
@@ -318,6 +380,7 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertIn("-DhcpGuard On -RouterGuard On", script)
         self.assertIn("Add-VMNetworkAdapterExtendedAcl", script)
         self.assertIn("-Action Allow -Direction Both -RemoteIPAddress '10.77.0.1/32' -Weight 200", script)
+        self.assertIn("-Isolated -PrimaryVlanId 100 -SecondaryVlanId 200", script)
         self.assertIn("-Action Deny -Direction Both -RemoteIPAddress '10.77.0.0/24' -Weight 100", script)
         self.assertIn("-Action Deny -Direction Both -RemoteIPAddress '::/0' -Weight 150", script)
         self.assertLess(script.index("-Action Allow"), script.index("-Action Deny"), "the host is allowed first")
@@ -364,7 +427,8 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertLess(script.index("Remove-VM"), script.index("Remove-Item"))
         child = str(child_disk_path(BASE, "szsandbox-7-s000-abcdef"))
         self.assertIn(ps_quote(child), script)
-        self.assertNotIn(ps_quote(BASE), script.split("Remove-Item")[1])
+        self.assertIn(ps_quote(str(seed_disk_path(BASE, "szsandbox-7-s000-abcdef"))), script, "the seed goes too")
+        self.assertNotIn(ps_quote(BASE), script, "the base disk is never named")
         self.assertIn("if ($vm.State -ne 'Off')", script, "a VM that is already off isn't asked to stop")
 
     def test_names_outside_our_prefix_never_reach_powershell(self):
@@ -390,7 +454,7 @@ class HyperVCommandTest(unittest.TestCase):
         handle = backend.create(7)
         result = backend.run(handle, ["./gradlew", "build"], cwd="work", env=SANDBOX_ENV, timeout=600)
         remote = host.remote[-1][1]
-        self.assertIn("cd /home/szrunner/work", remote)
+        self.assertIn("cd /home/sandbox/work", remote)
         self.assertIn("env -i", remote)
         self.assertIn("timeout -k 5 600 ./gradlew build", remote)
         self.assertEqual(remote.count("PATH="), 1, "one PATH only")
@@ -416,7 +480,7 @@ class HyperVCommandTest(unittest.TestCase):
             HyperVSandbox(base_image="", switch=SWITCH, memory_mb=1024, cpus=1, disk_gb=5)
 
 
-# --------------------------------------------------------------------------- host keys
+# --------------------------------------------------------------------------- host keys and the seed disk
 class HostKeyTest(unittest.TestCase):
     def test_ssh_is_strict_and_uses_the_sandboxs_own_known_hosts_file(self):
         argv = ssh_argv("10.77.0.10", "true", key="/k/id", known_hosts="/kh/szsandbox-7-s000-abcdef")
@@ -424,38 +488,316 @@ class HostKeyTest(unittest.TestCase):
         self.assertNotIn("StrictHostKeyChecking=accept-new", argv)
         self.assertIn("UserKnownHostsFile=/kh/szsandbox-7-s000-abcdef", argv)
 
-    def test_only_one_ed25519_key_for_the_right_address_is_accepted(self):
-        self.assertEqual(host_key_line(f"10.77.0.10 {HOST_KEY}\n".encode(), "10.77.0.10"), f"10.77.0.10 {HOST_KEY}")
-        bad = [b"", f"10.77.0.11 {HOST_KEY}\n".encode(), b"10.77.0.10 ssh-rsa AAAAB3NzaC1yc2E\n",
-               b"10.77.0.10 ssh-ed25519 AA BB\n", b"not a key at all\n"]
-        for output in bad:
-            with self.assertRaises(SandboxError, msg=output):
-                host_key_line(output, "10.77.0.10")
+    def test_known_hosts_line_pins_one_ed25519_key_for_the_right_address(self):
+        self.assertEqual(known_hosts_line(f"{HOST_KEY} szsandbox-7-s000-abcdef\n", "10.77.0.10"),
+                         f"10.77.0.10 {HOST_KEY}")
+        for bad in ("", "ssh-rsa AAAAB3NzaC1yc2E name", "ssh-ed25519 AA!! name", "not a key at all",
+                    "ssh-ed25519 AAAA one two"):
+            with self.assertRaises(SandboxError, msg=bad):
+                known_hosts_line(bad, "10.77.0.10")
 
-    def test_the_host_key_is_read_once_pinned_and_used_for_every_connection(self):
+    def test_the_host_key_pair_is_made_on_the_host_and_both_private_files_are_locked(self):
+        host = FakeHost()
+        handle = hyperv(host).create(7)
+        keygens = [c for c in host.keygen.commands if c[0] == sandbox.SSH_KEYGEN]
+        icacls = [c for c in host.keygen.commands if c[0] == sandbox.ICACLS]
+        self.assertEqual(len(keygens), 2, "the client key, then this sandbox's host key")
+        client, host_key = keygens
+        self.assertEqual(client[client.index("-C") + 1], "szsandbox-client")
+        self.assertEqual(host_key[host_key.index("-C") + 1], handle.name)
+        self.assertEqual(host_key[host_key.index("-f") + 1],
+                         str(host.root / "staging" / handle.name / sandbox.HOST_KEY_FILE))
+        for argv in keygens:
+            self.assertEqual(argv[argv.index("-N") + 1], "", "no passphrase")
+        self.assertEqual(len(icacls), 2)
+        for argv in icacls:
+            self.assertEqual(argv[2:-1], ["/inheritance:r", "/grant:r"])
+            self.assertEqual(argv[-1], "mentor:F")
+
+    def test_the_client_key_is_made_once_and_reused_by_later_sandboxes(self):
+        host = FakeHost()
+        backend = hyperv(host)
+        backend.create(7)
+        backend.create(8)
+        clients = [c for c in host.keygen.commands if c[0] == sandbox.SSH_KEYGEN and "szsandbox-client" in c]
+        self.assertEqual(len(clients), 1)
+
+    def test_known_hosts_is_this_sandboxs_own_file_with_the_generated_key(self):
         host = FakeHost()
         backend = hyperv(host)
         handle = backend.create(7)
-        pinned = KNOWN_ROOT / handle.name
+        pinned = host.root / "known" / handle.name
         self.assertEqual(pinned.read_text(encoding="ascii"), f"10.77.0.10 {HOST_KEY}\n")
-        self.assertEqual(host.keyscans, ["10.77.0.10"], "the key is read once")
         self.assertEqual(set(host.known_hosts), {str(pinned)}, "every connection checks this sandbox's own file")
         backend.destroy(handle)
         self.assertFalse(pinned.exists(), "the file goes with the sandbox")
 
-    def test_keyscan_is_retried_until_the_guest_answers(self):
-        host = FakeHost(keyscan_answers=2)
-        handle = hyperv(host, ready_seconds=60).create(7)
-        self.assertEqual(len(host.keyscans), 3)
-        self.assertEqual(host.remote[0], ("10.77.0.10", "true"))
-        (KNOWN_ROOT / handle.name).unlink(missing_ok=True)
+    def test_the_seed_is_built_attached_and_the_vm_started_in_that_order(self):
+        host = FakeHost()
+        hyperv(host).create(7)
+        self.assertLess(host.index("ps", "New-VHD -Path"), host.index("ps", "Add-VMHardDiskDrive"))
+        self.assertLess(host.index("ps", "Mount-VHD"), host.index("ps", "Add-VMHardDiskDrive"))
+        self.assertLess(host.index("ps", "Add-VMHardDiskDrive"), host.index("ps", "Start-VM -Name"))
+        self.assertLess(host.index("ps", "-DhcpGuard On"), host.index("ps", "Start-VM -Name"))
 
-    def test_a_guest_that_gives_no_key_is_never_connected_to(self):
-        host = FakeHost(keyscan_answers=10 ** 6)
+    def test_the_seed_carries_the_host_key_the_client_key_and_the_static_address(self):
+        host = FakeHost()
+        handle = hyperv(host).create(7)
+        user = host.seed_files["user-data"].decode("ascii")
+        self.assertIn(f"  ed25519_public: {HOST_KEY} {handle.name}\n", user)
+        self.assertIn(f"      - {HOST_KEY} szsandbox-client\n", user)
+        self.assertIn("    -----BEGIN OPENSSH PRIVATE KEY-----\n", user)
+        self.assertIn(f"instance-id: {handle.name}\n", host.seed_files["meta-data"].decode("ascii"))
+        self.assertIn("      - 10.77.0.10/24\n", host.seed_files["network-config"].decode("ascii"))
+
+    def test_every_seed_file_is_utf8_without_a_bom_and_with_lf_only(self):
+        host = FakeHost()
+        hyperv(host).create(7)
+        self.assertEqual(set(host.seed_files), set(sandbox.SEED_FILES))
+        for name, data in host.seed_files.items():
+            with self.subTest(name=name):
+                self.assertFalse(data.startswith(b"\xef\xbb\xbf"), "no byte order mark")
+                self.assertNotIn(b"\r", data, "LF line endings only, even though the fake keygen wrote CRLF")
+                self.assertTrue(data.endswith(b"\n"))
+
+    def test_the_seed_is_detached_and_deleted_only_after_ssh_is_ready_and_cloud_init_has_read_it(self):
+        host = FakeHost(ssh_fail_first=2)
+        handle = hyperv(host, ready_seconds=60).create(7)
+        ready = host.last_index("ssh", "true")
+        cloud_init = host.index("ssh", sandbox.CLOUD_INIT_WAIT)
+        release = host.index("ps", "Remove-VMHardDiskDrive")
+        self.assertLess(host.index("ssh", "true"), ready, "the first checks failed and were retried")
+        self.assertLess(ready, cloud_init)
+        self.assertLess(cloud_init, release)
+        self.assertIn("Remove-Item", host.sent("Remove-VMHardDiskDrive")[0], "the seed file is deleted too")
+        self.assertFalse((host.root / "staging" / handle.name).exists(), "the staged private key is gone")
+        self.assertTrue((host.root / "known" / handle.name).exists(), "known_hosts stays for later connections")
+
+    def test_a_guest_that_never_answers_is_destroyed_and_only_ever_checked_strictly(self):
+        host = FakeHost(ssh_fail_first=10 ** 6)
         with self.assertRaises(SandboxError):
             hyperv(host, ready_seconds=0).create(7)
-        self.assertEqual(host.remote, [], "nothing connects without a pinned key")
-        self.assertTrue(host.sent("Remove-VM"), "the half-made VM is removed")
+        self.assertEqual({command for _, command in host.remote}, {"true"}, "nothing but the readiness check")
+        self.assertTrue(host.sent("Remove-VM -Name"), "the half-made VM is removed")
+        self.assertFalse(list((host.root / "staging").glob("*")), "no staged key files are left")
+        self.assertFalse(list((host.root / "known").glob("*")), "no known_hosts file is left")
+
+    def test_a_failed_key_make_starts_no_vm_and_leaves_no_files(self):
+        host = FakeHost(keygen_fails=True)
+        with self.assertRaises(SandboxError) as caught:
+            hyperv(host).create(7)
+        self.assertIn("ssh-keygen failed", str(caught.exception))
+        self.assertEqual(host.sent("Start-VM"), [])
+        self.assertEqual(host.remote, [])
+        self.assertFalse(list((host.root / "staging").glob("*")))
+
+    def test_destroy_removes_the_vm_both_disks_any_leftover_staged_files_and_known_hosts(self):
+        host = FakeHost(vms='["szsandbox-7-s000-abcdef"]')
+        backend = hyperv(host)
+        name = "szsandbox-7-s000-abcdef"
+        staging = host.root / "staging" / name
+        staging.mkdir(parents=True)
+        (staging / "user-data").write_text("leftover", encoding="ascii")
+        known = host.root / "known" / name
+        known.parent.mkdir(parents=True, exist_ok=True)
+        known.write_text("x", encoding="ascii")
+        backend.destroy(SandboxHandle(name, "hyperv", ""))
+        [script] = host.scripts
+        self.assertIn(ps_quote(str(child_disk_path(BASE, name))), script)
+        self.assertIn(ps_quote(str(seed_disk_path(BASE, name))), script)
+        self.assertNotIn(ps_quote(BASE), script)
+        self.assertFalse(staging.exists())
+        self.assertFalse(known.exists())
+
+    def test_shred_overwrites_then_deletes_and_a_missing_file_is_fine(self):
+        tmp = Path(tempfile.mkdtemp(prefix="shred-"))
+        try:
+            key = tmp / "key"
+            key.write_bytes(b"-----BEGIN OPENSSH PRIVATE KEY-----")
+            shred_file(key)
+            self.assertFalse(key.exists())
+            shred_file(key)  # missing: nothing happens
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_base_disk_named_as_a_seed_is_refused(self):
+        with self.assertRaises(SandboxError):
+            seed_disk_path(BASE, "base")
+        self.assertEqual(seed_disk_path(BASE, "szsandbox-1-s000-aaaaaa"),
+                         Path("/srv/sandbox/szsandbox-1-s000-aaaaaa-seed.vhdx"))
+
+
+class SeedDiskTest(unittest.TestCase):
+    NAME = "szsandbox-7-s000-abcdef"
+
+    def script(self) -> str:
+        return seed_disk_script(seed_disk_path(BASE, self.NAME), Path("/srv/sandbox/staging") / self.NAME)
+
+    def test_the_seed_is_a_small_fat32_disk_labelled_cidata_with_the_three_files(self):
+        script = self.script()
+        seed = str(seed_disk_path(BASE, self.NAME))
+        for text in (f"New-VHD -Path {ps_quote(seed)} -SizeBytes 64MB -Dynamic -BlockSizeBytes 1MB", "Mount-VHD",
+                     "Initialize-Disk", "-PartitionStyle MBR", "-UseMaximumSize -AssignDriveLetter",
+                     "-FileSystem FAT32 -NewFileSystemLabel 'CIDATA'", "Dismount-VHD", "} finally {"):
+            self.assertIn(text, script)
+        for file in ("meta-data", "network-config", "user-data"):
+            self.assertIn(f"Copy-Item -LiteralPath {ps_quote('/srv/sandbox/staging/' + self.NAME + '/' + file)}",
+                          script)
+        self.assertIn('-f $letter)', script)
+        self.assertLess(script.index("Copy-Item"), script.index("Dismount-VHD"), "copied before it is dismounted")
+        self.assertIn("already there", script, "an existing seed is never written over")
+        self.assertNotIn(BASE, script)
+        self.assertTrue(script.isascii(), "Windows PowerShell 5.1 reads this as ASCII")
+
+    def test_the_seed_script_is_never_given_a_path_that_climbs_out(self):
+        with self.assertRaises(SandboxError):
+            seed_disk_script(Path("/srv/../etc/seed.vhdx"), Path("/srv/staging"))
+
+    def test_check_path_refuses_climbing_empty_and_control_characters(self):
+        self.assertEqual(check_path("/srv/a/b.txt"), "/srv/a/b.txt")
+        for bad in ("/srv/../etc", "C:\\x\\..\\y", "", "a\nb", "a\x00b"):
+            with self.assertRaises(SandboxError, msg=repr(bad)):
+                check_path(bad)
+
+    def test_write_lf_writes_utf8_without_a_bom_and_with_lf_only(self):
+        tmp = Path(tempfile.mkdtemp(prefix="lf-"))
+        try:
+            target = tmp / "sub" / "user-data"
+            write_lf(target, "a\r\nb\rc\n")
+            self.assertEqual(target.read_bytes(), b"a\nb\nc\n")
+            self.assertEqual(lf_text("x\r\ny"), "x\ny")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_meta_data_and_network_config_have_the_static_address_and_no_gateway(self):
+        self.assertEqual(meta_data(self.NAME), f"instance-id: {self.NAME}\nlocal-hostname: {self.NAME}\n")
+        config = network_config(3)
+        for text in ("version: 2", 'name: "e*"', "dhcp4: false", "dhcp6: false", "      - 10.77.0.13/24"):
+            self.assertIn(text, config)
+        self.assertNotIn("gateway", config)
+        self.assertNotIn("routes", config)
+
+    def test_the_guest_user_is_the_constant_sandbox(self):
+        self.assertEqual(sandbox.GUEST_USER, "sandbox")
+        self.assertEqual(sandbox.GUEST_HOME, "/home/sandbox")
+
+    def test_user_data_takes_only_the_client_key_and_never_enables_a_password(self):
+        user = user_data(f"{HOST_KEY} szsandbox-client", f"{HOST_KEY} {self.NAME}", PRIVATE_KEY, guest_sudo=False)
+        self.assertTrue(user.startswith("#cloud-config\n"))
+        for text in ("  - name: sandbox\n", "    lock_passwd: true\n", "ssh_pwauth: false\n",
+                     "ssh_deletekeys: true\n", "ssh_genkeytypes: []\n"):
+            self.assertIn(text, user)
+        self.assertEqual(user.count("ssh-ed25519"), 2, "one client key line and one host key line")
+        for word in ("plain_text_passwd", "chpasswd", "password", "ssh_pwauth: true", "sudo: ALL"):
+            self.assertNotIn(word, user)
+        for line in PRIVATE_KEY.strip().split("\n"):
+            self.assertIn(f"    {line}\n", user, "the private key is indented four spaces under ed25519_private")
+
+    def test_sudo_is_off_by_default_and_gives_the_rule_only_when_on(self):
+        off = user_data(f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY, guest_sudo=False)
+        on = user_data(f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY, guest_sudo=True)
+        self.assertIn("    sudo: false\n", off)
+        self.assertNotIn("NOPASSWD", off)
+        self.assertIn("    sudo: ALL=(ALL) NOPASSWD:ALL\n", on)
+
+    def test_user_data_refuses_a_bad_client_key_host_key_or_private_key(self):
+        cases = [
+            (f"ssh-rsa AAAA c", f"{HOST_KEY} h", PRIVATE_KEY),
+            (f"{HOST_KEY} c", "ssh-rsa AAAA h", PRIVATE_KEY),
+            (f"{HOST_KEY} c", f"{HOST_KEY} h", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n"),
+            (f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY.replace("FAKEKEY", "\u00e9KEY")),
+        ]
+        for client, host_public, private in cases:
+            with self.assertRaises(SandboxError):
+                user_data(client, host_public, private, guest_sudo=False)
+
+    def test_the_key_commands_are_built_without_a_shell(self):
+        self.assertEqual(keygen_argv(Path("/x/key"), "c"),
+                         ["ssh-keygen.exe", "-q", "-t", "ed25519", "-N", "", "-C", "c", "-f", "/x/key"])
+        self.assertEqual(icacls_argv(Path("/x/key"), "mentor"),
+                         ["icacls", "/x/key", "/inheritance:r", "/grant:r", "mentor:F"])
+        with self.assertRaises(SandboxError):
+            icacls_argv(Path("/x/key"), "")
+
+
+class PrivateVlanTest(unittest.TestCase):
+    NAME = "szsandbox-7-s003-abcdef"
+    GOOD = ('[{"OperationMode":"Private","PrivateVlanMode":"Isolated","PrimaryVlanId":"100","SecondaryVlanId":"200"}]')
+
+    def test_the_sandbox_adapter_is_isolated_in_the_pair_after_the_acls(self):
+        script = isolation_script(self.NAME, 3)
+        line = (f"Set-VMNetworkAdapterVlan -VMName {ps_quote(self.NAME)} -Isolated -PrimaryVlanId 100 "
+                "-SecondaryVlanId 200")
+        self.assertIn(line, script)
+        self.assertGreater(script.index(line), script.index("Add-VMNetworkAdapterExtendedAcl"))
+
+    def test_only_an_isolated_adapter_in_the_pair_is_accepted(self):
+        check_vm_vlan(self.GOOD)
+        check_vm_vlan(self.GOOD.replace("[", "[ ", 1).replace("]", " ]"))
+        bad = [
+            "", "[]", "null",
+            self.GOOD.replace('"Isolated"', '"Promiscuous"'),
+            self.GOOD.replace('"Isolated"', '"Community"'),
+            self.GOOD.replace('"Private"', '"Access"'),
+            self.GOOD.replace('"100"', '"101"'),
+            self.GOOD.replace('"200"', '"201"'),
+            "[" + self.GOOD[1:-1] + "," + self.GOOD[1:-1].replace('"Isolated"', '"Promiscuous"') + "]",
+        ]
+        for text in bad:
+            with self.subTest(text=text[:60]):
+                with self.assertRaises(SandboxError):
+                    check_vm_vlan(text)
+
+    def test_the_vlan_is_read_back_after_the_start_and_a_wrong_one_destroys_the_vm(self):
+        host = FakeHost(vlan=self.GOOD.replace('"Isolated"', '"Promiscuous"'))
+        with self.assertRaises(SandboxError):
+            hyperv(host).create(7)
+        self.assertLess(host.index("ps", "Start-VM -Name"), host.index("ps", "Get-VMNetworkAdapterVlan -VMName"))
+        self.assertEqual(host.remote, [], "the guest is never contacted")
+        self.assertTrue(host.sent("Remove-VM -Name"), "the VM is removed")
+
+    def test_a_right_vlan_lets_the_sandbox_go_on(self):
+        host = FakeHost()
+        hyperv(host).create(7)
+        self.assertIn(("ssh", "true"), host.events)
+
+    def test_the_host_check_reads_the_host_adapters_vlan(self):
+        script = host_network_check_script(SWITCH, 3128)
+        self.assertIn(f"Get-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName {ps_quote(SWITCH)}", script)
+        for text in ("'Private'", "'Promiscuous'", "'100'", "'200'", "SecondaryVlanIdList",
+                     "$problems.Add('host-vlan-missing')"):
+            self.assertIn(text, script)
+        self.assertTrue(script.isascii())
+
+    def test_a_missing_host_vlan_is_a_problem_with_plain_words(self):
+        [problem] = parse_host_network_check('["host-vlan-missing"]')
+        self.assertIn("private VLAN 100 with 200", problem)
+
+
+class GuestSudoSettingTest(unittest.TestCase):
+    def test_the_setting_reaches_the_seed_on_create(self):
+        host = FakeHost()
+        hyperv(host, guest_sudo=True).create(7)
+        self.assertIn("NOPASSWD:ALL", host.seed_files["user-data"].decode("ascii"))
+
+    def test_the_default_keeps_sudo_off_in_the_seed(self):
+        host = FakeHost()
+        hyperv(host).create(7)
+        user = host.seed_files["user-data"].decode("ascii")
+        self.assertIn("sudo: false", user)
+        self.assertNotIn("NOPASSWD", user)
+
+    def test_the_backend_reads_the_setting_and_is_rebuilt_when_it_changes(self):
+        tmp = Path(tempfile.mkdtemp(prefix="sudo-settings-"))
+        try:
+            settings = Settings(data_dir=tmp, sandbox_base_image=BASE)
+            self.assertFalse(sandbox.make_backend(settings, "hyperv").guest_sudo)
+            before = sandbox.backend_fingerprint(settings, "hyperv")
+            settings.sandbox_guest_sudo = True
+            self.assertTrue(sandbox.make_backend(settings, "hyperv").guest_sudo)
+            self.assertNotEqual(sandbox.backend_fingerprint(settings, "hyperv"), before)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- guest output and archives
@@ -750,16 +1092,19 @@ class SandboxSettingsTest(unittest.TestCase):
         self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (2048, 2, 10))
         self.assertEqual((fresh.sandbox_min_free_gb, fresh.sandbox_switch), (20, "szsandbox-internal"))
         self.assertEqual(fresh.sandbox_proxy_port, 3128)
+        self.assertFalse(fresh.sandbox_guest_sudo, "no sudo in the sandbox unless an admin turns it on")
 
     def test_valid_values_are_accepted(self):
         values, errors = saved_settings.validate("code", self.form(
             code_sandbox="hyperv", sandbox_ttl_hours="24", sandbox_max_sessions="2", sandbox_memory_mb="4096",
             sandbox_cpus="4", sandbox_disk_gb="12", sandbox_min_free_gb="25",
-            sandbox_base_image="C:\\SubZeroAI\\sandbox\\base.vhdx", sandbox_switch="szsandbox-internal"),
+            sandbox_base_image="C:\\SubZeroAI\\sandbox\\base.vhdx", sandbox_switch="szsandbox-internal",
+            sandbox_guest_sudo="1"),
             settings=self.settings, db=self.db)
         self.assertEqual(errors, {})
         self.assertEqual(values["code_sandbox"], "hyperv")
         self.assertEqual(values["sandbox_base_image"], "C:\\SubZeroAI\\sandbox\\base.vhdx")
+        self.assertIs(values["sandbox_guest_sudo"], True)
 
     def test_bad_values_are_refused_with_a_message(self):
         cases = {
@@ -800,10 +1145,11 @@ class SandboxSettingsTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="sandbox-env-"))
         try:
             with mock.patch.dict(os.environ, {"CODE_SANDBOX": "hyperv", "SANDBOX_TTL_HOURS": "12",
-                                              "SANDBOX_SWITCH": "lab-private"}):
+                                              "SANDBOX_SWITCH": "lab-private", "SANDBOX_GUEST_SUDO": "true"}):
                 loaded = load_settings(search_cwd=False, data_dir=tmp)
             self.assertEqual((loaded.code_sandbox, loaded.sandbox_ttl_hours, loaded.sandbox_switch),
                              ("hyperv", 12, "lab-private"))
+            self.assertTrue(loaded.sandbox_guest_sudo)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1372,6 +1718,17 @@ class SandboxNetworkScriptTest(unittest.TestCase):
         self.assertIn("Get-SandboxRules | Remove-NetFirewallRule", text)
         self.assertIn("$rules | Remove-NetFirewallRule", text)
 
+    def test_install_puts_the_host_adapter_in_the_private_vlan_and_check_reads_it(self):
+        text = self.text()
+        self.assertIn("$VlanPrimary = 100", text)
+        self.assertIn("$VlanSecondary = 200", text)
+        self.assertIn("Set-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName $Switch -Promiscuous "
+                      "-PrimaryVlanId $VlanPrimary -SecondaryVlanIdList $VlanSecondary", text)
+        self.assertIn("Get-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName $Switch", text)
+        for field in ("OperationMode", "PrivateVlanMode", "PrimaryVlanId", "SecondaryVlanIdList"):
+            self.assertIn(field, text)
+        self.assertIn("'host-vlan-missing'", text)
+
     def test_its_names_and_addresses_match_the_app(self):
         text = self.text()
         for name in ("10.77.0.0/24", "10.77.0.1", "vEthernet ($Switch)", "szsandbox-block-tcp-below",
@@ -1466,3 +1823,11 @@ class FirewallOffTest(unittest.TestCase):
     def test_firewall_off_is_a_problem_with_a_plain_message(self):
         [problem] = parse_host_network_check('["firewall-off"]')
         self.assertIn("turned off", problem)
+
+
+class GuestIpv6OffTest(unittest.TestCase):
+    def test_user_data_turns_ipv6_off_in_the_guest(self):
+        text = user_data(f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY, guest_sudo=False)
+        self.assertIn("net.ipv6.conf.all.disable_ipv6=1", text)
+        self.assertIn("/etc/sysctl.d/99-sandbox-no-ipv6.conf", text)
+        self.assertIn("      net.ipv6.conf.default.disable_ipv6 = 1\n", text)

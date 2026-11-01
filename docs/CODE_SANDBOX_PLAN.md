@@ -158,11 +158,39 @@ measuring. Another option if demand grows: run sessions on a second small machin
   scripts convert that to `10.77.0.0/24` before comparing.
 - Sessions must not reach each other: each VM adapter gets a static MAC, DHCP and router guard, and extended ACLs
   (weights in brackets): allow 10.77.0.1/32 (200), deny 10.77.0.0/24 (100), and deny all IPv6, `::/0` (150), so no guest
-  can reach another over an fe80:: link-local address. The cmdlets are written but unverified until the M3b test on the
-  mini PC. Read the rules back with `Get-VMNetworkAdapterExtendedAcl` there.
-- The guest is driven over SSH from the host with a per-session host key (scanned once over the host-only link) and
-  `StrictHostKeyChecking=yes`. Guest output is streamed into a bounded tail and archives are capped, so a guest cannot
-  fill the host's memory or disk.
+  can reach another over an fe80:: link-local address. The ACLs do not stop non-IP frames between guests (measured in
+  M3b), so each sandbox adapter is also put in a **private VLAN** (primary 100, secondary 200, isolated mode) by
+  `isolation_script`, and the host's adapter is promiscuous on the same pair (`sandbox-network.ps1 -Action Install`).
+  The host check reads that back (`host-vlan-missing`), and the VM's VLAN is read back after it starts. A VM not
+  isolated in the pair is destroyed.
+- The guest is driven over SSH from the host with a per-session host key pair and `StrictHostKeyChecking=yes`. The
+  host makes the key pair with `ssh-keygen.exe` and locks it with `icacls`, and the public half goes into that
+  sandbox's own known_hosts file. The private half goes to the guest on a NoCloud seed disk (a 64 MB FAT32 disk
+  labelled CIDATA, built with built-in tools) that is attached before the VM starts. Once SSH answers and cloud-init has
+  read the seed, the seed is detached and deleted and the host's copy of the private key is shredded. Nothing is read
+  over the network: `ssh-keyscan` fails on Windows OpenSSH (unsupported key exchange), so it is not used. The guest
+  user, `sandbox`, takes only the app's client key, has no password and no sudo unless `SANDBOX_GUEST_SUDO` is on.
+  Guest output is streamed into a bounded tail and archives are capped, so a guest cannot fill the host's memory or
+  disk.
+
+### M3b results (measured on the mini PC)
+
+- **ACLs do not stop non-IP frames** between two sandbox adapters on the same switch, so the private VLAN (100 with
+  200) is what keeps them apart. The VLAN cmdlets were run: `Set-VMNetworkAdapterVlan` on the host adapter
+  (`-ManagementOS -Promiscuous -PrimaryVlanId 100 -SecondaryVlanIdList 200`) and on each VM (`-Isolated`), and both read
+  back as `Private` with the right IDs. Not yet confirmed: that `PrivateVlanMode` reads `Isolated` on a VM and
+  `Promiscuous` on the host (the code requires these, so a mismatch refuses the sandbox rather than letting it run).
+- **Boot times:** first boot to SSH about 68 seconds; later boots about 12 seconds.
+- **Idle cost:** about 370 MB of RAM per running VM, and about 200 MB of disk per sandbox (its differencing disk).
+- **Ports:** the guest's SSH is on TCP 22 and the host's proxy port is the default 3128. Only the proxy port is open to
+  a sandbox (see the firewall rules above).
+- **Host keys:** `ssh-keyscan` can't read a guest's key on Windows OpenSSH (unsupported key exchange), so host keys are
+  injected instead (see above).
+- **Seed disk:** the NoCloud seed is built with built-in tools only (New-VHD, Mount-VHD, Initialize-Disk, New-Partition,
+  Format-Volume FAT32, Copy-Item).
+- **Still to test:** the real `Install` and `Check` runs of `sandbox-network.ps1` with the VLAN step, and a full
+  create, command and destroy on a real host with the seed flow. The app's tests cover the script text and the fakes
+  only.
 
 ### Alternatives considered
 
