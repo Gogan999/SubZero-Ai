@@ -105,14 +105,36 @@ third-party antivirus blocks WSL networking.
 
 This is the part that needs Logan's say-so, because it touches the approval flow:
 
-- Today every write and command needs a mentor click. In a disposable sandbox it is reasonable to let commands run
-  without a click, since the damage is contained and deleted. **That is a relaxation of per-step approval**, which
-  CLAUDE.md says not to do without Logan's decision. See Decision D1.
-- What must stay: a student's request is approved by a mentor before Claude starts (the existing approval window,
+- **Goal (Logan, 2026-11-01): the point of the sandbox is to give students free rein over the commands that run.**
+  Inside a session, Claude's shell commands and file edits run with no mentor click. Today's per-step approval
+  stays only for today's host-based Code (mentors) until the sandbox replaces it. This is a deliberate relaxation of
+  per-step approval, decided by Logan (D1, resolved).
+- Because nothing is clicked, **the sandbox itself is the only safety boundary**, so it has to be stronger than a
+  convenience layer. That raises the bar for isolation (see "Free rein raises the bar" below).
+- What must stay (these are not per-command clicks): a student's request is approved by a mentor before Claude starts (the existing approval window,
   screener and MENTOR ALERT); students never get a write token to GitHub; output going out of the sandbox (patches,
   downloads) is mentor-approved; everything is written with `db.audit(...)`.
 - Connectors for students: read-only repo access first. Anything that writes outward (push, comment, email) stays
   mentor-only and approved.
+
+### Free rein raises the bar
+
+With no per-command approval, a student (or Claude acting on a student's prompt) can run anything inside the sandbox:
+install packages, run servers, loop forever, scan the network, mine coins, try to break out. The design therefore
+must make every one of those harmless:
+
+- **Breakout:** WSL2's shared kernel and root-in-distro make this the weakest point. Prefer a Hyper-V VM per session
+  if the machine is Pro or Enterprise (own kernel, own firewall and CPU/RAM caps). If only Home, use WSL2 and accept the
+  risk with the other controls tight, or run sessions on a separate cheap machine. D2 now matters more.
+- **Outbound abuse:** allowlist-only egress through the proxy, no LAN, no direct internet. Package mirrors only. Free
+  web access is a later, separate decision (D4).
+- **Resource abuse:** hard CPU, RAM, disk, process and wall-clock limits per session, a global concurrency cap, and
+  automatic kill when a session goes over.
+- **Data:** nothing of the site's is reachable: no host mounts, no `config.env`, no DB, no real keys, only the
+  per-session proxy token.
+- **Blast radius:** one session per distro or VM; a session is deleted on abuse detection, not just at 48 hours.
+- **Visibility:** every command is still logged and audited (`db.audit`), and mentors can watch live, stop or delete a
+  session. Free rein means no click-to-approve, not no oversight.
 
 ## 3. Mentor-only model and provider dropdown when creating a chat
 
@@ -169,11 +191,12 @@ Do it in order, and stop after each milestone for Logan to look:
   profile is under `C:\Windows\ServiceProfiles\`), so the VM caps apply in that account's or `sandboxrunner`'s profile. Records the Windows edition and spare RAM. Go or no-go for M4.
 - **M4 Sandbox controller (about 3 days).** `sandbox.py`: import, exec, limits, reaper, startup reconcile,
   `sandbox_sessions` migration, audit entries, a fake sandbox for tests so the suite stays offline. Still
-  mentor-only, per-step approval unchanged.
+  mentor-only first so the isolation can be proven before students get it; per-step approval is removed inside the
+  sandbox here (Logan's decision).
 - **M5 Egress proxy and secrets (about 2 days).** Allowlist proxy with per-session tokens, host firewall rule,
   revocation at expiry, checker in the Settings overview.
 - **M6 Wider tools and student access (about 3 days).** Add shell, git, toolchains, read-only repo connector; student
-  start with mentor approval of the request; tiered auto-run depending on Decision D1; session list and "ends in 41
+  start with mentor approval of the request; free-rein commands for students; session list and "ends in 41
   hours" notice; patch export before deletion.
 
 ## Risks
@@ -186,7 +209,8 @@ Do it in order, and stop after each milestone for Logan to look:
 - Resource exhaustion on a shared mini PC: one runaway build could slow the whole site. Mitigation: VM caps, per-session
   cgroups, concurrency limit, spend cap.
 - Cost: more tools means more model turns per student. Needs a per-student daily cap before M6.
-- Letting commands run without a mentor click is a real change to the approval model (D1).
+- Letting commands run without a mentor click is a real change to the approval model. Logan chose it on 2026-11-01;
+  the cost is that isolation must be strong, so Hyper-V is preferred over WSL when available.
 - Unsafe or unchecked models appearing in a dropdown. Mitigation: only checked models, re-check at send time.
 - Stale model list and missing provider keys causing failures at send time. Mitigation: filter by key, refresh.
 - Distros left behind after a crash. Mitigation: startup reconcile and a periodic reaper.
@@ -194,10 +218,9 @@ Do it in order, and stop after each milestone for Logan to look:
 
 ## Decisions needed from Logan
 
-- **D1.** In a student sandbox, should commands run without a mentor click (recommended: yes for sandbox-only commands,
-  no for anything leaving the sandbox), or keep per-step approval for everything? This touches the approval flow, so
-  nothing ships until you decide.
-- **D2.** What Windows edition and version is the mini PC (Home or Pro, Windows 10 or 11)? This decides WSL vs Hyper-V.
+- **D1 (resolved 2026-11-01).** Commands inside a student sandbox run freely with no mentor click. That is why the
+  sandbox is needed.
+- **D2.** What Windows edition and version is the mini PC (Home or Pro, Windows 10 or 11)? This decides WSL vs Hyper-V, and with free rein Hyper-V is the safer choice.
 - **D3.** Is it fine to run the service, or a small sandbox helper, under a dedicated local user if M3 shows we need it?
 - **D4.** Which tools first for students: read-only repo browsing and a shell, or also package installs and web access?
 - **D5.** Should a student's Code session need a mentor to approve the starting request (recommended), and who may
