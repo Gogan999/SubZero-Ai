@@ -124,19 +124,35 @@ measuring. Another option if demand grows: run sessions on a second small machin
 - A Hyper-V **Private** switch carries traffic only between VMs; the host has no adapter on it, so the app could not
   reach the guest. The sandbox therefore uses an **Internal** switch (`szsandbox-internal`) with a host adapter at
   10.77.0.1/24, no gateway, no NAT, IP forwarding off. The guest gets a fixed address 10.77.0.<slot>.
-- An Internal switch lets a guest reach every port the host listens on (SMB, RDP and so on). The host therefore needs
-  Windows Firewall rules scoped to that adapter: block all inbound from 10.77.0.0/24 except the egress proxy port (M5).
-  The adapter's network profile is set to Public. The app never creates these rules. An administrator runs
+- An Internal switch lets a guest reach every port the host listens on (SMB, RDP and so on) and every IPv6 address.
+  The host therefore firewalls the sandbox adapter with six `szsandbox-*` inbound rules, all `-RemoteAddress Any` (except
+  the allow), `-Profile Any` and `-InterfaceAlias` the adapter:
+  - `szsandbox-block-tcp-below` (TCP 1 to proxy port minus 1) and `szsandbox-block-tcp-above` (TCP proxy port plus 1 to
+    65535) block TCP on every port except the proxy's. A range that would be empty (proxy port 1 or 65535) is left out.
+  - `szsandbox-block-udp`, `szsandbox-block-icmp4` and `szsandbox-block-icmp6` block those protocols whole.
+  - `szsandbox-allow-proxy` allows only TCP to the proxy port, from 10.77.0.0/24.
+  Windows Firewall gives a block rule priority over an allow rule, so a block that covered the proxy port would stop the
+  allow working. That is why the TCP blocks are split around the proxy port: the only port left open is the proxy's.
+  Other IP protocols (GRE, ESP and so on) are not named here; they fall under the Windows Firewall default inbound
+  action. The check does not read that default, so M3b must confirm it is Block for the Public profile.
+- IPv6 is switched off at both ends. The install script unbinds TCP/IPv6 (`ms_tcpip6`) from the host's adapter, and the
+  check requires it. The base image must also turn IPv6 off inside the guest, for example with
+  `net.ipv6.conf.all.disable_ipv6=1` in a sysctl file, so a guest never has an IPv6 address. The per-VM ACL denies IPv6
+  as a second layer (below).
+- The adapter's network profile is set to Public. The app never creates these rules. An administrator runs
   `packaging/windows/scripts/sandbox-network.ps1 -Action Install` once (it lives with the other install scripts, so
   the release zip ships it). `HyperVSandbox.create` runs the read-only host check first (`host_network_check_script`
   in `subzero_ai/sandbox.py`) and refuses to make a sandbox until it passes; a pass is kept for 60 seconds, a failure
-  never. The Settings overview shows the same check, as a failure with the fix when it doesn't pass.
-  Open issue for M5: Windows Firewall gives a block rule priority over an allow rule, so `szsandbox-allow-proxy` does
-  nothing while `szsandbox-block-inbound` covers every port. Before the proxy is built, the block rule has to leave the
-  proxy port out (or the proxy must sit on another address). Until then, the proxy port is blocked, which fails closed.
-- Sessions must not reach each other: each VM adapter gets a static MAC, DHCP and router guard, and extended ACLs that
-  allow only 10.77.0.1/32 and deny the rest of 10.77.0.0/24. The cmdlets are written but unverified until the M3b test
-  on the mini PC.
+  never. The check names each missing or wrong rule (`block-rule-missing:<rule name>`, `proxy-rule-wrong`,
+  `ipv6-enabled` and so on). The Settings overview shows the same check, as a failure with the fix when it doesn't pass.
+  The problem codes, rule names and PowerShell address helpers are kept identical in `sandbox.py` and the script by
+  `SandboxNetworkDriftTest` in `tests/test_sandbox.py`.
+  Firewall addresses are compared in prefix form. Windows may report a subnet as `10.77.0.0/255.255.255.0`, so both
+  scripts convert that to `10.77.0.0/24` before comparing.
+- Sessions must not reach each other: each VM adapter gets a static MAC, DHCP and router guard, and extended ACLs
+  (weights in brackets): allow 10.77.0.1/32 (200), deny 10.77.0.0/24 (100), and deny all IPv6, `::/0` (150), so no guest
+  can reach another over an fe80:: link-local address. The cmdlets are written but unverified until the M3b test on the
+  mini PC. Read the rules back with `Get-VMNetworkAdapterExtendedAcl` there.
 - The guest is driven over SSH from the host with a per-session host key (scanned once over the host-only link) and
   `StrictHostKeyChecking=yes`. Guest output is streamed into a bounded tail and archives are capped, so a guest cannot
   fill the host's memory or disk.

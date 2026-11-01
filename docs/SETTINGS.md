@@ -82,8 +82,10 @@ powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Ins
 ```
 
 It creates the internal switch if it's missing, gives the host's adapter for it 10.77.0.1/24 with no gateway, turns
-IP forwarding off on it, sets its network profile to Public, and adds the firewall rules `szsandbox-block-inbound`
-and `szsandbox-allow-proxy`. It changes nothing else: other adapters, switches, VMs and rules are never touched. The
+IP forwarding and IPv6 off on it, sets its network profile to Public, and adds the firewall rules that block all
+inbound traffic to the sandboxes except the proxy port (`szsandbox-block-tcp-below`, `szsandbox-block-tcp-above`,
+`szsandbox-block-udp`, `szsandbox-block-icmp4`, `szsandbox-block-icmp6`) and the one that allows the proxy port
+(`szsandbox-allow-proxy`). It changes nothing else: other adapters, switches, VMs and rules are never touched. The
 app never runs it. `-Action Check` lists anything missing, and `-Action Remove` deletes the sandbox rules and the switch
 (it refuses while a VM still uses the switch). If you change `SANDBOX_SWITCH` or `SANDBOX_PROXY_PORT`, run `-Action
 Install` again with the same `-Switch` and `-ProxyPort`.

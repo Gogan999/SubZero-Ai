@@ -29,6 +29,8 @@ from subzero_ai.db import MIGRATIONS, Database
 from subzero_ai.sandbox import (
     NETWORK_CHECK_MARK,
     NETWORK_OK_SECONDS,
+    NETWORK_CHECK_HELPERS,
+    NETWORK_CODE_PREFIXES,
     NETWORK_PROBLEMS,
     PREFIX,
     UNREADABLE_CHECK,
@@ -39,6 +41,7 @@ from subzero_ai.sandbox import (
     SandboxRefused,
     check_adapters,
     child_disk_path,
+    block_rule_specs,
     describe_network_problem,
     guest_address,
     host_key_line,
@@ -313,7 +316,9 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertIn("Add-VMNetworkAdapterExtendedAcl", script)
         self.assertIn("-Action Allow -Direction Both -RemoteIPAddress '10.77.0.1/32' -Weight 200", script)
         self.assertIn("-Action Deny -Direction Both -RemoteIPAddress '10.77.0.0/24' -Weight 100", script)
+        self.assertIn("-Action Deny -Direction Both -RemoteIPAddress '::/0' -Weight 150", script)
         self.assertLess(script.index("-Action Allow"), script.index("-Action Deny"), "the host is allowed first")
+        self.assertLess(script.index("-Weight 200"), script.index("'::/0'"), "the IPv6 deny is below the host allow")
         self.assertNotIn("-Action Allow -Direction Both -RemoteIPAddress '10.77.0.0/24'", script)
         self.assertNotIn("Remove-", script)
         with self.assertRaises(SandboxError):
@@ -1083,11 +1088,36 @@ class HostNetworkCheckScriptTest(unittest.TestCase):
         for text in ("Get-VMSwitch -Name 'szsandbox-internal'", "'vEthernet (szsandbox-internal)'",
                      "-ne 'Internal'", "'10.77.0.1'", "PrefixLength -eq 24", "'0.0.0.0/0'",
                      "Forwarding -ne 'Disabled'", "NetworkCategory -eq 'Public'",
-                     "'szsandbox-block-inbound'", "'szsandbox-allow-proxy'", "'10.77.0.0/24'", "'8080'",
-                     "Get-NetFirewallInterfaceFilter", "Get-NetFirewallAddressFilter", "Get-NetFirewallPortFilter",
-                     "'open-allow:'", "135, 139, 445, 3389, 5985"):
+                     "'szsandbox-block-tcp-below'", "'szsandbox-block-tcp-above'", "'szsandbox-block-udp'",
+                     "'szsandbox-block-icmp4'", "'szsandbox-block-icmp6'", "'szsandbox-allow-proxy'",
+                     "'10.77.0.0/24'", "'1-8079'", "'8081-65535'", "'8080'", "'Any'", "-ComponentID ms_tcpip6",
+                     "Get-NetAdapterBinding", "'ipv6-enabled'", "Get-NetFirewallInterfaceFilter",
+                     "Get-NetFirewallAddressFilter", "Get-NetFirewallPortFilter", "'open-allow:'",
+                     "135, 139, 445, 3389, 5985"):
             self.assertIn(text, script)
         self.assertNotIn("'3128'", script, "the proxy port comes from the setting")
+        self.assertNotIn("szsandbox-block-inbound", script, "the old single block rule is gone")
+
+    def test_remote_addresses_are_compared_in_either_form(self):
+        script = host_network_check_script("szsandbox-internal", 3128)
+        self.assertIn(NETWORK_CHECK_HELPERS, script)
+        self.assertNotIn("ForEach-Object { $_.RemoteAddress }", script, "raw addresses are never compared")
+        self.assertGreaterEqual(script.count("Get-RemoteAddresses $rule"), 3)
+
+    def test_the_block_rules_follow_the_proxy_port_and_skip_empty_ranges(self):
+        self.assertEqual([(n, p, r) for n, p, r in block_rule_specs(3128)], [
+            ("szsandbox-block-tcp-below", "TCP", "1-3127"), ("szsandbox-block-tcp-above", "TCP", "3129-65535"),
+            ("szsandbox-block-udp", "UDP", None), ("szsandbox-block-icmp4", "ICMPv4", None),
+            ("szsandbox-block-icmp6", "ICMPv6", None)])
+        self.assertNotIn("szsandbox-block-tcp-below", [n for n, _, _ in block_rule_specs(1)],
+                         "port 1 has no range below")
+        self.assertNotIn("szsandbox-block-tcp-above", [n for n, _, _ in block_rule_specs(65535)],
+                         "port 65535 has no range above")
+        self.assertIn("1-65534", [r for _, _, r in block_rule_specs(65535)])
+        self.assertEqual(len(block_rule_specs(1)), 4)
+        script = host_network_check_script("szsandbox-internal", 1)
+        self.assertNotIn("'1-0'", script)
+        self.assertIn("LocalPort = $null", script)
 
     def test_a_switch_name_with_a_line_break_is_refused(self):
         with self.assertRaises(SandboxError):
@@ -1104,6 +1134,13 @@ class HostNetworkParserTest(unittest.TestCase):
             self.assertEqual(parse_host_network_check(f'["{code}"]'), [words])
             self.assertNotIn("$", words)
             self.assertNotIn("PowerShell", words)
+
+    def test_each_block_rule_code_has_plain_words(self):
+        for name, _, _ in block_rule_specs(3128):
+            [words] = parse_host_network_check(f'["block-rule-missing:{name}"]')
+            self.assertIn(name, words)
+            self.assertIn("missing", words)
+            self.assertNotIn("$", words)
 
     def test_a_failing_sample_lists_each_problem(self):
         output = '["forwarding-on","open-allow:Remote Desktop (TCP-In)"]'
@@ -1284,7 +1321,8 @@ class SandboxNetworkScriptTest(unittest.TestCase):
         self.assertIn('if (-not $Switch.StartsWith($Prefix))', text)
         self.assertIn('$_.DisplayName -like "$Prefix*"', text)
         self.assertNotIn("Set-NetAdapter", text)
-        self.assertNotIn("Disable-NetAdapter", text)
+        self.assertIsNone(re.search(r"Disable-NetAdapter\s", text), "only the IPv6 binding is ever disabled")
+        self.assertIn("Disable-NetAdapterBinding -Name $Alias -ComponentID ms_tcpip6", text)
         # The firewall rules removed are only the ones Get-SandboxRules returns, and the switch removed is ours
         self.assertEqual(text.count("Remove-VMSwitch"), 1)
         self.assertIn("Get-SandboxRules | Remove-NetFirewallRule", text)
@@ -1292,13 +1330,54 @@ class SandboxNetworkScriptTest(unittest.TestCase):
 
     def test_its_names_and_addresses_match_the_app(self):
         text = self.text()
-        for name in ("10.77.0.0/24", "10.77.0.1", "vEthernet ($Switch)", "szsandbox-block-inbound",
-                     "szsandbox-allow-proxy", '$Prefix = "szsandbox-"'):
+        for name in ("10.77.0.0/24", "10.77.0.1", "vEthernet ($Switch)", "szsandbox-block-tcp-below",
+                     "szsandbox-block-tcp-above", "szsandbox-block-udp", "szsandbox-block-icmp4",
+                     "szsandbox-block-icmp6", "szsandbox-allow-proxy", '$Prefix = "szsandbox-"'):
             self.assertIn(name, text)
         self.assertEqual(sandbox.HOST_ADDRESS, "10.77.0.1")
         self.assertEqual(sandbox.GUEST_SUBNET, "10.77.0.0/24")
         self.assertEqual(sandbox.HOST_VNIC_NAME.format("szsandbox-internal"), "vEthernet (szsandbox-internal)")
         self.assertEqual(sandbox.PREFIX, "szsandbox-")
+
+
+# --------------------------------------------------------------------------- the script and the app stay in step
+def ps1_text() -> str:
+    return SandboxNetworkScriptTest.SCRIPT.read_text(encoding="utf-8")
+
+
+class SandboxNetworkDriftTest(unittest.TestCase):
+    """sandbox.py and sandbox-network.ps1 both run the host check. These tests fail when one changes and the other
+    does not: the problem codes, the messages, the firewall rule names and the shared PowerShell helpers."""
+    CODE = re.compile(r"Add\(\s*['\"]([a-z][a-z0-9:-]*)")
+
+    def expected_codes(self) -> set[str]:
+        return set(NETWORK_PROBLEMS) | set(NETWORK_CODE_PREFIXES)
+
+    def test_the_script_and_the_app_use_the_same_problem_codes(self):
+        self.assertEqual(set(self.CODE.findall(ps1_text())), self.expected_codes())
+        self.assertEqual(set(self.CODE.findall(host_network_check_script("szsandbox-internal", 3128))),
+                         self.expected_codes())
+
+    def test_the_script_has_plain_words_for_every_fixed_code(self):
+        messages = set(re.findall(r"^\s*'([a-z0-9-]+)'\s*=", ps1_text(), flags=re.MULTILINE))
+        self.assertEqual(messages, set(NETWORK_PROBLEMS))
+
+    def test_the_rule_names_match_the_app_constants(self):
+        names = set(re.findall(r'"(szsandbox-(?:block|allow)-[a-z0-9-]+)"', ps1_text()))
+        self.assertEqual(names, {sandbox.BLOCK_TCP_BELOW, sandbox.BLOCK_TCP_ABOVE, sandbox.BLOCK_UDP,
+                                 sandbox.BLOCK_ICMP4, sandbox.BLOCK_ICMP6, sandbox.PROXY_RULE})
+        for port in (1, 3128, 65535):
+            for name, _, _ in block_rule_specs(port):
+                self.assertIn(f"'{name}'", host_network_check_script("szsandbox-internal", port))
+
+    def test_the_address_helpers_are_identical_in_both(self):
+        self.assertIn(NETWORK_CHECK_HELPERS, ps1_text())
+        self.assertIn("ConvertTo-Cidr", NETWORK_CHECK_HELPERS)
+        self.assertIn(NETWORK_CHECK_HELPERS, host_network_check_script("szsandbox-internal", 3128))
+
+    def test_the_block_rule_codes_are_described(self):
+        for code in NETWORK_CODE_PREFIXES:
+            self.assertTrue(describe_network_problem(code + "x") != "", code)
 
 
 if __name__ == "__main__":
