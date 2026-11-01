@@ -142,7 +142,7 @@ function Get-SandboxProblems {
             if (-not $binding -or $binding.Enabled) { $problems.Add('ipv6-enabled') }
         }
 
-        $publicProfile = Get-NetFirewallProfile -Profile Public -ErrorAction Stop
+        $publicProfile = Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop
         if ($publicProfile.DefaultInboundAction -eq "Allow") { $problems.Add('default-inbound-allow') }
 
         # Each enabled sandbox rule's filters are fetched once, into $infos, and every check reads from that list

@@ -674,7 +674,7 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
         "    $binding = Get-NetAdapterBinding -Name $alias -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue",
         "    if (-not $binding -or $binding.Enabled) { $problems.Add('ipv6-enabled') }",
         "  }",
-        "  $publicProfile = Get-NetFirewallProfile -Profile Public -ErrorAction Stop",
+        "  $publicProfile = Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop",
         "  if ($publicProfile.DefaultInboundAction -eq 'Allow') { $problems.Add('default-inbound-allow') }",
         "  # Only the szsandbox-* rules are read, and each rule's filters are fetched once, into $infos",
         "  $rules = @(Get-NetFirewallRule -DisplayName 'szsandbox-*' -ErrorAction SilentlyContinue | Where-Object {",

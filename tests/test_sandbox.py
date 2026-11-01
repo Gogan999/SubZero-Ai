@@ -1098,7 +1098,7 @@ class HostNetworkCheckScriptTest(unittest.TestCase):
                      "'10.77.0.0/24'", "'1-8079'", "'8081-65535'", "'8080'", "'Any'", "-ComponentID ms_tcpip6",
                      "Get-NetAdapterBinding", "'ipv6-enabled'", "Get-NetFirewallInterfaceFilter",
                      "Get-NetFirewallAddressFilter", "Get-NetFirewallPortFilter", "-DisplayName 'szsandbox-*'",
-                     "Get-NetFirewallProfile -Profile Public -ErrorAction Stop",
+                     "Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop",
                      "DefaultInboundAction -eq 'Allow'", "'default-inbound-allow'"):
             self.assertIn(text, script)
         self.assertNotIn("'3128'", script, "the proxy port comes from the setting")
