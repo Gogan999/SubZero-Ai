@@ -27,7 +27,11 @@ from subzero_ai.code_runner import SANDBOX_ENV
 from subzero_ai.config import Settings, load_settings
 from subzero_ai.db import MIGRATIONS, Database
 from subzero_ai.sandbox import (
+    NETWORK_CHECK_MARK,
+    NETWORK_OK_SECONDS,
+    NETWORK_PROBLEMS,
     PREFIX,
+    UNREADABLE_CHECK,
     FakeSandbox,
     HyperVSandbox,
     SandboxError,
@@ -35,11 +39,15 @@ from subzero_ai.sandbox import (
     SandboxRefused,
     check_adapters,
     child_disk_path,
+    describe_network_problem,
     guest_address,
     host_key_line,
+    host_network_check_script,
+    host_network_problems,
     isolation_script,
     mac_for_slot,
     pack_tree,
+    parse_host_network_check,
     ps_quote,
     reap_sandboxes,
     ssh_argv,
@@ -52,6 +60,7 @@ from .test_features import FakeResponse, FakeWeb, repo_zip
 BASE = "/srv/sandbox/base.vhdx"
 SWITCH = "szsandbox-internal"
 GOOD_ADAPTERS = '[{"Name":"Network Adapter","SwitchName":"szsandbox-internal"}]'
+PASSING_NETWORK = "[]"  # the host network check's output when everything is in place
 DESTRUCTIVE = ("Remove-Item", "Remove-VM", "Stop-VM", "Set-VHD", "Optimize-VHD", "Convert-VHD", "Resize-VHD")
 # Known-hosts files for the fake sandboxes go here, never under the base image's folder
 KNOWN_ROOT = Path(tempfile.mkdtemp(prefix="sandbox-known-test-"))
@@ -196,7 +205,7 @@ class FakeHost:
     """Stands in for PowerShell, ssh-keyscan and SSH. Records every script and command; never runs anything."""
 
     def __init__(self, adapters: str = GOOD_ADAPTERS, vms: str = "[]", ssh_codes: dict[str, int] | None = None,
-                 keyscan_answers: int = 0):
+                 keyscan_answers: int = 0, network: str | Exception = PASSING_NETWORK):
         self.scripts: list[str] = []
         self.remote: list[tuple[str, str]] = []
         self.known_hosts: list[str] = []
@@ -204,9 +213,16 @@ class FakeHost:
         self.adapters, self.vms = adapters, vms
         self.ssh_codes = ssh_codes or {}
         self.keyscan_silent_for = keyscan_answers  # the first this-many keyscans get no answer (still booting)
+        self.network = network  # what the host network check answers, or the error it raises
+        self.network_checks = 0
 
     def powershell(self, script: str) -> str:
         self.scripts.append(script)
+        if NETWORK_CHECK_MARK in script:
+            self.network_checks += 1
+            if isinstance(self.network, Exception):
+                raise self.network
+            return self.network
         if script.startswith("Get-VMNetworkAdapter") or "Get-VMNetworkAdapter -VMName" in script:
             return self.adapters
         if "Select-Object -ExpandProperty Name" in script:
@@ -558,6 +574,9 @@ class SharedBackendTest(unittest.TestCase):
         self.assertIs(self.manager.backend("hyperv"), hyperv_first)
         settings.sandbox_switch = "szsandbox-other"
         self.assertIsNot(self.manager.backend("hyperv"), hyperv_first, "the switch is a backend setting")
+        hyperv_second = self.manager.backend("hyperv")
+        settings.sandbox_proxy_port = 8080
+        self.assertIsNot(self.manager.backend("hyperv"), hyperv_second, "the proxy port is a backend setting")
         self.assertIs(self.manager.backend("fake"), first, "the other kind is not rebuilt")
         self.assertEqual(self.manager.backend("hyperv").known_dir, settings.data_dir / "sandbox" / "known_hosts")
 
@@ -722,6 +741,7 @@ class SandboxSettingsTest(unittest.TestCase):
         self.assertEqual((fresh.sandbox_ttl_hours, fresh.sandbox_max_sessions), (48, 3))
         self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (2048, 2, 10))
         self.assertEqual((fresh.sandbox_min_free_gb, fresh.sandbox_switch), (20, "szsandbox-internal"))
+        self.assertEqual(fresh.sandbox_proxy_port, 3128)
 
     def test_valid_values_are_accepted(self):
         values, errors = saved_settings.validate("code", self.form(
@@ -744,6 +764,7 @@ class SandboxSettingsTest(unittest.TestCase):
             "sandbox_min_free_gb": ["0"],
             "sandbox_base_image": ["relative\\base.vhdx", "C:\\x;del *", "C:\\it's.vhdx", "C:\\a\nb.vhdx"],
             "sandbox_switch": ["", "bad;name", "a" * 64, "Default Switch;"],
+            "sandbox_proxy_port": ["0", "65536", "http"],
         }
         for name, bad_values in cases.items():
             for bad in bad_values:
@@ -1046,6 +1067,238 @@ class SandboxCodeSessionTest(unittest.TestCase):
         self.h.idle()
         self.assertEqual(self.code.get(sid)["status"], "done")
         self.assertIsNone(self.live(sid), "nothing ran, so no sandbox was needed")
+
+
+# --------------------------------------------------------------------------- the host's network check
+class HostNetworkCheckScriptTest(unittest.TestCase):
+    def test_the_check_only_reads(self):
+        script = host_network_check_script("szsandbox-internal", 3128)
+        self.assertTrue(script.startswith(NETWORK_CHECK_MARK))
+        script = script.replace("New-Object", "")  # an in-memory list, not a change on the host
+        for verb in ("New-", "Set-", "Remove-", "Add-", "Start-", "Stop-", "Enable-", "Disable-", "Rename-"):
+            self.assertNotIn(verb, script, f"the check must not run {verb}")
+
+    def test_the_check_covers_the_switch_the_address_forwarding_profile_and_rules(self):
+        script = host_network_check_script("szsandbox-internal", 8080)
+        for text in ("Get-VMSwitch -Name 'szsandbox-internal'", "'vEthernet (szsandbox-internal)'",
+                     "-ne 'Internal'", "'10.77.0.1'", "PrefixLength -eq 24", "'0.0.0.0/0'",
+                     "Forwarding -ne 'Disabled'", "NetworkCategory -eq 'Public'",
+                     "'szsandbox-block-inbound'", "'szsandbox-allow-proxy'", "'10.77.0.0/24'", "'8080'",
+                     "Get-NetFirewallInterfaceFilter", "Get-NetFirewallAddressFilter", "Get-NetFirewallPortFilter",
+                     "'open-allow:'", "135, 139, 445, 3389, 5985"):
+            self.assertIn(text, script)
+        self.assertNotIn("'3128'", script, "the proxy port comes from the setting")
+
+    def test_a_switch_name_with_a_line_break_is_refused(self):
+        with self.assertRaises(SandboxError):
+            host_network_check_script("szsandbox-x\nRemove-VM", 3128)
+
+
+class HostNetworkParserTest(unittest.TestCase):
+    def test_an_empty_list_means_ready(self):
+        self.assertEqual(parse_host_network_check("[]"), [])
+        self.assertEqual(parse_host_network_check(" []\r\n"), [])
+
+    def test_each_problem_code_has_plain_words(self):
+        for code, words in NETWORK_PROBLEMS.items():
+            self.assertEqual(parse_host_network_check(f'["{code}"]'), [words])
+            self.assertNotIn("$", words)
+            self.assertNotIn("PowerShell", words)
+
+    def test_a_failing_sample_lists_each_problem(self):
+        output = '["forwarding-on","open-allow:Remote Desktop (TCP-In)"]'
+        problems = parse_host_network_check(output)
+        self.assertEqual(len(problems), 2)
+        self.assertIn("forwarding", problems[0])
+        self.assertIn("'Remote Desktop (TCP-In)'", problems[1])
+        self.assertIn("other computers", problems[1])
+
+    def test_a_single_json_string_is_one_problem(self):
+        self.assertEqual(parse_host_network_check('"host-gateway"'), [NETWORK_PROBLEMS["host-gateway"]])
+
+    def test_an_error_inside_the_check_is_reported(self):
+        [problem] = parse_host_network_check('["check-failed:Access is denied"]')
+        self.assertIn("Access is denied", problem)
+
+    def test_unknown_codes_are_still_reported(self):
+        self.assertIn("doesn't know how to describe", describe_network_problem("made-up-code"))
+
+    def test_output_that_is_not_a_list_of_codes_fails_closed(self):
+        for output in ("", "   ", "null", "not json", '{"ok": true}', "[1, 2]", "[null]", "true"):
+            self.assertEqual(parse_host_network_check(output), [UNREADABLE_CHECK], repr(output))
+
+
+class HostNetworkRunnerTest(unittest.TestCase):
+    def test_a_powershell_error_is_a_problem_not_a_pass(self):
+        def boom(script):
+            raise SandboxError("Access is denied")
+        [problem] = host_network_problems("szsandbox-internal", 3128, boom)
+        self.assertIn("Access is denied", problem)
+
+    def test_any_exception_fails_closed(self):
+        def boom(script):
+            raise OSError("powershell.exe not found")
+        [problem] = host_network_problems("szsandbox-internal", 3128, boom)
+        self.assertIn("powershell.exe not found", problem)
+
+    def test_silence_fails_closed(self):
+        self.assertEqual(host_network_problems("szsandbox-internal", 3128, lambda script: ""), [UNREADABLE_CHECK])
+
+    def test_the_script_is_built_for_the_given_switch_and_port(self):
+        seen = []
+        host_network_problems("szsandbox-other", 9000, lambda script: seen.append(script) or "[]")
+        self.assertIn("Get-VMSwitch -Name 'szsandbox-other'", seen[0])
+        self.assertIn("'9000'", seen[0])
+
+
+class HyperVNetworkGuardTest(unittest.TestCase):
+    """HyperVSandbox.create runs the host check first. A failed check refuses the sandbox before any VM is made."""
+
+    def refused_with(self, network, **overrides) -> tuple[FakeHost, SandboxRefused]:
+        host = FakeHost(network=network)
+        with self.assertRaises(SandboxRefused) as caught:
+            hyperv(host, **overrides).create(7)
+        return host, caught.exception
+
+    def assert_nothing_was_made(self, host: FakeHost) -> None:
+        self.assertEqual(host.network_checks, 1)
+        self.assertTrue(all(NETWORK_CHECK_MARK in s for s in host.scripts), "only the check ran")
+        self.assertEqual(host.remote, [])
+
+    def test_create_is_refused_on_each_kind_of_problem(self):
+        for code in NETWORK_PROBLEMS:
+            with self.subTest(code=code):
+                host, error = self.refused_with(f'["{code}"]')
+                self.assertIn("The sandbox network isn't locked down yet: " + NETWORK_PROBLEMS[code], str(error))
+                self.assertIn("an administrator needs to run the sandbox network setup script", str(error))
+                self.assert_nothing_was_made(host)
+
+    def test_several_problems_are_all_named(self):
+        _, error = self.refused_with('["switch-missing","host-gateway","open-allow:Remote Desktop"]')
+        self.assertIn("The sandbox switch doesn't exist yet; The host's adapter", str(error))
+        self.assertIn("'Remote Desktop'", str(error))
+
+    def test_a_powershell_error_refuses_the_sandbox(self):
+        host, error = self.refused_with(SandboxError("The Hyper-V service is stopped"))
+        self.assertIn("The Hyper-V service is stopped", str(error))
+        self.assert_nothing_was_made(host)
+
+    def test_a_passing_check_is_trusted_for_a_minute(self):
+        clock = [1000.0]
+        fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=time.sleep)
+        host = FakeHost()
+        backend = hyperv(host)
+        with mock.patch.object(sandbox, "time", fake_time):
+            backend.create(1)
+            backend.create(2)
+            self.assertEqual(host.network_checks, 1, "the second create reused the pass")
+            clock[0] += NETWORK_OK_SECONDS - 1
+            backend.create(3)
+            self.assertEqual(host.network_checks, 1)
+            clock[0] += 2
+            backend.create(4)
+            self.assertEqual(host.network_checks, 2, "after the window the check runs again")
+
+    def test_a_failure_is_never_kept(self):
+        host = FakeHost(network='["host-gateway"]')
+        backend = hyperv(host)
+        with self.assertRaises(SandboxRefused):
+            backend.create(1)
+        host.network = PASSING_NETWORK  # an administrator fixes it
+        backend.create(2)
+        self.assertEqual(host.network_checks, 2, "the fix counts at once, with no wait")
+
+    def test_the_proxy_port_is_passed_to_the_check(self):
+        host = FakeHost()
+        hyperv(host, proxy_port=8080).create(1)
+        self.assertIn("'8080'", host.scripts[0])
+
+    def test_the_fake_sandbox_has_no_network_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = FakeSandbox(Path(tmp))
+            fake.check_network()
+            handle = fake.create(3)
+            self.assertTrue((Path(tmp) / handle.name).is_dir())
+            fake.destroy(handle)
+
+
+class SandboxNetworkManagerTest(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness(code_sandbox="hyperv", sandbox_base_image=BASE, sandbox_min_free_gb=0,
+                         sandbox_max_sessions=5)
+        self.services = self.h.services
+        self.db = self.services.db
+        self.manager = self.services.sandboxes
+        self.owner = self.h.login(MENTOR).user["id"]
+
+    def tearDown(self):
+        self.h.close()
+
+    def make_session(self) -> int:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.db.transaction() as conn:
+            return conn.execute("INSERT INTO code_sessions (title, task, status, model, repo, created_by, created_at, "
+                                "updated_at) VALUES ('t', 't', 'running', 'anthropic/x', 'team/robot', ?, ?, ?)",
+                                (self.owner, now, now)).lastrowid
+
+    def test_a_refused_network_leaves_no_record_and_no_vm(self):
+        host = FakeHost(network='["forwarding-on"]')
+        self.manager.backend_factory = lambda kind: hyperv(host)
+        with self.assertRaises(SandboxRefused) as caught:
+            self.manager.create_for_session(self.make_session(), actor_id=self.owner)
+        self.assertIn("isn't locked down yet", str(caught.exception))
+        self.assertEqual(self.db.all("SELECT * FROM sandbox_sessions"), [])
+        self.assertNotIn("sandbox_created", [r["action"] for r in self.db.all("SELECT action FROM audit_log")])
+        self.assertFalse(any("New-VM" in s or "New-VHD" in s for s in host.scripts))
+
+    def test_a_passing_network_lets_the_sandbox_be_made(self):
+        host = FakeHost()
+        self.manager.backend_factory = lambda kind: hyperv(host)
+        handle = self.manager.create_for_session(self.make_session(), actor_id=self.owner)
+        self.assertEqual(handle.backend, "hyperv")
+        self.assertEqual(host.network_checks, 1)
+        self.assertTrue(host.sent("Start-VM"))
+
+
+# --------------------------------------------------------------------------- the administrator's setup script
+class SandboxNetworkScriptTest(unittest.TestCase):
+    SCRIPT = Path(__file__).resolve().parent.parent / "packaging" / "windows" / "scripts" / "sandbox-network.ps1"
+
+    def text(self) -> str:
+        return self.SCRIPT.read_text(encoding="utf-8")
+
+    def test_the_script_ships_with_the_windows_release(self):
+        scripts = Path(__file__).resolve().parent.parent / "packaging" / "windows" / "scripts"
+        self.assertIn("sandbox-network.ps1", [p.name for p in sorted(scripts.glob("*.ps1"))])
+        self.assertTrue(self.text().isascii(), "Windows PowerShell 5.1 reads this file as ASCII")
+
+    def test_it_needs_an_administrator_and_takes_three_actions(self):
+        text = self.text()
+        self.assertIn("#Requires -RunAsAdministrator", text)
+        self.assertIn('ValidateSet("Install", "Remove", "Check")', text)
+        self.assertIn('[string]$Switch = "szsandbox-internal"', text)
+        self.assertIn("[int]$ProxyPort = 3128", text)
+
+    def test_it_only_ever_changes_objects_named_for_the_sandboxes(self):
+        text = self.text()
+        self.assertIn('if (-not $Switch.StartsWith($Prefix))', text)
+        self.assertIn('$_.DisplayName -like "$Prefix*"', text)
+        self.assertNotIn("Set-NetAdapter", text)
+        self.assertNotIn("Disable-NetAdapter", text)
+        # The firewall rules removed are only the ones Get-SandboxRules returns, and the switch removed is ours
+        self.assertEqual(text.count("Remove-VMSwitch"), 1)
+        self.assertIn("Get-SandboxRules | Remove-NetFirewallRule", text)
+        self.assertIn("$rules | Remove-NetFirewallRule", text)
+
+    def test_its_names_and_addresses_match_the_app(self):
+        text = self.text()
+        for name in ("10.77.0.0/24", "10.77.0.1", "vEthernet ($Switch)", "szsandbox-block-inbound",
+                     "szsandbox-allow-proxy", '$Prefix = "szsandbox-"'):
+            self.assertIn(name, text)
+        self.assertEqual(sandbox.HOST_ADDRESS, "10.77.0.1")
+        self.assertEqual(sandbox.GUEST_SUBNET, "10.77.0.0/24")
+        self.assertEqual(sandbox.HOST_VNIC_NAME.format("szsandbox-internal"), "vEthernet (szsandbox-internal)")
+        self.assertEqual(sandbox.PREFIX, "szsandbox-")
 
 
 if __name__ == "__main__":

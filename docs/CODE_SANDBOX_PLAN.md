@@ -126,8 +126,14 @@ measuring. Another option if demand grows: run sessions on a second small machin
   10.77.0.1/24, no gateway, no NAT, IP forwarding off. The guest gets a fixed address 10.77.0.<slot>.
 - An Internal switch lets a guest reach every port the host listens on (SMB, RDP and so on). The host therefore needs
   Windows Firewall rules scoped to that adapter: block all inbound from 10.77.0.0/24 except the egress proxy port (M5).
-  The adapter's network profile is set to Public. Nothing in the app creates these rules yet; they are an install step
-  that an administrator runs once, and the Settings overview should warn when they are missing.
+  The adapter's network profile is set to Public. The app never creates these rules. An administrator runs
+  `packaging/windows/scripts/sandbox-network.ps1 -Action Install` once (it lives with the other install scripts, so
+  the release zip ships it). `HyperVSandbox.create` runs the read-only host check first (`host_network_check_script`
+  in `subzero_ai/sandbox.py`) and refuses to make a sandbox until it passes; a pass is kept for 60 seconds, a failure
+  never. The Settings overview shows the same check, as a failure with the fix when it doesn't pass.
+  Open issue for M5: Windows Firewall gives a block rule priority over an allow rule, so `szsandbox-allow-proxy` does
+  nothing while `szsandbox-block-inbound` covers every port. Before the proxy is built, the block rule has to leave the
+  proxy port out (or the proxy must sit on another address). Until then, the proxy port is blocked, which fails closed.
 - Sessions must not reach each other: each VM adapter gets a static MAC, DHCP and router guard, and extended ACLs that
   allow only 10.77.0.1/32 and deny the rest of 10.77.0.0/24. The cmdlets are written but unverified until the M3b test
   on the mini PC.

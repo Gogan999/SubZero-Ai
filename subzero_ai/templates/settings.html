@@ -190,7 +190,7 @@
 
   <section class="panel" id="checks" aria-labelledby="checks-title">
     <h2 id="checks-title">Check everything</h2>
-    <p class="field-hint">Runs the same checks as check-settings.cmd: the Slack tokens and review channel, each AI company's key with a tiny request (a fraction of a cent), the AI helper, and the safety check results. It tests the settings in use now, so restart first if you're waiting on one.</p>
+    <p class="field-hint">Runs the same checks as check-settings.cmd: the Slack tokens and review channel, each AI company's key with a tiny request (a fraction of a cent), the AI helper, the safety check results, and the sandbox network when Code sandboxes use Hyper-V. It tests the settings in use now, so restart first if you're waiting on one.</p>
     <form method="post" action="/settings/checks" class="form-actions">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="button" type="submit" {% if checks.running %}disabled{% endif %}>{{ 'Checks running…' if checks.running else 'Run checks' }}</button>

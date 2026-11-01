@@ -105,6 +105,7 @@ class SandboxBackend(Protocol):
     def get_archive(self, handle: SandboxHandle, *, src: str, exclude: frozenset[str]) -> bytes: ...
     def destroy(self, handle: SandboxHandle) -> None: ...
     def list_existing(self) -> list[str]: ...
+    def check_network(self) -> None: ...  # raises SandboxRefused unless the sandbox network is ready
 
 
 # --------------------------------------------------------------------------- names and paths
@@ -406,6 +407,9 @@ class FakeSandbox:
             except OSError as exc:
                 raise SandboxError(f"Couldn't delete the sandbox folder: {exc}") from exc
 
+    def check_network(self) -> None:
+        """Nothing to check: the fake sandbox runs on this computer and has no network of its own."""
+
     def list_existing(self) -> list[str]:
         if not self.root.is_dir():
             return []
@@ -532,6 +536,167 @@ def parse_vm_names(output: str) -> list[str]:
     value = json.loads(text)
     names = [value] if isinstance(value, str) else list(value or [])
     return sorted(str(n) for n in names if str(n).startswith(PREFIX))
+
+
+# --------------------------------------------------------------------------- Hyper-V: host network check
+NETWORK_OK_SECONDS = 60  # a passing host check is trusted this long, so each create doesn't run PowerShell again
+NETWORK_CHECK_MARK = "# szsandbox: host network check (read-only, changes nothing)"  # first line of the check script
+NETWORK_CHECK_SECONDS = 60  # the Settings page's check gives up after this long
+HOST_VNIC_NAME = "vEthernet ({})"  # the host's adapter for an Internal switch is named after it
+RISKY_PORTS = (135, 139, 445, 3389, 5985)  # SMB, RPC, RDP and WinRM: never open to the sandboxes
+NETWORK_PROBLEMS = {
+    "switch-missing": "The sandbox switch doesn't exist yet",
+    "switch-not-internal": "The sandbox switch isn't an Internal switch",
+    "host-adapter-missing": "The host has no network adapter for the sandbox switch",
+    "host-address": "The host's adapter for the sandboxes doesn't have the address 10.77.0.1/24",
+    "host-gateway": "The host's adapter for the sandboxes has a default gateway, and it must have none",
+    "forwarding-on": "IP forwarding is on for the host's adapter for the sandboxes, and it must be off",
+    "profile-not-public": "The network profile of the sandbox adapter isn't Public",
+    "block-rule-missing": "The firewall rule szsandbox-block-inbound (blocks inbound from 10.77.0.0/24 on the sandbox "
+                          "adapter) is missing or turned off",
+    "proxy-rule-wrong": "The firewall rule szsandbox-allow-proxy must allow only TCP to the proxy port from "
+                        "10.77.0.0/24 on the sandbox adapter",
+}
+UNREADABLE_CHECK = "The check gave an answer the app couldn't read"
+
+
+def describe_network_problem(code: str) -> str:
+    """The plain-language text for one problem code from host_network_check_script (no final full stop)."""
+    if code.startswith("open-allow:"):
+        name = code.split(":", 1)[1][:120]
+        return (f"The firewall rule '{name}' lets other computers reach this PC over the sandbox network. Turn it off, "
+                "or limit it so it doesn't apply to the sandbox adapter")
+    if code.startswith("check-failed:"):
+        return f"The check couldn't finish ({code.split(':', 1)[1].strip()[:200] or 'no reason given'})"
+    return NETWORK_PROBLEMS.get(code, f"The check found a problem it doesn't know how to describe ({code[:60]})")
+
+
+def host_network_check_script(switch: str, proxy_port: int) -> str:
+    """A read-only PowerShell check of the host's side of the sandbox network. It prints a JSON list of problem codes
+    (an empty list when everything is in place); parse_host_network_check turns them into plain words. It changes
+    nothing. UNVERIFIED on a real host: the cmdlets and their property names are untested (docs/CODE_SANDBOX_PLAN.md,
+    M3b). The same checks, with messages, are in packaging/windows/scripts/sandbox-network.ps1; keep them in step."""
+    sw = ps_quote(switch)
+    alias = ps_quote(HOST_VNIC_NAME.format(switch))
+    subnet = ps_quote(GUEST_SUBNET)
+    port = int(proxy_port)
+    risky = ", ".join(str(p) for p in RISKY_PORTS)
+    lines = [
+        NETWORK_CHECK_MARK,
+        "$ErrorActionPreference = 'Stop'",
+        "$problems = New-Object System.Collections.Generic.List[string]",
+        "try {",
+        f"  $vswitch = Get-VMSwitch -Name {sw} -ErrorAction SilentlyContinue",
+        "  if (-not $vswitch) { $problems.Add('switch-missing') }",
+        "  elseif ($vswitch.SwitchType -ne 'Internal') { $problems.Add('switch-not-internal') }",
+        f"  $alias = {alias}",
+        "  $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue",
+        "  if (-not $adapter) { $problems.Add('host-adapter-missing') } else {",
+        "    $ips = @(Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue)",
+        "    if (-not ($ips | Where-Object { $_.IPAddress -eq '10.77.0.1' -and $_.PrefixLength -eq 24 })) {",
+        "      $problems.Add('host-address')",
+        "    }",
+        "    $routes = @(Get-NetRoute -InterfaceAlias $alias -DestinationPrefix '0.0.0.0/0'"
+        " -ErrorAction SilentlyContinue)",
+        "    if ($routes.Count -gt 0) { $problems.Add('host-gateway') }",
+        "    $ipif = Get-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue",
+        "    if ($ipif -and $ipif.Forwarding -ne 'Disabled') { $problems.Add('forwarding-on') }",
+        "    $netProfile = Get-NetConnectionProfile -InterfaceAlias $alias -ErrorAction SilentlyContinue",
+        "    $isPublic = $netProfile -and ($netProfile.NetworkCategory -eq 'Public')",
+        "    if (-not $isPublic) { $problems.Add('profile-not-public') }",
+        "  }",
+        "  $rules = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object {",
+        "    $_.DisplayName -like 'szsandbox-*' -and $_.Enabled -eq 'True' })",
+        "  $blockOk = $false",
+        "  $blockRules = @($rules | Where-Object { $_.DisplayName -eq 'szsandbox-block-inbound' -and",
+        "    $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' })",
+        "  foreach ($rule in $blockRules) {",
+        "    $ifaces = @($rule | Get-NetFirewallInterfaceFilter -ErrorAction SilentlyContinue |",
+        "      ForEach-Object { $_.InterfaceAlias })",
+        "    $remotes = @($rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue |",
+        "      ForEach-Object { $_.RemoteAddress })",
+        f"    if (($ifaces -contains $alias) -and ($remotes -contains {subnet})) {{ $blockOk = $true }}",
+        "  }",
+        "  if (-not $blockOk) { $problems.Add('block-rule-missing') }",
+        "  $proxyRules = @($rules | Where-Object { $_.DisplayName -eq 'szsandbox-allow-proxy' })",
+        "  foreach ($rule in $proxyRules) {",
+        "    $ports = @($rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue)",
+        "    $ifaces = @($rule | Get-NetFirewallInterfaceFilter -ErrorAction SilentlyContinue |",
+        "      ForEach-Object { $_.InterfaceAlias })",
+        "    $remotes = @($rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue |",
+        "      ForEach-Object { $_.RemoteAddress })",
+        "    $localPorts = @($ports | ForEach-Object { [string]$_.LocalPort })",
+        "    $protocols = @($ports | ForEach-Object { [string]$_.Protocol })",
+        "    $ok = ($rule.Direction -eq 'Inbound') -and ($rule.Action -eq 'Allow') -and ($protocols -contains 'TCP') `",
+        f"      -and ($localPorts -contains '{port}') -and ($localPorts.Count -eq 1) `",
+        f"      -and ($ifaces -contains $alias) -and ($remotes -contains {subnet})",
+        "    if (-not $ok) { $problems.Add('proxy-rule-wrong') }",
+        "  }",
+        "  $allows = @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True"
+        " -ErrorAction SilentlyContinue)",
+        "  foreach ($rule in $allows) {",
+        "    if ($rule.DisplayName -like 'szsandbox-*') { continue }",
+        "    $profileText = [string]$rule.Profile",
+        "    if (($profileText -notmatch 'Public') -and ($profileText -notmatch 'Any')) { continue }",
+        "    $ports = @($rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue)",
+        "    if (@($ports | Where-Object { [string]$_.Protocol -match '^ICMP' }).Count -gt 0) { continue }",
+        "    $ifaces = @($rule | Get-NetFirewallInterfaceFilter -ErrorAction SilentlyContinue |",
+        "      ForEach-Object { $_.InterfaceAlias })",
+        "    $ifaceOk = ($ifaces.Count -eq 0) -or ($ifaces -contains 'Any') -or ($ifaces -contains $alias)",
+        "    if (-not $ifaceOk) { continue }",
+        "    $remotes = @($rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue |",
+        "      ForEach-Object { $_.RemoteAddress })",
+        "    $remoteOk = ($remotes.Count -eq 0) -or ($remotes -contains 'Any') -or ($remotes -contains 'LocalSubnet')",
+        "    if (-not $remoteOk) { continue }",
+        "    $wide = $false",
+        "    foreach ($spec in @($ports | ForEach-Object { [string]$_.LocalPort })) {",
+        "      if (($spec -eq 'Any') -or ($spec -eq '')) { $wide = $true }",
+        "      elseif ($spec -match '^(\\d+)(?:-(\\d+))?$') {",
+        "        $lo = [int]$Matches[1]",
+        "        $hi = $lo",
+        "        if ($Matches[2]) { $hi = [int]$Matches[2] }",
+        f"        foreach ($p in @({risky})) {{ if (($p -ge $lo) -and ($p -le $hi)) {{ $wide = $true }} }}",
+        "      }",
+        "    }",
+        "    if ($wide) { $problems.Add('open-allow:' + $rule.DisplayName) }",
+        "  }",
+        "} catch {",
+        "  $problems.Add('check-failed:' + ($_.Exception.Message -replace '[\\r\\n]+', ' '))",
+        "}",
+        "ConvertTo-Json -Compress -InputObject @($problems.ToArray())",
+    ]
+    return "\n".join(lines)
+
+
+def parse_host_network_check(output: str) -> list[str]:
+    """Plain-language problems from the check's output. An empty list means the sandbox network is ready. Output that
+    isn't a JSON list of codes (or nothing at all) is a problem too: the check fails closed."""
+    text = (output or "").strip()
+    try:
+        codes = json.loads(text) if text else None
+    except ValueError:
+        codes = None
+    if isinstance(codes, str):
+        codes = [codes]
+    if not isinstance(codes, list) or not all(isinstance(code, str) for code in codes):
+        return [UNREADABLE_CHECK]
+    return [describe_network_problem(code) for code in codes]
+
+
+def host_network_problems(switch: str, proxy_port: int, run_powershell: Callable[[str], str]) -> list[str]:
+    """Run the host check and return its problems. Any error while running it is itself a problem (fail closed)."""
+    try:
+        output = run_powershell(host_network_check_script(switch, proxy_port))
+    except Exception as exc:
+        return [describe_network_problem(f"check-failed:{str(exc) or type(exc).__name__}")]
+    return parse_host_network_check(output)
+
+
+def network_refusal(problems: list[str]) -> str:
+    """The message a sandbox gets when the host network check doesn't pass."""
+    reasons = "; ".join(problem.rstrip(".") for problem in problems)
+    return (f"The sandbox network isn't locked down yet: {reasons}; an administrator needs to run the sandbox network "
+            "setup script (sandbox-network.ps1 in the SubZero AI folder, with -Action Install).")
 
 
 # --------------------------------------------------------------------------- Hyper-V: guest commands
@@ -666,12 +831,12 @@ def default_run_keyscan(address: str) -> bytes:
     return proc.stdout[:4096] if proc.returncode == 0 else b""
 
 
-def default_run_powershell(script: str) -> str:
+def default_run_powershell(script: str, timeout: int = 900) -> str:
     """Run a PowerShell script on the host and return its output. Needs an elevated PowerShell (M3). The script is
     passed encoded, so its line breaks and quotes survive the trip to powershell.exe."""
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     proc = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                           "-EncodedCommand", encoded], capture_output=True, text=True, timeout=900)
+                           "-EncodedCommand", encoded], capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
         raise SandboxError((proc.stderr or proc.stdout or "PowerShell failed").strip()[-400:])
     return proc.stdout
@@ -707,7 +872,7 @@ class HyperVSandbox:
                  run_keyscan: Callable[[str], bytes] | None = None,
                  run_ssh: Callable[..., tuple[int, bytes, bytes]] | None = None,
                  ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep,
-                 archive_limit: int = MAX_SESSION_BYTES):
+                 archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128):
         if not base_image:
             raise SandboxRefused("Set the sandbox base image in Settings first.")
         self.base_image = base_image
@@ -721,9 +886,11 @@ class HyperVSandbox:
         self.ready_seconds = ready_seconds
         self.sleep = sleep
         self.archive_limit = archive_limit
-        self._lock = threading.Lock()  # guards _killed and _reserved only; never held across a VM or SSH call
+        self.proxy_port = proxy_port
+        self._lock = threading.Lock()  # guards _killed, _reserved and _network_ok_until; never held across a VM call
         self._killed: set[str] = set()
         self._reserved: set[int] = set()  # slots of sandboxes being made right now
+        self._network_ok_until = 0.0  # monotonic time until which a passing host network check is trusted
 
     # ---- plumbing
     def _ps(self, script: str) -> str:
@@ -793,7 +960,21 @@ class HyperVSandbox:
         Path(self._known_hosts(name)).unlink(missing_ok=True)
 
     # ---- lifecycle
+    def check_network(self) -> None:
+        """Refuse unless the host's side of the sandbox network passes the read-only check. A pass is trusted for
+        NETWORK_OK_SECONDS, so each create doesn't run PowerShell again. A failure is never kept, so a fix counts at
+        once. Any PowerShell error counts as a failure."""
+        with self._lock:
+            if time.monotonic() < self._network_ok_until:
+                return
+        problems = host_network_problems(self.switch, self.proxy_port, self._ps)
+        if problems:
+            raise SandboxRefused(network_refusal(problems))
+        with self._lock:
+            self._network_ok_until = time.monotonic() + NETWORK_OK_SECONDS
+
     def create(self, session_id: int | str) -> SandboxHandle:
+        self.check_network()
         # Only the slot is chosen under the lock. The VM takes minutes to boot, so it is made outside it, and the
         # reaper and other sandboxes are never held up by it.
         with self._lock:
@@ -892,7 +1073,8 @@ def backend_fingerprint(settings: Settings, kind: str) -> tuple:
         return (str(settings.data_dir),)
     if kind == "hyperv":
         return (str(settings.data_dir), settings.sandbox_base_image, settings.sandbox_switch,
-                settings.sandbox_memory_mb, settings.sandbox_cpus, settings.sandbox_disk_gb)
+                settings.sandbox_memory_mb, settings.sandbox_cpus, settings.sandbox_disk_gb,
+                settings.sandbox_proxy_port)
     return ()
 
 
@@ -906,7 +1088,7 @@ def make_backend(settings: Settings, kind: str) -> SandboxBackend:
         return HyperVSandbox(base_image=settings.sandbox_base_image, switch=settings.sandbox_switch,
                              memory_mb=settings.sandbox_memory_mb, cpus=settings.sandbox_cpus,
                              disk_gb=settings.sandbox_disk_gb, ssh_key=str(keys / "id_ed25519"),
-                             known_dir=str(keys / "known_hosts"))
+                             known_dir=str(keys / "known_hosts"), proxy_port=settings.sandbox_proxy_port)
     raise SandboxError(f"There's no sandbox kind called {kind}.")
 
 
@@ -1042,6 +1224,7 @@ class SandboxManager:
         """Make a sandbox for a Code session. Raises SandboxRefused or SandboxError. The lock is held only to check
         the limit and record the reservation; the VM is made outside it, so the reaper is never held up."""
         kind = self.settings.code_sandbox
+        self.backend(kind).check_network()  # first, and outside the lock: a refused sandbox leaves no record
         now = datetime.now(timezone.utc)
         expires = now + timedelta(hours=self.settings.sandbox_ttl_hours)
         with self.lock:

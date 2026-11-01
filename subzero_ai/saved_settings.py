@@ -150,6 +150,9 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "The Hyper-V internal switch sandboxes are attached to, with the host on 10.77.0.1. The host must "
               "firewall that adapter. A sandbox on any other switch is never started.",
               error="Use letters, numbers, spaces, dots, dashes and underscores, up to 63 characters."),
+        Field("sandbox_proxy_port", "Host port sandboxes may reach", "int",
+              "The one port on this PC that a sandbox may reach over the internal switch, for the egress proxy. "
+              "The sandbox network setup script and the check both use it.", 1, 65535),
     ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),

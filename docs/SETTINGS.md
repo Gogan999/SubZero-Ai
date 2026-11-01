@@ -72,6 +72,25 @@ block the other sandboxes); those cmdlets are not yet tested on the mini PC. See
 | Keep this much disk free before a new sandbox is made, in GB | `SANDBOX_MIN_FREE_GB` |
 | Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
 | Internal network switch (the host's vNIC is 10.77.0.1/24) | `SANDBOX_SWITCH` (default `szsandbox-internal`) |
+| Host port sandboxes may reach, for the egress proxy (default 3128) | `SANDBOX_PROXY_PORT` |
+
+**One-time administrator step.** Before the first Hyper-V sandbox, an administrator runs the sandbox network setup
+script once, in an administrator PowerShell on the mini PC, from the SubZero AI folder:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Install
+```
+
+It creates the internal switch if it's missing, gives the host's adapter for it 10.77.0.1/24 with no gateway, turns
+IP forwarding off on it, sets its network profile to Public, and adds the firewall rules `szsandbox-block-inbound`
+and `szsandbox-allow-proxy`. It changes nothing else: other adapters, switches, VMs and rules are never touched. The
+app never runs it. `-Action Check` lists anything missing, and `-Action Remove` deletes the sandbox rules and the switch
+(it refuses while a VM still uses the switch). If you change `SANDBOX_SWITCH` or `SANDBOX_PROXY_PORT`, run `-Action
+Install` again with the same `-Switch` and `-ProxyPort`.
+
+Creating a sandbox checks this network first. **Create refuses until the check passes**, with a message that names
+what is missing, and the Settings overview shows the same check. A passing check is kept for one minute; a failure is
+never kept. The check is read-only. It is not yet tested on the mini PC.
 
 A new session waits for a free sandbox, and a new sandbox is refused while the disk is below the free-space limit.
 A sandbox is deleted when its Code session finishes, after its time limit, and when no record of it is left. Every
