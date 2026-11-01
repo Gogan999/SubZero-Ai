@@ -1099,7 +1099,8 @@ class HostNetworkCheckScriptTest(unittest.TestCase):
                      "Get-NetAdapterBinding", "'ipv6-enabled'", "Get-NetFirewallInterfaceFilter",
                      "Get-NetFirewallAddressFilter", "Get-NetFirewallPortFilter", "-DisplayName 'szsandbox-*'",
                      "Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop",
-                     "DefaultInboundAction -eq 'Allow'", "'default-inbound-allow'"):
+                     "DefaultInboundAction -eq 'Allow'", "'default-inbound-allow'",
+                     "$publicProfile.Enabled -ne 'True'", "'firewall-off'"):
             self.assertIn(text, script)
         self.assertNotIn("'3128'", script, "the proxy port comes from the setting")
         self.assertNotIn("szsandbox-block-inbound", script, "the old single block rule is gone")
@@ -1459,3 +1460,9 @@ class SandboxScriptPitfallTest(unittest.TestCase):
         import re
         script = sandbox.host_network_check_script("szsandbox-internal", 3128)
         self.assertIsNone(re.search(r"(?m)^\s*switch\s*\(", script))
+
+
+class FirewallOffTest(unittest.TestCase):
+    def test_firewall_off_is_a_problem_with_a_plain_message(self):
+        [problem] = parse_host_network_check('["firewall-off"]')
+        self.assertIn("turned off", problem)

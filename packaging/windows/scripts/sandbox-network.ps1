@@ -56,6 +56,7 @@ $Messages = @{
     'profile-not-public' = "The network profile of the sandbox adapter isn't Public"
     'ipv6-enabled' = "IPv6 is still on for the host's adapter for the sandboxes, and it must be off (uncheck TCP/IPv6 on that adapter)"
     'proxy-rule-wrong' = "The firewall rule $ProxyRule must exist and allow only TCP to the proxy port from $Subnet on the sandbox adapter"
+    'firewall-off' = "Windows Firewall is turned off for the Public profile, so none of the sandbox rules would apply. Turn it on (Windows Security, Firewall and network protection)"
     'default-inbound-allow' = "Windows Firewall's default for incoming traffic on the Public profile is Allow, and it must be Block"
 }
 
@@ -143,6 +144,7 @@ function Get-SandboxProblems {
         }
 
         $publicProfile = Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop
+        if ($publicProfile.Enabled -ne "True") { $problems.Add('firewall-off') }
         if ($publicProfile.DefaultInboundAction -eq "Allow") { $problems.Add('default-inbound-allow') }
 
         # Each enabled sandbox rule's filters are fetched once, into $infos, and every check reads from that list

@@ -576,6 +576,8 @@ NETWORK_PROBLEMS = {
                     "on that adapter)",
     "proxy-rule-wrong": "The firewall rule szsandbox-allow-proxy must exist and allow only TCP to the proxy port from "
                         "10.77.0.0/24 on the sandbox adapter",
+    "firewall-off": "Windows Firewall is turned off for the Public profile, so none of the sandbox rules would apply. "
+                    "Turn it on (Windows Security, Firewall and network protection)",
     "default-inbound-allow": "Windows Firewall's default for incoming traffic on the Public profile is Allow, and it "
                              "must be Block",
 }
@@ -675,6 +677,7 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
         "    if (-not $binding -or $binding.Enabled) { $problems.Add('ipv6-enabled') }",
         "  }",
         "  $publicProfile = Get-NetFirewallProfile -Profile Public -PolicyStore ActiveStore -ErrorAction Stop",
+        "  if ($publicProfile.Enabled -ne 'True') { $problems.Add('firewall-off') }",
         "  if ($publicProfile.DefaultInboundAction -eq 'Allow') { $problems.Add('default-inbound-allow') }",
         "  # Only the szsandbox-* rules are read, and each rule's filters are fetched once, into $infos",
         "  $rules = @(Get-NetFirewallRule -DisplayName 'szsandbox-*' -ErrorAction SilentlyContinue | Where-Object {",
