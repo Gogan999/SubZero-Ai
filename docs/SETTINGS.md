@@ -184,3 +184,6 @@ claude-login` on the mini PC still works too. The Cloudflare Tunnel itself is ma
 - A Code session that has waited for a mentor, or run, for 3 days is stopped and cleaned up by the nightly job.
 - An existing install that already saved `sandbox_switch` keeps that value: change it to `szsandbox-internal` on the
   Settings page.
+- The sandbox network script's Install does not turn Windows Firewall on. If the Public profile is off, Check reports
+  `firewall-off` and no sandbox can start. Turn it on with `Set-NetFirewallProfile -Profile Public -Enabled True`
+  (the sandbox adapter is always on the Public profile).
