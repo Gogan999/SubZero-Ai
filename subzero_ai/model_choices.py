@@ -82,10 +82,15 @@ def _rules_problem(settings: Settings, model: str, purpose: str) -> str:
     return ""
 
 
-def _check_problem(db: Database, model: str, purpose: str) -> str:
-    """Why the Model safety check doesn't allow this purpose yet, or '' (purposes without a check always pass)."""
+def _check_problem(db: Database, model: str, purpose: str, settings: Settings | None = None) -> str:
+    """Why the Model safety check doesn't allow this purpose yet, or '' (purposes without a check always pass).
+    The models set now as default and hard-problem keep working without a check: they ran before the check existed,
+    and the check only gates a change (saving a new one still needs it). A check that ran and failed still blocks."""
     if purpose not in CHECKED_PURPOSES:
         return ""
+    if settings is not None and not CHECKED_PURPOSES[purpose] and model in {
+            normalize_model_id(settings.model_default), normalize_model_id(settings.model_hard)} and latest_result(db, model) is None:
+        return ""  # never checked: allowed. A check that ran and failed still blocks it
     return requirement_problem(db, model, screener=CHECKED_PURPOSES[purpose])
 
 
@@ -93,7 +98,7 @@ def model_block(settings: Settings, db: Database, model: str, purpose: str = "ch
     """The strict test: why this model can't be used for the purpose now, or '' when it can. New chat, the mentor's
     model picker and every reply go through this."""
     model = normalize_model_id(model)
-    return _rules_problem(settings, model, purpose) or _check_problem(db, model, purpose)
+    return _rules_problem(settings, model, purpose) or _check_problem(db, model, purpose, settings)
 
 
 def selectable_models(services: Any, *, purpose: str, include_unchecked: bool = False) -> list[dict[str, Any]]:
@@ -107,7 +112,7 @@ def selectable_models(services: Any, *, purpose: str, include_unchecked: bool = 
     for model in _candidates(services):
         if _rules_problem(settings, model, purpose):
             continue
-        problem = _check_problem(db, model, purpose)
+        problem = _check_problem(db, model, purpose, settings)
         if problem and not include_unchecked:
             continue
         note = ""

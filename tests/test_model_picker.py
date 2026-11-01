@@ -109,6 +109,21 @@ class PickerTest(unittest.TestCase):
         self.assertNotIn(GPT, self.listed("judge"))
 
     # ---------------------------------------------------------------- set_model
+    def test_configured_default_and_hard_models_need_no_check(self):
+        """The default and hard-problem models ran before the check existed, so they stay allowed without one."""
+        h = Harness(anthropic_api_key=KEY)  # no safety check has been run
+        try:
+            settings = h.services.settings
+            listed = {o["id"] for o in selectable_models(h.services, purpose="chat")}
+            self.assertIn(settings.model_default, listed)
+            self.assertIn(settings.model_hard, listed)
+            self.assertNotIn(HAIKU, listed)
+            from subzero_ai.model_choices import model_block
+            self.assertEqual(model_block(settings, h.services.db, settings.model_hard), "")
+            self.assertNotEqual(model_block(settings, h.services.db, HAIKU), "")
+        finally:
+            h.close()
+
     def test_set_model_uses_the_same_filter(self):
         cid = self.mentor_chat(SONNET)
         self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": HAIKU}).status_code, 400)  # not checked
