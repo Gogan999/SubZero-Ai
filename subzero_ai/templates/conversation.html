@@ -27,6 +27,7 @@
     <p class="private-note">Private: only {{ 'you' if own else conv.owner_name }} and mentors can see this chat.</p>
     {% endif %}
   </header>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
   <ol class="thread" data-thread>
     {% for m in messages %}
       {% include "_message.html" %}

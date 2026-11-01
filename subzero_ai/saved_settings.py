@@ -22,7 +22,9 @@ from .model_check import requirement_problem
 
 log = logging.getLogger("subzero.settings")
 
-EFFORTS = ("low", "medium", "high")
+EFFORT_CHOICES = (("low", "Low"), ("medium", "Medium"), ("high", "High"))
+# The dropdown value that means "type the model id under Other"; never a real model id
+OTHER_MODEL = "__other__"
 # provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
 MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
 PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "google": "Google (Gemini)",
@@ -43,11 +45,12 @@ BLOCKED_MODEL_WORDS = ("fable", "mythos")
 class Field:
     name: str
     label: str
-    kind: str  # model, effort, int, bool, lines, ids, providers
+    kind: str  # model, choice, int, bool, lines, ids, providers
     help: str = ""
     minimum: int = 0
     maximum: int = 0
     optional: bool = False  # for ids: an empty list is allowed
+    choices: tuple[tuple[str, str], ...] = ()  # for choice: (saved value, label) pairs
 
 
 SECTIONS: dict[str, tuple[str, list[Field]]] = {
@@ -63,9 +66,11 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("model_check_judge", "Safety check judge", "model",
               "Grades the answers in the Model safety check. It has to be a Claude model, since it decides which "
               "other models are safe enough for students."),
-        Field("effort_default", "Everyday effort", "effort", "Higher effort gives more careful answers and costs more."),
-        Field("effort_high", "Effort for explainers and files", "effort",
-              "Used for interactive explainers and messages with files attached, which are usually code reviews."),
+        Field("effort_default", "Everyday effort", "choice", "Higher effort gives more careful answers and costs more.",
+              choices=EFFORT_CHOICES),
+        Field("effort_high", "Effort for explainers and files", "choice",
+              "Used for interactive explainers and messages with files attached, which are usually code reviews.",
+              choices=EFFORT_CHOICES),
         Field("max_tokens_chat", "Longest reply, in tokens", "int", "8,000 tokens is about 6,000 words.", 500, 64000),
         Field("max_tokens_explainer", "Longest explainer reply, in tokens", "int",
               "An explainer is a whole web page, so it needs more room.", 1000, 64000),
@@ -161,6 +166,33 @@ def load_into(settings: Settings, db: Database) -> None:
             setattr(settings, row["key"], convert(row["key"], row["value"]))
         except (ValueError, StopIteration):
             log.warning("Ignoring a saved setting that couldn't be read: %s", row["key"])
+
+
+class _FormView:
+    """The submitted form with some dropdown choices swapped for the values typed under Other."""
+
+    def __init__(self, form: Mapping[str, Any], overrides: dict[str, str]):
+        self._form = form
+        self._overrides = overrides
+
+    def get(self, name: str, default: Any = None) -> Any:
+        return self._overrides[name] if name in self._overrides else self._form.get(name, default)
+
+    def getlist(self, name: str) -> list[Any]:
+        return [self._overrides[name]] if name in self._overrides else self._form.getlist(name)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._overrides or name in self._form
+
+
+def model_choices_form(form: Mapping[str, Any], section: str) -> Mapping[str, Any]:
+    """Model dropdowns post the chosen model, or OTHER_MODEL plus the typed id in `<name>_other`. Returns the form
+    with the typed id in place of OTHER_MODEL, so validate() checks it exactly as a typed box."""
+    overrides = {}
+    for f in SECTIONS[section][1]:
+        if f.kind == "model" and form.get(f.name) == OTHER_MODEL:
+            overrides[f.name] = str(form.get(f"{f.name}_other", "") or "")
+    return _FormView(form, overrides) if overrides else form
 
 
 def form_text(form: Mapping[str, Any], name: str) -> str:
@@ -266,9 +298,11 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 values[f.name] = model
         elif f.kind == "providers":
             continue  # checked above
-        elif f.kind == "effort":
-            if raw not in EFFORTS:
-                errors[f.name] = "Pick low, medium, or high."
+        elif f.kind == "choice":
+            allowed = [value for value, _ in f.choices]
+            if raw not in allowed:
+                joined = ", ".join(allowed[:-1]) + (", or " if len(allowed) > 2 else " or ") + allowed[-1]
+                errors[f.name] = f"Pick {joined}."
             else:
                 values[f.name] = raw
         elif f.kind == "lines":

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from starlette.testclient import TestClient
 
+from subzero_ai import model_check
 from subzero_ai.claude import FakeClaude
 from subzero_ai.config import load_settings
 from subzero_ai.slack_api import FakeSlack
@@ -22,6 +23,13 @@ STUDENT = "DEV-student-ava"
 STUDENT_2 = "DEV-student-ben"
 MENTOR = "DEV-mentor-kim"
 ADMIN = "DEV-admin-coach"
+
+
+def pass_model_check(h: "Harness", model: str, *, failing: str = "") -> None:
+    """Record a Model safety check result for a model: every case passes, except the one named `failing`."""
+    names = model_check.CHAT_CASES + model_check.SCREENER_CASES
+    cases = [model_check.CaseResult(name, name != failing) for name in names]
+    model_check.save_result(h.services.db, model_check.CheckResult(model, cases=cases))
 
 
 class Actor:

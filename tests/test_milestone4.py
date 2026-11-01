@@ -136,7 +136,7 @@ class SettingsPageTest(unittest.TestCase):
         self.assertIn("kept off", resp.text)
         self.assertEqual(self.h.settings.model_default, "anthropic/claude-sonnet-5-5")
         # The error is tied to its field for screen readers
-        field = re.search(r'<input id="f-model_default"[^>]*>', resp.text).group(0)
+        field = re.search(r'<select id="f-model_default"[^>]*>', resp.text).group(0)
         self.assertIn('aria-describedby="h-model_default e-model_default"', field)
         self.assertIn('aria-invalid="true"', field)
         self.assertIn('id="e-model_default"', resp.text)

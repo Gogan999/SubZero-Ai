@@ -27,6 +27,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import threading
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,12 @@ MAX_OUTPUT_CHARS = 20_000
 MAX_TASK_CHARS = 8000
 MAX_TOKENS = 16000
 KEEP_COPIES_DAYS = 14  # finished sessions' repository copies are deleted after this
+MAX_SESSION_BYTES = 800 * 1024 * 1024  # one session's two copies together, build output included
+MAX_RUNNING_COMMANDS = 2  # across the whole app: a second build slows the first one down
+COMMAND_WAIT_SECONDS = 60  # how long a command waits for a free slot before it is refused
+MAX_OPEN_SESSIONS = 5  # per mentor: sessions waiting or running at the same time
+STUCK_SESSION_DAYS = 3  # waiting, running or preparing this long with no activity: stopped, copy deleted
+REAP_SECONDS = 5  # after a command exits, how long its output may stay open (a background child process)
 SKIP_DIRS = {".git", ".gradle", "build", "bin", "node_modules", "__pycache__", ".idea", ".vscode"}
 # Only what a build needs from the app's environment. API keys, tokens and the rest stay out.
 SAFE_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME",
@@ -132,13 +139,22 @@ class ToolProblem(Exception):
 # Files a build runs or that decide what a build downloads. A command runs as the app's own account, so a
 # changed build script could read the app's keys from disk. Claude can't change these; it can suggest changes
 # in its summary for a mentor to make by hand.
-BUILD_FILE_RE = re.compile(
-    r"(^|/)(gradlew(\.bat)?|[^/]*\.gradle(\.kts)?|gradle\.properties|[^/]*\.(bat|cmd|ps1|sh|exe|jar))$"
-    r"|^(gradle|buildSrc|\.gradle|\.wpilib|vendordeps|\.mvn)(/|$)", re.I)
+BUILD_DIRS = ("gradle", "buildsrc", ".gradle", ".wpilib", "vendordeps", ".mvn")  # folders at the repository root
+BUILD_NAMES = ("gradlew", "gradlew.bat", "gradle.properties")  # at any depth
+BUILD_SUFFIXES = (".groovy", ".gradle", ".kts", ".bat", ".cmd", ".ps1", ".sh", ".exe", ".jar")
 
 
 def is_build_file(name: str) -> bool:
-    return bool(BUILD_FILE_RE.search(name))
+    """True for a build file or script. Judged on a normalized path: case, slash style, and trailing dots and
+    spaces don't matter (Windows drops them, so `gradlew.bat.` is gradlew.bat). `..` and Windows stream
+    names (`file:stream`) are refused outright."""
+    raw = name.replace("\\", "/").split("/")
+    if any(part not in ("", ".") and not part.rstrip(". ") for part in raw) or any(":" in part for part in raw):
+        return True
+    parts = [part.rstrip(". ").lower() for part in raw if part not in ("", ".")]
+    if not parts:
+        return False
+    return parts[0] in BUILD_DIRS or any(part in BUILD_NAMES or part.endswith(BUILD_SUFFIXES) for part in parts)
 
 
 class Workspace:
@@ -260,6 +276,23 @@ class Workspace:
                               "settings, scripts or vendor dependencies, because a build runs them. Describe the "
                               "change in your summary so a mentor can make it by hand.")
 
+    def size_bytes(self) -> int:
+        """Everything in the session's folder: both copies and any build output."""
+        total = 0
+        for dirpath, _dirs, files in os.walk(self.root):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    pass
+        return total
+
+    def check_room(self, extra: int = 0) -> None:
+        """Refuse an approved change or command when the session's folder is already at its size limit."""
+        if self.size_bytes() + extra > MAX_SESSION_BYTES:
+            raise ToolProblem(f"This session's copies of the repository would go over the "
+                              f"{MAX_SESSION_BYTES // (1024 * 1024)} MB limit. Ask a mentor to start a new session.")
+
     def preview(self, tool: str, args: dict) -> str:
         """What a change would do, as a diff, for the mentor to approve."""
         target = self.path(args.get("path", ""), must_exist=False)
@@ -301,6 +334,7 @@ class Workspace:
             content = old.replace(old_text, str(args.get("new_text", "")), 1)
         if len(content.encode("utf-8")) > MAX_WRITE_BYTES:
             raise ToolProblem("That file would be too big.")
+        self.check_room(len(content.encode("utf-8")))
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "w", encoding="utf-8", newline="") as fh:
             fh.write(content)
@@ -350,6 +384,10 @@ def parse_command(command: str, allowed: tuple[str, ...], work: Path) -> list[st
     if "/" in name or "\\" in name or name.lower() not in {a.lower() for a in allowed}:
         raise ToolProblem(f"Only these programs can be run: {', '.join(allowed)}. An admin can allow more in "
                           "Settings.")
+    for option in args[1:]:
+        if _blocked_option(option):
+            raise ToolProblem(f"Claude can't pass {option} to the build, because it loads other scripts or picks "
+                              "other build files. Describe the change in your summary so a mentor can run it by hand.")
     local = [work / (name + ".bat"), work / name] if os.name == "nt" else [work / name]
     found = next((p for p in local if p.is_file()), None)
     resolved = str(found) if found else shutil.which(name)
@@ -360,7 +398,88 @@ def parse_command(command: str, allowed: tuple[str, ...], work: Path) -> list[st
     return [resolved, *args[1:]]
 
 
-def run_program(args: list[str], cwd: Path, timeout: int) -> str:
+def _blocked_option(arg: str) -> bool:
+    """Gradle options that load another script or pick another build file: -I, -c, -b, their attached forms
+    (-Ipath), and the long forms with or without `=`."""
+    if any(arg == opt or arg.startswith(opt + "=") for opt in ("--init-script", "--settings-file", "--build-file", "--gradle-user-home")):
+        return True
+    if arg == "-g" or arg.startswith("-Dgradle.user.home") or arg.startswith("-Dorg.gradle.user.home"):
+        return True
+    return arg[:2] in ("-I", "-c", "-b") and not arg.startswith("--")
+
+
+_COMMAND_SLOTS = threading.BoundedSemaphore(MAX_RUNNING_COMMANDS)
+_RUNNING_LOCK = threading.Lock()
+
+
+class _RunningCommand:
+    """A command that is running now, so a mentor's Stop can find and kill it."""
+
+    def __init__(self, proc: subprocess.Popen):
+        self.proc = proc
+        self.stopped = False
+
+
+_RUNNING: dict[int, _RunningCommand] = {}  # session id -> the command it is running
+
+
+def stop_command(session_id: int) -> bool:
+    """Kill the command a session is running, with everything it started. True if one was running."""
+    with _RUNNING_LOCK:
+        running = _RUNNING.get(session_id)
+        if running is None:
+            return False
+        running.stopped = True
+    _kill_tree(running.proc)
+    return True
+
+
+class _OutputTail:
+    """Keeps only the end of a command's output, so a chatty build can't fill the app's memory."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.data = bytearray()
+        self.cut = False
+
+    def add(self, chunk: bytes) -> None:
+        self.data += chunk
+        if len(self.data) > self.limit:
+            del self.data[:len(self.data) - self.limit]
+            self.cut = True
+
+    def text(self) -> str:
+        text = self.data.decode("utf-8", errors="replace")
+        if self.cut or len(text) > MAX_OUTPUT_CHARS:
+            return "(…earlier output cut)\n" + text[-MAX_OUTPUT_CHARS:]
+        return text
+
+
+def _read_into(stream, tail: _OutputTail) -> None:
+    """Read a command's output as it comes, in a worker thread, so nothing waits for the command to end."""
+    try:
+        while True:
+            chunk = stream.read1(65536)
+            if not chunk:
+                return
+            tail.add(chunk)
+    except (OSError, ValueError):
+        return
+
+
+def run_program(args: list[str], cwd: Path, timeout: int, session_id: int | None = None) -> str:
+    """Run one program in cwd for at most `timeout` seconds and return the end of its output. At most
+    MAX_RUNNING_COMMANDS run at once across the app; a command waits for a free slot, then is refused."""
+    if not _COMMAND_SLOTS.acquire(timeout=COMMAND_WAIT_SECONDS):
+        raise ToolProblem("Too many commands are running on the computer right now. Ask Claude to try again in "
+                          "a few minutes.")
+    try:
+        return _run_in_slot(args, cwd, timeout, session_id)
+    finally:
+        _COMMAND_SLOTS.release()
+
+
+def _run_in_slot(args: list[str], cwd: Path, timeout: int, session_id: int | None) -> str:
     env = {key: os.environ[key] for key in SAFE_ENV if key in os.environ}
     # No Gradle daemon: it would outlive the command (for hours) and hold memory on the mini PC
     env["GRADLE_OPTS"] = "-Dorg.gradle.daemon=false"
@@ -374,13 +493,37 @@ def run_program(args: list[str], cwd: Path, timeout: int) -> str:
                                 stderr=subprocess.STDOUT, **kwargs)
     except OSError as exc:
         raise ToolProblem(f"Couldn't start the command: {exc}") from exc
+    running = _RunningCommand(proc)
+    if session_id is not None:
+        with _RUNNING_LOCK:
+            _RUNNING[session_id] = running
+    tail = _OutputTail(MAX_OUTPUT_CHARS * 4)  # 4 bytes is the most a character takes in UTF-8
+    reader = threading.Thread(target=_read_into, args=(proc.stdout, tail), daemon=True)
+    reader.start()
+    timed_out = False
     try:
-        out, _ = proc.communicate(timeout=timeout)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
+        timed_out = True
         _kill_tree(proc)
-        out, _ = proc.communicate()
-        return _tail(out.decode("utf-8", errors="replace")) + f"\n(Stopped after {timeout} seconds.)"
-    return _tail(out.decode("utf-8", errors="replace")) + f"\n(Exit code {proc.returncode}.)"
+        proc.wait()
+    finally:
+        if session_id is not None:
+            with _RUNNING_LOCK:
+                if _RUNNING.get(session_id) is running:
+                    del _RUNNING[session_id]
+    reader.join(REAP_SECONDS)
+    if reader.is_alive():  # a child process still holds the output open: stop everything it started
+        _kill_tree(proc)
+        reader.join(REAP_SECONDS)
+    if not reader.is_alive():
+        proc.stdout.close()
+    text = tail.text()
+    if running.stopped:
+        return text + "\n(Stopped by a mentor.)"
+    if timed_out:
+        return text + f"\n(Stopped after {timeout} seconds.)"
+    return text + f"\n(Exit code {proc.returncode}.)"
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -393,10 +536,6 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             os.killpg(proc.pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):
         proc.kill()
-
-
-def _tail(text: str) -> str:
-    return text if len(text) <= MAX_OUTPUT_CHARS else "(…earlier output cut)\n" + text[-MAX_OUTPUT_CHARS:]
 
 
 def short_title(task: str) -> str:
@@ -460,6 +599,7 @@ class CodeRunner:
             raise CodeError("Describe what Claude should do.")
         if len(task) > MAX_TASK_CHARS:
             raise CodeError(f"Keep the task under {MAX_TASK_CHARS:,} characters.")
+        self._check_open_limit(viewer.id)
         now = utcnow()
         transcript = [{"role": "user", "content": task}]
         with self.db.transaction() as conn:
@@ -475,6 +615,13 @@ class CodeRunner:
         self.tasks.spawn(self._prepare_and_run(session_id), name=f"code-{session_id}")
         return session_id
 
+    def _check_open_limit(self, user_id: int) -> None:
+        open_now = self.db.one("SELECT COUNT(*) AS n FROM code_sessions WHERE created_by = ? "
+                               "AND status IN ('preparing', 'running', 'waiting')", (user_id,))["n"]
+        if open_now >= MAX_OPEN_SESSIONS:
+            raise CodeError(f"You already have {MAX_OPEN_SESSIONS} Code sessions waiting or running. Stop or "
+                            "finish one first.")
+
     def follow_up(self, viewer: Viewer, session_id: int, text: str) -> None:
         row = self.get(session_id)
         text = (text or "").replace("\r\n", "\n").strip()
@@ -482,6 +629,7 @@ class CodeRunner:
             raise CodeError("That session doesn't exist.")
         if row["status"] not in ("done", "stopped", "failed") or not self.workspace(session_id).ready():
             raise CodeError("Wait until Claude finishes, or stop the session first.")
+        self._check_open_limit(row["created_by"])
         if not text or len(text) > MAX_TASK_CHARS:
             raise CodeError("Write what Claude should do next.")
         if json.loads(row["transcript"])[-1]["role"] == "assistant":
@@ -510,10 +658,14 @@ class CodeRunner:
             raise CodeError("That session doesn't exist.")
         if row["status"] in ("done", "stopped", "failed"):
             return
+        stop_command(session_id)  # kills a build that is running right now
         with self.db.transaction() as conn:
             conn.execute("UPDATE code_steps SET status = 'declined', review_note = 'The session was stopped.', "
                          "reviewed_by = ?, finished_at = ? WHERE session_id = ? AND status = 'pending'",
                          (viewer.id, utcnow(), session_id))
+            conn.execute("UPDATE code_steps SET status = 'declined', review_note = 'The session was stopped while "
+                         "this ran.', finished_at = ? WHERE session_id = ? AND status = 'running'",
+                         (utcnow(), session_id))
             self.db.audit("code_session_stopped", actor_id=viewer.id, target_type="code", target_id=session_id,
                           conn=conn)
         self._set(session_id, status="stopped")
@@ -575,15 +727,23 @@ class CodeRunner:
         for step in steps:
             args = json.loads(step["input"] or "{}")
             output, error = step["output"], step["status"] == "error"
-            if step["status"] == "approved":
+            if step["status"] == "approved" and self.get(session_id)["status"] == "stopped":
+                output, error = "The session was stopped before this ran.", True
+                self.db.execute("UPDATE code_steps SET status = 'declined', review_note = ?, finished_at = ? "
+                                "WHERE id = ?", (output, utcnow(), step["id"]))
+            elif step["status"] == "approved":
                 self.db.execute("UPDATE code_steps SET status = 'running' WHERE id = ?", (step["id"],))
                 try:
-                    output = self._execute(workspace, step["tool"], args)
+                    output = self._execute(workspace, step["tool"], args, session_id)
                     status = "done"
                 except ToolProblem as exc:
                     output, status, error = str(exc), "error", True
-                self.db.execute("UPDATE code_steps SET status = ?, output = ?, finished_at = ? WHERE id = ?",
-                                (status, output, utcnow(), step["id"]))
+                # A Stop during the run has already marked this step stopped; keep that
+                stopped = not self.db.execute(
+                    "UPDATE code_steps SET status = ?, output = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+                    (status, output, utcnow(), step["id"])).rowcount
+                if stopped:
+                    output, error = "The session was stopped while this ran.", True
             elif step["status"] == "declined":
                 who = self.db.one("SELECT name FROM users WHERE id = ?", (step["reviewed_by"],))
                 output = (f"The mentor ({who['name'] if who else 'a mentor'}) declined this step."
@@ -595,7 +755,7 @@ class CodeRunner:
         self._set(session_id, transcript=json.dumps(transcript))
         return True
 
-    def _execute(self, workspace: Workspace, tool: str, args: dict) -> str:
+    def _execute(self, workspace: Workspace, tool: str, args: dict, session_id: int | None = None) -> str:
         if tool == "list_files":
             return workspace.list_files(str(args.get("path", "")))
         if tool == "read_file":
@@ -606,7 +766,8 @@ class CodeRunner:
             return workspace.apply(tool, args)
         if tool == "run_command":
             command = parse_command(str(args.get("command", "")), self.settings.code_commands, workspace.work)
-            return run_program(command, workspace.work, self.settings.code_command_timeout)
+            workspace.check_room()
+            return run_program(command, workspace.work, self.settings.code_command_timeout, session_id)
         raise ToolProblem(f"There's no tool called {tool}.")
 
     async def _run(self, session_id: int) -> None:
@@ -672,7 +833,7 @@ class CodeRunner:
                         status, output = "error", str(exc)
                 else:
                     try:
-                        output = await asyncio.to_thread(self._execute, workspace, tool, args)
+                        output = await asyncio.to_thread(self._execute, workspace, tool, args, session_id)
                     except ToolProblem as exc:
                         status, output = "error", str(exc)
                 self.db.execute(
@@ -690,9 +851,10 @@ class CodeRunner:
 
 def prune_workspaces(db: Database, data_dir: Path, days: int = KEEP_COPIES_DAYS) -> int:
     """Delete the repository copies of sessions that finished more than `days` ago (two copies of the repository
-    each, plus build output). The steps and transcript stay, so the session can still be read."""
+    each, plus build output). The steps and transcript stay, so the session can still be read. Sessions left
+    waiting, running or preparing for STUCK_SESSION_DAYS are stopped first. Returns how many copies were deleted."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
-    removed = 0
+    removed = prune_stuck_workspaces(db, data_dir)
     for row in db.all("SELECT id FROM code_sessions WHERE status IN ('done', 'stopped', 'failed') "
                       "AND updated_at < ?", (cutoff,)):
         folder = Path(data_dir) / "code" / str(row["id"])
@@ -703,6 +865,34 @@ def prune_workspaces(db: Database, data_dir: Path, days: int = KEEP_COPIES_DAYS)
                        (row["id"], f"The copy of the repository was deleted after {days} days to save space.",
                         utcnow()))
             removed += 1
+    return removed
+
+
+def prune_stuck_workspaces(db: Database, data_dir: Path, days: int = STUCK_SESSION_DAYS) -> int:
+    """Stop sessions that have sat waiting, running or preparing for `days` days, and delete their copies.
+    The database rows stay, so the session can still be read."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    removed = 0
+    for row in db.all("SELECT id FROM code_sessions WHERE status IN ('preparing', 'running', 'waiting') "
+                      "AND updated_at < ?", (cutoff,)):
+        session_id = row["id"]
+        stop_command(session_id)
+        with db.transaction() as conn:
+            conn.execute("UPDATE code_steps SET status = 'declined', review_note = ?, finished_at = ? "
+                         "WHERE session_id = ? AND status = 'pending'",
+                         (f"The session was stopped after {days} days with no activity.", utcnow(), session_id))
+            conn.execute("UPDATE code_sessions SET status = 'stopped', error = ?, updated_at = ? WHERE id = ?",
+                         (f"Stopped after {days} days with no activity.", utcnow(), session_id))
+            db.audit("code_session_expired", actor_id=None, target_type="code", target_id=session_id,
+                     details={"days": days}, conn=conn)
+        folder = Path(data_dir) / "code" / str(session_id)
+        if folder.exists():
+            shutil.rmtree(folder, ignore_errors=True)
+            db.execute("INSERT INTO code_steps (session_id, turn, kind, output, status, created_at) "
+                       "VALUES (?, 0, 'note', ?, 'done', ?)",
+                       (session_id, f"The session had no activity for {days} days, so it was stopped and its copy "
+                                    "of the repository was deleted to save space.", utcnow()))
+        removed += 1
     return removed
 
 

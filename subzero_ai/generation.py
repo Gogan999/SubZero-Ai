@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .ai_backend import Capabilities, capabilities_for, resolve_backend
 from .attachments import Attachments
-from .config import Settings
+from .config import Settings, normalize_model_id
 from .db import Database, utcnow
 from .live import Broker, Tasks
 from .projects import Projects
@@ -217,12 +217,33 @@ class ReplyRunner:
         parts = self._live.get(reply_id, [])
         return "".join(parts), len(parts)
 
+    def reply_model(self, conv) -> str:
+        """The model for the next reply. A chat's model is checked again here (its provider and key, the Model
+        safety check). If it can't be used any more, the chat moves to the default model and the change is audited,
+        so the reply still happens."""
+        # Imported here: model_choices imports saved_settings, which imports this module
+        from .model_choices import model_block
+
+        model = normalize_model_id(conv["model"])
+        default = normalize_model_id(self.settings.model_default)
+        if model == default:
+            return model
+        problem = model_block(self.settings, self.db, model)
+        if not problem:
+            return model
+        self.store.set_model(conv["id"], default)
+        self.db.audit("model_fallback", actor_id=None, target_type="conversation", target_id=conv["id"],
+                      details={"from": model, "to": default, "reason": problem})
+        log.info("Chat %s moved from %s to %s: %s", conv["id"], model, default, problem)
+        return default
+
     def start(self, conversation_id: int, user_message_id: int) -> int:
         conv = self.store.conversation(conversation_id)
+        model = self.reply_model(conv)
         with self.db.transaction() as conn:
             reply_id = self.store.add_message(
                 conn, conversation_id=conversation_id, author_id=None, role="assistant", content="",
-                status=STREAMING, reply_to=user_message_id, model=conv["model"])
+                status=STREAMING, reply_to=user_message_id, model=model)
         self.broker.publish(f"conv:{conversation_id}", {"type": "changed", "id": reply_id})
         if self.on_reply is not None:
             self.tasks.spawn(self._hook(self.on_reply, conversation_id, user_message_id, reply_id),

@@ -62,6 +62,8 @@ from .generation import STYLES, ReplyRunner, clean_options, load_options, option
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
+# MODEL_LABELS and model_label stay importable from here (tests and older code use them)
+from .model_choices import MODEL_LABELS, model_block, model_label, option_label, selectable_models
 from .projects import MAX_PROJECT_FILES, ProjectError, Projects
 from .shares import SHARE_DAYS, ShareError, Shares, state as share_state
 from .render import (
@@ -100,13 +102,6 @@ from .store import (
 log = logging.getLogger("subzero.web")
 HERE = Path(__file__).parent
 
-MODEL_LABELS = {
-    "anthropic/claude-sonnet-5-5": "Sonnet 5.5",
-    "anthropic/claude-opus-5-5": "Opus 5.5",
-    "anthropic/claude-haiku-5-5": "Haiku 5.5",
-}
-
-
 # How many of a person's own chats the sidebar lists before "All chats"
 RECENTS = 25
 
@@ -130,11 +125,18 @@ async def _load_model_names(s: Services) -> None:
         log.info("Couldn't get model names from the AI helper: %s", exc)
 
 
-def model_label(model_id: str, names: dict[str, str] | None = None) -> str:
-    """A short name for a model: the built-in label, else the name the gateway gave it (Pi backend), else the part
-    of the id after the provider."""
-    model_id = normalize_model_id(model_id)
-    return MODEL_LABELS.get(model_id) or (names or {}).get(model_id) or model_id.split("/", 1)[-1]
+def mentor_chat_model(s: Services, raw: object) -> tuple[str, str]:
+    """The model a mentor picked for a new chat, or the default. A pick that isn't in the list for new chats (or
+    that fails a check now) gives the default and a plain note saying why."""
+    default = normalize_model_id(s.settings.model_default)
+    model = normalize_model_id(str(raw or "").strip())
+    if not model:
+        return default, ""
+    if model in {option["id"] for option in selectable_models(s, purpose="chat")}:
+        return model, ""
+    problem = model_block(s.settings, s.db, model) or "It isn't on the list of models for new chats."
+    return default, (f"{model_label(model, s.model_names)} can't be used for this chat. {problem} "
+                     f"This chat uses {model_label(default, s.model_names)} instead.")
 
 
 def short_text(text: str, limit: int = 60) -> str:
@@ -725,8 +727,11 @@ async def chats(request: Request, viewer: Viewer) -> Response:
     if any(key in request.query_params for key in ("q", "scope", "subteam", "owner")):
         # The chat list and its filters moved to the Chats page; keep old links working
         return RedirectResponse(f"/recents?{request.url.query}", status_code=303)
+    model_options = ([(o["id"], option_label(o)) for o in selectable_models(s, purpose="chat")]
+                     if viewer.is_mentor else [])
     return render(request, "chats.html", viewer, current_id=None, subteams=s.settings.subteams,
                   greeting=greeting(s, viewer), model_name=model_label(s.settings.model_default, s.model_names),
+                  model_options=model_options, model_default_id=normalize_model_id(s.settings.model_default),
                   **upload_context(s.capabilities(s.settings.model_default)))
 
 
@@ -994,12 +999,16 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
     if not title:
         first = next((m for m in visible if m["role"] == "user"), None)
         title = short_text(first["content"]) if first and (own or viewer.is_mentor) else "New chat"
-    models = [(m, model_label(m, s.model_names)) for m in dict.fromkeys(
-        normalize_model_id(m) for m in (s.settings.model_default, s.settings.model_hard, conv["model"]))]
+    models = []
+    if viewer.is_mentor:
+        models = [(o["id"], option_label(o)) for o in selectable_models(s, purpose="chat")]
+        if normalize_model_id(conv["model"]) not in {value for value, _ in models}:
+            models.append((conv["model"], f"{model_label(conv['model'], s.model_names)} (not allowed now)"))
     return render(request, "conversation.html", viewer, conv=conv, messages=messages, own=own, title=title,
                   can_send=own, waiting=waiting, replying=replying, composer_hint=hint, needs_review=needs_review,
                   model_options=models, model_name=model_label(conv["model"], s.model_names), current_id=conv["id"],
-                  long_chat=long_chat, **upload_context(s.capabilities(conv["model"])))
+                  long_chat=long_chat, flash=request.session.pop("flash", None),
+                  **upload_context(s.capabilities(conv["model"])))
 
 
 @page()
@@ -1015,14 +1024,14 @@ async def message_partial(request: Request, viewer: Viewer) -> Response:
 
 @page(require="mentor")
 async def set_model(request: Request, viewer: Viewer) -> Response:
-    """Mentors can move a conversation to the bigger model for hard problems (it costs about twice as much)."""
+    """Mentors can move a conversation to any model in the list for new chats (see model_choices)."""
     s = services(request)
     conv = s.store.conversation(request.path_params["cid"])
     if conv is None:
         return error_page(request, viewer, 404, "Chat not found", "This chat doesn't exist.")
     form = await request.form()
     model = normalize_model_id(form.get("model", ""))
-    if model not in (normalize_model_id(s.settings.model_default), normalize_model_id(s.settings.model_hard)):
+    if model not in {option["id"] for option in selectable_models(s, purpose="chat")}:
         return JSONResponse({"ok": False, "error": "Pick one of the listed models."}, status_code=400)
     if model != normalize_model_id(conv["model"]):
         s.store.set_model(conv["id"], model)
@@ -1055,14 +1064,21 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
         files += await connector_files(s, form, len(files))
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
-    refusal = feature_refusal(s.capabilities(s.settings.model_default), form, files)
+    # Only mentors pick the model. A student's "model" field is ignored: the chat gets the default model.
+    chat_model, note = s.settings.model_default, ""
+    if viewer.is_mentor:
+        chat_model, note = mentor_chat_model(s, form.get("model"))
+    refusal = feature_refusal(s.capabilities(chat_model), form, files)
     if refusal:
         return JSONResponse({"ok": False, "error": refusal, "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam, files=files,
                                        explainer=form.get("explainer") == "1", project_id=project_id,
-                                       options=tool_options(s, viewer, form))
+                                       options=tool_options(s, viewer, form),
+                                       model=chat_model if viewer.is_mentor else None)
     if not outcome.ok:
         return json_error(outcome)
+    if note:
+        request.session["flash"] = note
     return JSONResponse({"ok": True, "url": f"/c/{outcome.conversation_id}", "message_id": outcome.message_id})
 
 

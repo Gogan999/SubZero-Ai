@@ -26,6 +26,20 @@ beats config.env, so the Settings page shows that field locked and says so.
 | Default, hard-problem and title models | `MODEL_DEFAULT`, `MODEL_HARD`, `MODEL_TITLES` |
 | Safety check judge (must be a Claude model) | `MODEL_CHECK_JUDGE` |
 | Everyday effort, effort for explainers and files | `EFFORT_DEFAULT`, `EFFORT_HIGH` |
+
+**Model dropdowns.** The default, hard-problem, title, screener and judge models are dropdowns, grouped by company.
+Each list shows the models that can be used right now: the company is turned on and has its key saved (or the Claude
+subscription is signed in), and the active AI engine can run it (with `AI_BACKEND=anthropic` only Claude models are
+listed). The default and hard-problem models also need a passing Model safety check, and the screener model needs
+its screener part; a model that hasn't been checked yet is listed too, marked "not yet safety-checked", and saving
+it still fails until the check passes. The judge list has Claude models only. Pick **Other (type a model id)** to
+type an id that isn't listed yet, such as a new model. Saving checks the typed id the same way as a listed one.
+Fable and Mythos models are never listed or accepted.
+
+The AI helper's model list is refreshed whenever AI providers or keys are saved on this page, so a new company's
+models appear without a restart. The refresh runs in the background, so reload the page a moment after saving if a
+new model is still missing.
+
 | Longest reply, longest explainer, fresh-chat suggestion | `MAX_TOKENS_CHAT`, `MAX_TOKENS_EXPLAINER`, `LONG_CHAT_TOKENS` |
 | Web search, daily search limit, Research for students | `WEB_SEARCH_ENABLED`, `WEB_SEARCH_DAILY_LIMIT`, `RESEARCH_FOR_STUDENTS` |
 
@@ -51,6 +65,13 @@ beats config.env, so the Settings page shows that field locked and says so.
 
 The page won't switch to the Anthropic API while a model setting uses another company or the Claude subscription
 is turned on. Change those first.
+
+**Mentors' model picker.** When a mentor starts a new chat, the New chat page has a model dropdown with the same list
+as the default-model dropdown above (only models that passed the safety check). Students can't pick a model: the
+chat uses the default model. A mentor can also switch an existing chat to any model on the list from the chat's
+Model menu. If a chat's model later stops being allowed (its key is removed, its company is turned off, or its
+safety check fails or goes out of date), the next reply uses the default model instead. That change is written to the audit log as
+"model_fallback", and the chat's Model menu shows the new model.
 
 ## API keys (config.env, secret)
 

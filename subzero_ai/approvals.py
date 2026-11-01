@@ -105,9 +105,11 @@ class ApprovalService:
     async def submit(self, viewer: Viewer, text: str, conversation_id: int | None = None,
                      subteam: str | None = None, files: list[Prepared] | tuple = (),
                      explainer: bool = False, project_id: int | None = None,
-                     options: dict | None = None, on_saved: Callable[[int, int], None] | None = None) -> Outcome:
+                     options: dict | None = None, on_saved: Callable[[int, int], None] | None = None,
+                     model: str | None = None) -> Outcome:
         """on_saved(conversation_id, message_id), if given, is called right after the message is saved and
-        before anything else happens to it (the reply starting, the Slack card)."""
+        before anything else happens to it (the reply starting, the Slack card). `model` (mentors' picks) is used
+        only when this message starts a new chat; the default model is used otherwise."""
         text = clean_text(text)
         # There's no explainer switch any more: asking for one in words is how a student requests it
         explainer = explainer or asks_for_explainer(text)
@@ -122,7 +124,7 @@ class ApprovalService:
                                              "Shorten it or split it into parts.")
         if conversation_id is None:
             return await self._submit(viewer, text, None, subteam, files, explainer, project_id, options or {},
-                                      on_saved)
+                                      on_saved, model)
         lock = self._chat_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
             return await self._submit(viewer, text, conversation_id, subteam, files, explainer, None, options or {},
@@ -137,7 +139,7 @@ class ApprovalService:
 
     async def _submit(self, viewer: Viewer, text: str, conversation_id: int | None, subteam: str | None,
                       files, explainer: bool, project_id: int | None, options: dict,
-                      on_saved: Callable[[int, int], None] | None = None) -> Outcome:
+                      on_saved: Callable[[int, int], None] | None = None, model: str | None = None) -> Outcome:
         needs_review = (not viewer.is_mentor) or self.settings.mentors_need_approval
 
         if conversation_id is not None:
@@ -185,10 +187,10 @@ class ApprovalService:
         with self.db.transaction() as conn:
             if conversation_id is None:
                 conversation_id = self.store.create_conversation(
-                    conn, owner_id=viewer.id, model=self.settings.model_default, subteam=subteam,
+                    conn, owner_id=viewer.id, model=model or self.settings.model_default, subteam=subteam,
                     project_id=project_id)
                 self.db.audit("conversation_started", actor_id=viewer.id, target_type="conversation",
-                              target_id=conversation_id, conn=conn)
+                              target_id=conversation_id, details={"model": model} if model else None, conn=conn)
             message_id = self.store.add_message(conn, conversation_id=conversation_id, author_id=viewer.id,
                                                 role="user", content=text, status=status,
                                                 wants_explainer=explainer,
