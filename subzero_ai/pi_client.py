@@ -33,8 +33,8 @@ SLOW_MESSAGE = "The AI took too long to answer. Try again."
 BRIDGE_PROVIDER = "claude-bridge"  # Claude through a Claude Code login (a Claude subscription); needs no API key
 QUOTA_MESSAGE = ("The Claude subscription has hit its limit for now. Try again later or ask a mentor to switch "
                  "models.")
-LOGIN_MESSAGE = ("The Claude subscription isn't signed in. An admin needs to run python -m subzero_ai claude-login "
-                 "on the mini PC.")
+LOGIN_MESSAGE = ("The Claude subscription isn't signed in. An admin needs to sign in under Settings, AI and keys, "
+                 "Claude subscription.")
 
 # Variables Node needs to run (Linux and Windows), and proxy / certificate settings. Nothing else is passed on.
 _NODE_VARS = ("PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "HOME",

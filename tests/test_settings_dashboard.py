@@ -76,6 +76,32 @@ class AccessTest(Base):
         self.assertIn('name="model_check_judge"', page)
         self.assertNotIn("Restart to finish saving", page)
 
+    def test_page_is_split_into_sections(self):
+        import re
+        page = self.admin.get("/settings").text
+        tabs = re.findall(r'<div class="settings-tab" id="tab-([a-z]+)"', page)
+        self.assertEqual(tabs, ["overview", "ai", "review", "people", "slack", "site", "history"])
+        for tab in tabs:
+            self.assertIn(f'href="#tab-{tab}"', page)
+        # Every box sits in exactly one section, in the order the menu promises
+        where = {}
+        for chunk in page.split('<div class="settings-tab" id="tab-')[1:]:
+            tab = chunk.split('"', 1)[0]
+            for box in re.findall(r'<section class="panel" id="([a-z-]+)"', chunk):
+                where[box] = tab
+        self.assertEqual(where["bridge"], "ai")
+        self.assertEqual(where["ai-keys"], "ai")
+        self.assertEqual(where["env-engine"], "ai")
+        self.assertEqual(where["accounts"], "people")
+        self.assertEqual(where["env-slack"], "slack")
+        self.assertEqual(where["prompts"], "review")
+        from subzero_ai import saved_settings
+        for key in [*saved_settings.SECTIONS, "health", "checks", "model-check", "connectors", "env-site", "history"]:
+            self.assertIn(key, where)
+        # Links in the Connected accounts list all go to a box that is on the page
+        for target in set(re.findall(r'<a href="#([a-z-]+)">Change</a>', page)):
+            self.assertIn(f'id="{target}"', page)
+
 
 class SiteTest(Base):
     def test_live_and_restart_settings(self):

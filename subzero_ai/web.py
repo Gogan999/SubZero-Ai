@@ -50,6 +50,7 @@ from .attachments import (
     prepare_frame,
     size_label,
 )
+from .bridge_login import BridgeLogin
 from .auth import LoginError, SlackLogin, profile_from_claims
 from .ai_backend import Capabilities, capabilities_for, make_client, resolve_backend
 from .claude import ClaudeClient
@@ -175,6 +176,8 @@ class Services:
     github: GitHub
     drive: Drive
     code: CodeRunner
+    # A Claude subscription sign-in started on the Settings page, waiting for its code
+    bridge_login: BridgeLogin = field(default_factory=BridgeLogin)
     # Explainer titles and sizes per finished reply, for the Artifacts gallery (a finished reply never changes)
     artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Model names from the Pi gateway, by provider/model id, for labels (filled once at startup, may stay empty)
@@ -1619,6 +1622,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                 task.cancel()
             await asyncio.gather(*loops, return_exceptions=True)
             await s.tasks.cancel_all()
+            s.bridge_login.cancel()  # a Claude subscription sign-in nobody finished
             closer = getattr(s.claude, "aclose", None)
             if closer is not None:
                 try:

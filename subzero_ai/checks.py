@@ -68,7 +68,8 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
             elif bridge_logged_in(settings.data_dir):
                 add(OK, "Claude subscription is signed in (Claude Code login found)")
             else:
-                add(FAIL, "Claude subscription isn't signed in", "Run: python -m subzero_ai claude-login")
+                add(FAIL, "Claude subscription isn't signed in",
+                    "Sign in under Settings, AI and keys, Claude subscription (or run python -m subzero_ai claude-login).")
         client = claude or make_client(settings, max_retries=1)
         try:
             await _check_models(settings, client, add, pi=backend == "pi", node_runner=node_runner)

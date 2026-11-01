@@ -31,8 +31,8 @@ PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "googl
 PROVIDER_HELP = {
     "claude-bridge": ("Replies use the logged-in Claude subscription's limits. When they run out, students get an "
                       "error until it resets, so keep an API-key model as the hard-problem fallback. It has to pass "
-                      "the safety check like any model. Someone must log in once with "
-                      "python -m subzero_ai claude-login. Needs AI_BACKEND=pi."),
+                      "the safety check like any model. Sign in once under Claude subscription in AI and keys. "
+                      "Needs AI_BACKEND=pi."),
 }
 SLACK_ID_RE = re.compile(r"[UW][A-Z0-9]{2,}")
 # These cost more and need 30-day data retention at Anthropic, so the plan keeps them off.

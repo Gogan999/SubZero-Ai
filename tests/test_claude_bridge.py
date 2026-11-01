@@ -167,7 +167,7 @@ class ErrorTest(unittest.TestCase):
     def test_not_logged_in_message(self):
         for detail in ("Not logged in \u00b7 Please run /login", "Claude Code process exited: please run /login"):
             self.assertEqual(error_message("provider", detail, BRIDGE), LOGIN_MESSAGE)
-        self.assertIn("claude-login", LOGIN_MESSAGE)
+        self.assertIn("Claude subscription", LOGIN_MESSAGE)
         self.assertNotEqual(error_message("provider", "Not logged in", "anthropic/claude-x"), LOGIN_MESSAGE)
 
     def test_tool_stop_message_is_kept(self):
@@ -305,7 +305,7 @@ class AdminPageTest(unittest.TestCase):
         _, _, admin = self.make("pi")
         page = admin.get("/settings").text
         self.assertIn("Claude subscription (Claude Code)", page)
-        self.assertIn("python -m subzero_ai claude-login", page)
+        self.assertIn("Sign in once under Claude subscription", page)
         self.assertIn("hard-problem fallback", page)
 
     def test_turning_it_on_updates_the_running_client(self):

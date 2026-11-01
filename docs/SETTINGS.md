@@ -1,7 +1,10 @@
 # Every setting, and where to change it
 
 Since version 0.7, admins can change every setting, API key and connected account on the **Settings** page.
-This page lists them all. The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env`
+This page lists them all. Since 0.8 the page is split into sections, picked from the menu on the left (a row of tabs
+on a phone): Overview (health, backups, Run checks), AI and keys (Claude settings, API keys, Claude subscription,
+Model safety check, AI engine), Mentor review (limits, approval window, system prompt), Accounts and people
+(connected accounts, subteams and admins), Slack, Site and server (site, data, connectors, Code) and Change history. The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env`
 by hand.
 
 **Where a setting is saved.** "Database" settings win over config.env and apply to the next message. "config.env"
@@ -89,8 +92,11 @@ The **Connected accounts** box shows Slack (workspace, live connection, Sign in 
 saved and its last four characters), the Claude subscription (signed in or not, with a Sign out button), GitHub and
 the Cloudflare Tunnel's address. **Run checks** runs the same checks as check-settings.cmd and shows the results.
 
-Signing in to the Claude subscription still happens on the mini PC (`python -m subzero_ai claude-login`), because
-Claude Code opens a browser there. The Cloudflare Tunnel itself is managed in Cloudflare's Zero Trust dashboard.
+The **Claude subscription** box (under AI and keys) signs Claude Code in from the page. **Sign in** starts
+`claude auth login --claudeai` on the mini PC with the bridge's own config folder and shows the sign-in address it
+prints. Open it on any device, sign in, and paste the code Claude shows into the box; the page hands the code to the
+waiting program and never saves or logs it. A sign-in nobody finishes stops after 15 minutes. `python -m subzero_ai
+claude-login` on the mini PC still works too. The Cloudflare Tunnel itself is managed in Cloudflare's Zero Trust dashboard.
 
 ## Kept in config.env only
 

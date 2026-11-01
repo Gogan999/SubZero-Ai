@@ -443,8 +443,19 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
 .panel h2 { margin-top: 0; }
 .panel > form, .panel > .steps { margin-top: .75rem; }
 .panel h3 { font-size: 1rem; margin: 1.25rem 0 .5rem; }
-.settings-nav { list-style: none; margin: .25rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: .9rem; }
-.settings-nav a { display: inline-block; padding: .2rem 0; }
+/* Settings: a list of sections beside the one that's open. Without JavaScript every section shows, one after another */
+.settings-page { max-width: 1060px; }
+.settings-layout { display: grid; grid-template-columns: 12.5rem minmax(0, 1fr); gap: 1.75rem; align-items: start; margin-top: 1.25rem; }
+.settings-nav { position: sticky; top: 1rem; }
+.settings-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; font-size: .95rem; }
+.settings-nav a { display: flex; align-items: center; padding: .45rem .7rem; border-radius: 6px; text-decoration: none; color: var(--ink-2); }
+.settings-nav a:hover { background: var(--frost); color: var(--ink); }
+.settings-nav a[aria-current="true"] { background: var(--frost); color: var(--ink); font-weight: 600; }
+.settings-tabs { min-width: 0; max-width: 760px; }
+.settings-tab + .settings-tab { margin-top: 2.5rem; }
+.settings-tab-title { font-size: 1.35rem; margin: 0; }
+.settings-tab > .field-hint { margin: .3rem 0 0; }
+.settings-tab-title + .field-hint + .panel { margin-top: 1rem; }
 .flash { background: var(--frost); color: var(--ink); border-radius: 8px; padding: .55rem .8rem; margin: 1rem 0 0; }
 .fields { display: grid; gap: 1rem; }
 .field { display: grid; gap: .3rem; min-width: 0; }
@@ -567,6 +578,12 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
   .greeting { font-size: 1.6rem; }
   .start { align-items: flex-start; padding-top: 2.5rem; }
   .panel { scroll-margin-top: calc(var(--topbar) + 1rem); }
+  /* Settings sections become a row of tabs that scrolls sideways, kept under the top bar */
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; margin-top: 1rem; }
+  .settings-nav { top: var(--topbar); z-index: 3; margin: 0 -1.25rem; padding: .4rem 1.25rem; background: var(--paper); border-bottom: 1px solid var(--rule); overflow-x: auto; scrollbar-width: none; }
+  .settings-nav ul { display: flex; gap: .25rem; width: max-content; }
+  .settings-nav a { min-height: 44px; padding: 0 .8rem; white-space: nowrap; }
+  .settings-page .panel, .settings-tab { scroll-margin-top: calc(var(--topbar) + 4.5rem); }
 }
 
 @media (prefers-reduced-motion: reduce) {

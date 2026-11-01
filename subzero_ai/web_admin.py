@@ -18,6 +18,7 @@ from starlette.routing import Route
 
 from . import __version__, model_check, saved_settings, server_settings, setup_flow
 from .ai_backend import resolve_backend
+from .bridge_login import LoginError, login_env, looks_like_code
 from .backup import list_backups, size_text
 from .config import MODEL_ID_SETTINGS, PROVIDERS, model_provider, parse_env_file, update_env_file
 from .connectors import BRANCH_RE, REPO_RE, ConnectorError
@@ -28,6 +29,7 @@ from .pi_client import (
     KEY_SETTINGS,
     bridge_credentials_path,
     bridge_logged_in,
+    claude_cli_path,
     provider_keys,
     settings_bridge_env,
 )
@@ -187,7 +189,7 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
             "prompts": prompts, "history": history,
             "backups": backups, "backup_folder": str(s.settings.backups_path), "connectors": connectors,
             "env_sections": env_sections_context(s, env_section, errors, submitted),
-            "accounts": accounts_context(s), "checks": checks_context(s), "file_only": server_settings.FILE_ONLY,
+            "accounts": accounts_context(s), "checks": checks_context(s), "bridge": bridge_context(s), "file_only": server_settings.FILE_ONLY,
             "pending": [server_settings.ENV_FIELDS[n].label for n in s.pending_restart],
             "config_path": str(s.settings.config_path)}
 
@@ -241,10 +243,9 @@ def accounts_context(s: Services) -> list[dict[str, Any]]:
                 state, kind = ("Signed in", "ok") if on else ("Signed in, turned off", "plain")
             else:
                 state, kind = ("Not signed in", "bad") if on else ("Off", "plain")
-            rows.append({"label": saved_settings.PROVIDER_LABELS[p], "state": state, "kind": kind, "bridge": True,
-                         "signed_in": signed_in, "link": "#bridge",
-                         "detail": "Sign in on the mini PC: open a command prompt in the SubZero AI folder and run "
-                                   "python\\python.exe -m subzero_ai claude-login." if not signed_in else
+            rows.append({"label": saved_settings.PROVIDER_LABELS[p], "state": state, "kind": kind,
+                         "link": "#bridge",
+                         "detail": "Use Sign in under Claude subscription." if not signed_in else
                                    "Replies use the subscription's limits."})
             continue
         key = getattr(st, KEY_SETTINGS[p], "")
@@ -262,6 +263,15 @@ def accounts_context(s: Services) -> list[dict[str, Any]]:
                  "kind": "ok" if st.https else "bad", "link": "#env-site",
                  "detail": f"{st.public_url}. The tunnel itself is managed in Cloudflare's Zero Trust dashboard."})
     return rows
+
+
+def bridge_context(s: Services) -> dict[str, Any]:
+    """The Claude subscription box: signed in or not, and a sign-in waiting for its code."""
+    st = s.settings
+    waiting = s.bridge_login.waiting()
+    return {"signed_in": bridge_logged_in(st.data_dir), "on": BRIDGE_PROVIDER in st.ai_providers,
+            "needs_pi": resolve_backend(st) != "pi", "found": claude_cli_path(st.pi_gateway_script or None) is not None,
+            "waiting": waiting, "url": s.bridge_login.url if waiting else "", "by": s.bridge_login.by if waiting else ""}
 
 
 def checks_context(s: Services) -> dict[str, Any]:
@@ -607,12 +617,67 @@ async def start_checks(request: Request, viewer: Viewer) -> Response:
         s.db.audit("checks_started", actor_id=viewer.id)
         s.tasks.spawn(_run_checks(s, viewer.id, viewer.name), name="settings-checks")
         flash(request, "Checks started. Refresh in a minute.")
-    return RedirectResponse("/settings#accounts", status_code=303)
+    return RedirectResponse("/settings#checks", status_code=303)
+
+
+@page(require="admin")
+async def bridge_sign_in(request: Request, viewer: Viewer) -> Response:
+    """Start Claude Code's sign-in on the mini PC and show its sign-in address, to open on any device."""
+    s = services(request)
+    cli = claude_cli_path(s.settings.pi_gateway_script or None)
+    if cli is None:
+        flash(request, "Couldn't find the Claude Code program that comes with the AI helper. Install the newest "
+                       "SubZero AI zip, then try again.")
+        return RedirectResponse("/settings#bridge", status_code=303)
+    try:
+        await asyncio.to_thread(s.bridge_login.start, cli, login_env(s.settings.data_dir), viewer.name)
+    except LoginError as exc:
+        flash(request, str(exc))
+        return RedirectResponse("/settings#bridge", status_code=303)
+    s.db.audit("bridge_sign_in_started", actor_id=viewer.id)
+    flash(request, "Open the sign-in page, sign in, then paste the code here.")
+    return RedirectResponse("/settings#bridge", status_code=303)
+
+
+@page(require="admin")
+async def bridge_code(request: Request, viewer: Viewer) -> Response:
+    """Hand the pasted code to the waiting sign-in. The code itself is never logged, saved or shown again."""
+    s = services(request)
+    form = await request.form()
+    code = str(form.get("code") or "").strip()
+    if not s.bridge_login.waiting():
+        flash(request, "That sign-in isn't waiting anymore. Press Sign in again to get a new address.")
+        return RedirectResponse("/settings#bridge", status_code=303)
+    if not looks_like_code(code):
+        flash(request, "That doesn't look like the whole code. Copy all of it from the Claude page, including the "
+                       "part after the #, and paste it again." if code else "Paste the code from the Claude page first.")
+        return RedirectResponse("/settings#bridge", status_code=303)
+    data_dir = s.settings.data_dir
+    try:
+        await asyncio.to_thread(s.bridge_login.finish, code, lambda: bridge_logged_in(data_dir))
+    except LoginError as exc:
+        s.db.audit("bridge_sign_in_failed", actor_id=viewer.id)
+        flash(request, f"Not signed in. {exc}")
+        return RedirectResponse("/settings#bridge", status_code=303)
+    use_new_bridge(s)
+    s.db.audit("bridge_signed_in", actor_id=viewer.id)
+    flash(request, "Signed in to the Claude subscription." + (
+        "" if BRIDGE_PROVIDER in s.settings.ai_providers else
+        " Turn on Claude subscription under AI providers to use it."))
+    return RedirectResponse("/settings#bridge", status_code=303)
+
+
+@page(require="admin")
+async def bridge_cancel(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    s.bridge_login.cancel()
+    flash(request, "Sign-in stopped.")
+    return RedirectResponse("/settings#bridge", status_code=303)
 
 
 @page(require="admin")
 async def bridge_sign_out(request: Request, viewer: Viewer) -> Response:
-    """Forget the Claude subscription's login. Signing in again is done on the mini PC with claude-login."""
+    """Forget the Claude subscription's login. Sign in again from the same box."""
     s = services(request)
     path = bridge_credentials_path(s.settings.data_dir)
     if not path.is_file():
@@ -624,12 +689,12 @@ async def bridge_sign_out(request: Request, viewer: Viewer) -> Response:
             log.warning("Couldn't remove the Claude subscription login: %s", type(exc).__name__)
             flash(request, "Couldn't sign out right now because the AI helper is using the login. Try again in a "
                            "minute, or restart first.")
-            return RedirectResponse("/settings#accounts", status_code=303)
+            return RedirectResponse("/settings#bridge", status_code=303)
         use_new_bridge(s)
         s.db.audit("bridge_signed_out", actor_id=viewer.id)
         flash(request, "Signed out of the Claude subscription. Its models stop working until someone signs in "
-                       "again on the mini PC.")
-    return RedirectResponse("/settings#accounts", status_code=303)
+                       "again.")
+    return RedirectResponse("/settings#bridge", status_code=303)
 
 
 @page(require="admin")
@@ -925,6 +990,9 @@ admin_routes = [
     Route("/settings/restart", restart_app, methods=["POST"]),
     Route("/settings/checks", start_checks, methods=["POST"]),
     Route("/settings/bridge/sign-out", bridge_sign_out, methods=["POST"]),
+    Route("/settings/bridge/sign-in", bridge_sign_in, methods=["POST"]),
+    Route("/settings/bridge/code", bridge_code, methods=["POST"]),
+    Route("/settings/bridge/cancel", bridge_cancel, methods=["POST"]),
     Route("/settings/{section}", save_section, methods=["POST"]),
     Route("/setup", setup_page),
     Route("/setup/{step}", setup_step, methods=["POST"]),
