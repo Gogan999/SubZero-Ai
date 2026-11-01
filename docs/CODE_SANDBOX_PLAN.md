@@ -91,6 +91,21 @@ Other things we do not know yet and must check on the real machine: Windows edit
 decides whether Hyper-V VMs are available, so D2 chooses between WSL and Hyper-V, not whether WSL works), Windows 10 vs 11 (Hyper-V firewall), whether WSL is installed, free RAM and disk, and whether
 third-party antivirus blocks WSL networking.
 
+### The mini PC (checked read-only on 2026-11-01)
+
+- Windows 11 Pro 23H2 (build 22631). Hyper-V is enabled and the hypervisor is running. Virtual Machine Platform and WSL
+  are on; Windows Sandbox is off. WSL 2 already has `Ubuntu` and `docker-desktop` distros (both stopped).
+- Intel i5-9500T, 6 cores, 6 threads (no hyperthreading). 23.8 GB RAM (12.3 GB free when checked). One drive, `C:`,
+  75.7 GB free of 237.6 GB.
+- The service runs as `NT SERVICE\SubZeroAI` from `C:\Program Files\SubZeroAI\service`.
+- Firmware virtualization is inferred as on (a hypervisor is running); the reported flag can read False in that case.
+- 23H2 Pro may no longer receive security updates; check Windows Update, since the sandbox host should be patched.
+
+Sizing from this: **disk is the tightest limit.** Plan 2 to 4 cores and 4 to 8 GB RAM for all VMs together, 2 to 3
+concurrent sessions at 2 GB RAM and 1 to 2 cores each, a shared read-only base disk with a differencing disk per
+session capped near 10 GB, and refuse new sessions when free disk drops under about 20 GB. Raise limits only after
+measuring. Another option if demand grows: run sessions on a second small machine.
+
 ### Alternatives considered
 
 - **Hyper-V VM per session** (Pro or Enterprise only): strongest isolation, own kernel and per-VM CPU/RAM caps and
