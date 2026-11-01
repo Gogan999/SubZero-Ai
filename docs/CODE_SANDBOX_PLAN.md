@@ -101,6 +101,11 @@ third-party antivirus blocks WSL networking.
 - Firmware virtualization is inferred as on (a hypervisor is running); the reported flag can read False in that case.
 - 23H2 Pro may no longer receive security updates; check Windows Update, since the sandbox host should be patched.
 
+- Hyper-V Administrators currently has no members, so `NT SERVICE\SubZeroAI` cannot manage VMs. Adding it gives it
+  control of every VM on the host, which is broad. Prefer a small dedicated controller (own low-privilege account in
+  that group, narrow API to the app) over adding the web service itself. M3 must confirm this works for a service SID.
+- Remote Control sessions run non-elevated (UAC), so Hyper-V cmdlets fail there; the spike needs an elevated PowerShell.
+
 Sizing from this: **disk is the tightest limit.** Plan 2 to 4 cores and 4 to 8 GB RAM for all VMs together, 2 to 3
 concurrent sessions at 2 GB RAM and 1 to 2 cores each, a shared read-only base disk with a differencing disk per
 session capped near 10 GB, and refuse new sessions when free disk drops under about 20 GB. Raise limits only after
