@@ -106,6 +106,14 @@ third-party antivirus blocks WSL networking.
   that group, narrow API to the app) over adding the web service itself. M3 must confirm this works for a service SID.
 - Remote Control sessions run non-elevated (UAC), so Hyper-V cmdlets fail there; the spike needs an elevated PowerShell.
 
+- **M3 Hyper-V spike result (2026-11-01, elevated, all cleaned up): passed.** A gen 2 VM with 1 GB RAM, 1 vCPU and a
+  50% CPU cap was created and the caps applied while running. A Private switch with no host adapter worked. A
+  differencing disk was created from a parent and deleting the child left the parent unchanged. Not tested: PowerShell
+  Direct (needs a guest OS image), traffic from a real guest, and adding `NT SERVICE\SubZeroAI` to Hyper-V
+  Administrators (its name resolves to a valid SID, so it looks possible).
+- The PC also has an External switch (`TrueNAS`), an Internal one (`Default Switch`) and a `TrueNas` VM. Sandbox VMs must
+  attach only to their own private switch, and the controller must verify that before starting a VM.
+
 Sizing from this: **disk is the tightest limit.** Plan 2 to 4 cores and 4 to 8 GB RAM for all VMs together, 2 to 3
 concurrent sessions at 2 GB RAM and 1 to 2 cores each, a shared read-only base disk with a differencing disk per
 session capped near 10 GB, and refuse new sessions when free disk drops under about 20 GB. Raise limits only after
