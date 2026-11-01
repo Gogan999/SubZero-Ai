@@ -549,15 +549,21 @@ NETWORK_OK_SECONDS = 60  # a passing host check is trusted this long, so each cr
 NETWORK_CHECK_MARK = "# szsandbox: host network check (read-only, changes nothing)"  # first line of the check script
 NETWORK_CHECK_SECONDS = 60  # the Settings page's check gives up after this long
 HOST_VNIC_NAME = "vEthernet ({})"  # the host's adapter for an Internal switch is named after it
-RISKY_PORTS = (135, 139, 445, 3389, 5985)  # SMB, RPC, RDP and WinRM: never open to the sandboxes
 BLOCK_TCP_BELOW = "szsandbox-block-tcp-below"  # blocks TCP ports 1 to proxy port minus 1
 BLOCK_TCP_ABOVE = "szsandbox-block-tcp-above"  # blocks TCP ports proxy port plus 1 to 65535
 BLOCK_UDP = "szsandbox-block-udp"  # blocks every UDP port
 BLOCK_ICMP4 = "szsandbox-block-icmp4"  # blocks ICMPv4
 BLOCK_ICMP6 = "szsandbox-block-icmp6"  # blocks ICMPv6
+# IP protocols with no ports that TCP, UDP and ICMP blocks don't cover: IGMP (2), IPv6 inside IPv4 (41), GRE (47),
+# ESP (50) and AH (51). Each gets one block rule, BLOCK_PROTO_RULE with the number.
+BLOCK_PROTOCOLS = (2, 41, 47, 50, 51)
+BLOCK_PROTO_RULE = "szsandbox-block-proto-{}"
 PROXY_RULE = "szsandbox-allow-proxy"  # the one allow: TCP to the proxy port from the guest subnet
+# The PowerShell list of BLOCK_PROTOCOLS that sandbox-network.ps1 must contain word for word (a test checks it)
+NETWORK_BLOCK_PROTOCOLS_PS = ("$BlockProtocols = @(" + ", ".join(str(n) for n in BLOCK_PROTOCOLS) + ")  "
+                              "# IP protocols with no ports, blocked whole: generated from sandbox.BLOCK_PROTOCOLS")
 # Problem codes that carry a name after the colon (a rule's name, or an error message)
-NETWORK_CODE_PREFIXES = ("block-rule-missing:", "open-allow:", "check-failed:")
+NETWORK_CODE_PREFIXES = ("block-rule-missing:", "check-failed:")
 NETWORK_PROBLEMS = {
     "switch-missing": "The sandbox switch doesn't exist yet",
     "switch-not-internal": "The sandbox switch isn't an Internal switch",
@@ -570,15 +576,18 @@ NETWORK_PROBLEMS = {
                     "on that adapter)",
     "proxy-rule-wrong": "The firewall rule szsandbox-allow-proxy must exist and allow only TCP to the proxy port from "
                         "10.77.0.0/24 on the sandbox adapter",
+    "default-inbound-allow": "Windows Firewall's default for incoming traffic on the Public profile is Allow, and it "
+                             "must be Block",
 }
 UNREADABLE_CHECK = "The check gave an answer the app couldn't read"
 
 
 def block_rule_specs(proxy_port: int) -> list[tuple[str, str, str | None]]:
     """The firewall block rules for the sandbox adapter, as (name, protocol, local ports or None for every port). With
-    PROXY_RULE they cover all inbound traffic: TCP is blocked below and above the proxy port, UDP and both ICMP
-    versions are blocked whole, and the one allow rule opens only the proxy port. Windows Firewall lets a block rule
-    beat an allow rule, which is why the blocks skip the proxy port. A range that would be empty is left out."""
+    PROXY_RULE they cover all inbound traffic: TCP is blocked below and above the proxy port, UDP, both ICMP versions
+    and BLOCK_PROTOCOLS are blocked whole, and the one allow rule opens only the proxy port. Windows Firewall lets a
+    block rule beat an allow rule, which is why the blocks skip the proxy port. A range that would be empty is left
+    out. Allow rules that already exist on the host need no change: these interface-scoped blocks take precedence."""
     port = int(proxy_port)
     specs: list[tuple[str, str, str | None]] = []
     if port > 1:
@@ -586,19 +595,16 @@ def block_rule_specs(proxy_port: int) -> list[tuple[str, str, str | None]]:
     if port < 65535:
         specs.append((BLOCK_TCP_ABOVE, "TCP", f"{port + 1}-65535"))
     specs += [(BLOCK_UDP, "UDP", None), (BLOCK_ICMP4, "ICMPv4", None), (BLOCK_ICMP6, "ICMPv6", None)]
+    specs += [(BLOCK_PROTO_RULE.format(number), str(number), None) for number in BLOCK_PROTOCOLS]
     return specs
 
 
 def describe_network_problem(code: str) -> str:
     """The plain-language text for one problem code from host_network_check_script (no final full stop)."""
-    if code.startswith("open-allow:"):
-        name = code.split(":", 1)[1][:120]
-        return (f"The firewall rule '{name}' lets other computers reach this PC over the sandbox network. Turn it off, "
-                "or limit it so it doesn't apply to the sandbox adapter")
     if code.startswith("block-rule-missing:"):
         name = code.split(":", 1)[1][:120]
         return (f"The firewall rule {name} is missing, turned off or set up wrong. The sandbox adapter needs its block "
-                "rules for every port except the proxy's")
+                "rules for every port except the proxy's, and for the other IP protocols")
     if code.startswith("check-failed:"):
         return f"The check couldn't finish ({code.split(':', 1)[1].strip()[:200] or 'no reason given'})"
     return NETWORK_PROBLEMS.get(code, f"The check found a problem it doesn't know how to describe ({code[:60]})")
@@ -631,12 +637,12 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
     """A read-only PowerShell check of the host's side of the sandbox network. It prints a JSON list of problem codes
     (an empty list when everything is in place); parse_host_network_check turns them into plain words. It changes
     nothing. UNVERIFIED on a real host: the cmdlets and their property names are untested (docs/CODE_SANDBOX_PLAN.md,
-    M3b). The same checks, with messages, are in packaging/windows/scripts/sandbox-network.ps1; keep them in step."""
+    M3b). The same checks, with messages, are in packaging/windows/scripts/sandbox-network.ps1; keep them in step.
+    It reads only the szsandbox-* firewall rules, and each one's filters once, so it stays fast."""
     sw = ps_quote(switch)
     alias = ps_quote(HOST_VNIC_NAME.format(switch))
     subnet = ps_quote(GUEST_SUBNET)
     port = int(proxy_port)
-    risky = ", ".join(str(p) for p in RISKY_PORTS)
     specs = ", ".join(
         "@{ Name = " + ps_quote(name) + "; Protocol = " + ps_quote(protocol) + "; LocalPort = "
         + (ps_quote(ports) if ports else "$null") + " }"
@@ -668,62 +674,42 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
         "    $binding = Get-NetAdapterBinding -Name $alias -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue",
         "    if (-not $binding -or $binding.Enabled) { $problems.Add('ipv6-enabled') }",
         "  }",
-        "  $rules = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object {",
-        "    $_.DisplayName -like 'szsandbox-*' -and $_.Enabled -eq 'True' })",
-        f"  $blockSpecs = @({specs})",
-        "  foreach ($spec in $blockSpecs) {",
-        "    $ok = $false",
-        "    foreach ($rule in @($rules | Where-Object { $_.DisplayName -eq $spec.Name -and"
-        " $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' })) {",
-        "      $protocols = Get-RuleValues $rule 'Get-NetFirewallPortFilter' 'Protocol'",
-        "      $localPorts = Get-RuleValues $rule 'Get-NetFirewallPortFilter' 'LocalPort'",
-        "      $ifaces = Get-RuleValues $rule 'Get-NetFirewallInterfaceFilter' 'InterfaceAlias'",
-        "      $remotes = Get-RemoteAddresses $rule",
-        "      $portOk = ($null -eq $spec.LocalPort) -or ($localPorts -contains $spec.LocalPort)",
-        "      if (($protocols -contains $spec.Protocol) -and $portOk -and ($ifaces -contains $alias)"
-        " -and ($remotes -contains 'Any')) { $ok = $true }",
-        "    }",
-        "    if (-not $ok) { $problems.Add('block-rule-missing:' + $spec.Name) }",
-        "  }",
-        "  $proxyRules = @($rules | Where-Object { $_.DisplayName -eq 'szsandbox-allow-proxy' })",
-        "  $proxyBad = $proxyRules.Count -eq 0",
-        "  foreach ($rule in $proxyRules) {",
+        "  $publicProfile = Get-NetFirewallProfile -Profile Public -ErrorAction Stop",
+        "  if ($publicProfile.DefaultInboundAction -eq 'Allow') { $problems.Add('default-inbound-allow') }",
+        "  # Only the szsandbox-* rules are read, and each rule's filters are fetched once, into $infos",
+        "  $rules = @(Get-NetFirewallRule -DisplayName 'szsandbox-*' -ErrorAction SilentlyContinue | Where-Object {",
+        "    $_.Enabled -eq 'True' })",
+        "  $infos = @()",
+        "  foreach ($rule in $rules) {",
         "    $protocols = Get-RuleValues $rule 'Get-NetFirewallPortFilter' 'Protocol'",
         "    $localPorts = Get-RuleValues $rule 'Get-NetFirewallPortFilter' 'LocalPort'",
         "    $ifaces = Get-RuleValues $rule 'Get-NetFirewallInterfaceFilter' 'InterfaceAlias'",
         "    $remotes = Get-RemoteAddresses $rule",
-        "    $ok = ($rule.Direction -eq 'Inbound') -and ($rule.Action -eq 'Allow') -and ($protocols -contains 'TCP') `",
-        f"      -and ($localPorts -contains '{port}') -and ($localPorts.Count -eq 1) `",
-        f"      -and ($ifaces -contains $alias) -and ($remotes -contains {subnet})",
+        "    $infos += [pscustomobject]@{ Name = $rule.DisplayName; Direction = $rule.Direction;"
+        " Action = $rule.Action; Protocols = $protocols; LocalPorts = $localPorts; Interfaces = $ifaces;"
+        " Remotes = $remotes }",
+        "  }",
+        f"  $blockSpecs = @({specs})",
+        "  foreach ($spec in $blockSpecs) {",
+        "    $ok = $false",
+        "    foreach ($info in @($infos | Where-Object { $_.Name -eq $spec.Name -and $_.Direction -eq 'Inbound'"
+        " -and $_.Action -eq 'Block' })) {",
+        "      $portOk = ($null -eq $spec.LocalPort) -or ($info.LocalPorts -contains $spec.LocalPort)",
+        "      if (($info.Protocols -contains $spec.Protocol) -and $portOk -and ($info.Interfaces -contains $alias)"
+        " -and ($info.Remotes -contains 'Any')) { $ok = $true }",
+        "    }",
+        "    if (-not $ok) { $problems.Add('block-rule-missing:' + $spec.Name) }",
+        "  }",
+        "  $proxyRules = @($infos | Where-Object { $_.Name -eq 'szsandbox-allow-proxy' })",
+        "  $proxyBad = $proxyRules.Count -eq 0",
+        "  foreach ($info in $proxyRules) {",
+        "    $ok = ($info.Direction -eq 'Inbound') -and ($info.Action -eq 'Allow')"
+        " -and ($info.Protocols -contains 'TCP') `",
+        f"      -and ($info.LocalPorts -contains '{port}') -and ($info.LocalPorts.Count -eq 1) `",
+        f"      -and ($info.Interfaces -contains $alias) -and ($info.Remotes -contains {subnet})",
         "    if (-not $ok) { $proxyBad = $true }",
         "  }",
         "  if ($proxyBad) { $problems.Add('proxy-rule-wrong') }",
-        "  $allows = @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True"
-        " -ErrorAction SilentlyContinue)",
-        "  foreach ($rule in $allows) {",
-        "    if ($rule.DisplayName -like 'szsandbox-*') { continue }",
-        "    $profileText = [string]$rule.Profile",
-        "    if (($profileText -notmatch 'Public') -and ($profileText -notmatch 'Any')) { continue }",
-        "    $protocols = Get-RuleValues $rule 'Get-NetFirewallPortFilter' 'Protocol'",
-        "    if (@($protocols | Where-Object { $_ -match '^ICMP' }).Count -gt 0) { continue }",
-        "    $ifaces = Get-RuleValues $rule 'Get-NetFirewallInterfaceFilter' 'InterfaceAlias'",
-        "    $ifaceOk = ($ifaces.Count -eq 0) -or ($ifaces -contains 'Any') -or ($ifaces -contains $alias)",
-        "    if (-not $ifaceOk) { continue }",
-        "    $remotes = Get-RemoteAddresses $rule",
-        "    $remoteOk = ($remotes.Count -eq 0) -or ($remotes -contains 'Any') -or ($remotes -contains 'LocalSubnet')",
-        "    if (-not $remoteOk) { continue }",
-        "    $wide = $false",
-        "    foreach ($portText in (Get-RuleValues $rule 'Get-NetFirewallPortFilter' 'LocalPort')) {",
-        "      if (($portText -eq 'Any') -or ($portText -eq '')) { $wide = $true }",
-        "      elseif ($portText -match '^(\\d+)(?:-(\\d+))?$') {",
-        "        $lo = [int]$Matches[1]",
-        "        $hi = $lo",
-        "        if ($Matches[2]) { $hi = [int]$Matches[2] }",
-        f"        foreach ($p in @({risky})) {{ if (($p -ge $lo) -and ($p -le $hi)) {{ $wide = $true }} }}",
-        "      }",
-        "    }",
-        "    if ($wide) { $problems.Add('open-allow:' + $rule.DisplayName) }",
-        "  }",
         "} catch {",
         "  $problems.Add('check-failed:' + ($_.Exception.Message -replace '[\\r\\n]+', ' '))",
         "}",

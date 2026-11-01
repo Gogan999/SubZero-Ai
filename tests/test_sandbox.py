@@ -27,6 +27,9 @@ from subzero_ai.code_runner import SANDBOX_ENV
 from subzero_ai.config import Settings, load_settings
 from subzero_ai.db import MIGRATIONS, Database
 from subzero_ai.sandbox import (
+    BLOCK_PROTO_RULE,
+    BLOCK_PROTOCOLS,
+    NETWORK_BLOCK_PROTOCOLS_PS,
     NETWORK_CHECK_MARK,
     NETWORK_OK_SECONDS,
     NETWORK_CHECK_HELPERS,
@@ -1090,34 +1093,62 @@ class HostNetworkCheckScriptTest(unittest.TestCase):
                      "Forwarding -ne 'Disabled'", "NetworkCategory -eq 'Public'",
                      "'szsandbox-block-tcp-below'", "'szsandbox-block-tcp-above'", "'szsandbox-block-udp'",
                      "'szsandbox-block-icmp4'", "'szsandbox-block-icmp6'", "'szsandbox-allow-proxy'",
+                     "'szsandbox-block-proto-2'", "'szsandbox-block-proto-41'", "'szsandbox-block-proto-47'",
+                     "'szsandbox-block-proto-50'", "'szsandbox-block-proto-51'",
                      "'10.77.0.0/24'", "'1-8079'", "'8081-65535'", "'8080'", "'Any'", "-ComponentID ms_tcpip6",
                      "Get-NetAdapterBinding", "'ipv6-enabled'", "Get-NetFirewallInterfaceFilter",
-                     "Get-NetFirewallAddressFilter", "Get-NetFirewallPortFilter", "'open-allow:'",
-                     "135, 139, 445, 3389, 5985"):
+                     "Get-NetFirewallAddressFilter", "Get-NetFirewallPortFilter", "-DisplayName 'szsandbox-*'",
+                     "Get-NetFirewallProfile -Profile Public -ErrorAction Stop",
+                     "DefaultInboundAction -eq 'Allow'", "'default-inbound-allow'"):
             self.assertIn(text, script)
         self.assertNotIn("'3128'", script, "the proxy port comes from the setting")
         self.assertNotIn("szsandbox-block-inbound", script, "the old single block rule is gone")
+
+    def test_the_open_allow_scan_is_gone(self):
+        script = host_network_check_script("szsandbox-internal", 3128)
+        for text in ("open-allow", "135, 139, 445, 3389, 5985", "Get-NetFirewallRule -Direction Inbound"):
+            self.assertNotIn(text, script)
+        self.assertNotIn("open-allow", NETWORK_CODE_PREFIXES)
+
+    def test_only_the_sandbox_rules_are_read_and_each_rule_is_read_once(self):
+        script = host_network_check_script("szsandbox-internal", 3128)
+        self.assertIn("Get-NetFirewallRule -DisplayName 'szsandbox-*'", script)
+        self.assertNotIn("Get-NetFirewallRule -ErrorAction", script, "every rule on the PC is never read")
+        # The filters are fetched once per rule, in one loop. The block and proxy checks read the list in $infos.
+        self.assertEqual(script.count("'Get-NetFirewallPortFilter'"), 2)
+        self.assertEqual(script.count("'Get-NetFirewallInterfaceFilter'"), 1)
+        self.assertEqual(script.count("Get-RemoteAddresses $rule"), 1)
+        self.assertEqual(script.count("foreach ($rule in $rules)"), 1)
 
     def test_remote_addresses_are_compared_in_either_form(self):
         script = host_network_check_script("szsandbox-internal", 3128)
         self.assertIn(NETWORK_CHECK_HELPERS, script)
         self.assertNotIn("ForEach-Object { $_.RemoteAddress }", script, "raw addresses are never compared")
-        self.assertGreaterEqual(script.count("Get-RemoteAddresses $rule"), 3)
+        self.assertIn("ConvertTo-Cidr ([string]$_)", script)
 
     def test_the_block_rules_follow_the_proxy_port_and_skip_empty_ranges(self):
         self.assertEqual([(n, p, r) for n, p, r in block_rule_specs(3128)], [
             ("szsandbox-block-tcp-below", "TCP", "1-3127"), ("szsandbox-block-tcp-above", "TCP", "3129-65535"),
             ("szsandbox-block-udp", "UDP", None), ("szsandbox-block-icmp4", "ICMPv4", None),
-            ("szsandbox-block-icmp6", "ICMPv6", None)])
+            ("szsandbox-block-icmp6", "ICMPv6", None),
+            ("szsandbox-block-proto-2", "2", None), ("szsandbox-block-proto-41", "41", None),
+            ("szsandbox-block-proto-47", "47", None), ("szsandbox-block-proto-50", "50", None),
+            ("szsandbox-block-proto-51", "51", None)])
         self.assertNotIn("szsandbox-block-tcp-below", [n for n, _, _ in block_rule_specs(1)],
                          "port 1 has no range below")
         self.assertNotIn("szsandbox-block-tcp-above", [n for n, _, _ in block_rule_specs(65535)],
                          "port 65535 has no range above")
         self.assertIn("1-65534", [r for _, _, r in block_rule_specs(65535)])
-        self.assertEqual(len(block_rule_specs(1)), 4)
+        self.assertEqual(len(block_rule_specs(1)), 9)
         script = host_network_check_script("szsandbox-internal", 1)
         self.assertNotIn("'1-0'", script)
         self.assertIn("LocalPort = $null", script)
+
+    def test_the_protocol_blocks_are_the_constant_list(self):
+        self.assertEqual(BLOCK_PROTOCOLS, (2, 41, 47, 50, 51))
+        self.assertEqual(BLOCK_PROTO_RULE.format(41), "szsandbox-block-proto-41")
+        names = [n for n, _, _ in block_rule_specs(3128) if n.startswith("szsandbox-block-proto-")]
+        self.assertEqual(names, [BLOCK_PROTO_RULE.format(n) for n in BLOCK_PROTOCOLS])
 
     def test_a_switch_name_with_a_line_break_is_refused(self):
         with self.assertRaises(SandboxError):
@@ -1143,12 +1174,21 @@ class HostNetworkParserTest(unittest.TestCase):
             self.assertNotIn("$", words)
 
     def test_a_failing_sample_lists_each_problem(self):
-        output = '["forwarding-on","open-allow:Remote Desktop (TCP-In)"]'
+        output = '["forwarding-on","block-rule-missing:szsandbox-block-proto-41"]'
         problems = parse_host_network_check(output)
         self.assertEqual(len(problems), 2)
         self.assertIn("forwarding", problems[0])
-        self.assertIn("'Remote Desktop (TCP-In)'", problems[1])
-        self.assertIn("other computers", problems[1])
+        self.assertIn("szsandbox-block-proto-41 is missing", problems[1])
+        self.assertIn("other IP protocols", problems[1])
+
+    def test_an_old_open_allow_code_is_no_longer_a_known_problem(self):
+        [problem] = parse_host_network_check('["open-allow:Remote Desktop (TCP-In)"]')
+        self.assertIn("doesn't know how to describe", problem)
+
+    def test_the_default_inbound_action_has_plain_words(self):
+        [problem] = parse_host_network_check('["default-inbound-allow"]')
+        self.assertIn("Public profile", problem)
+        self.assertIn("Block", problem)
 
     def test_a_single_json_string_is_one_problem(self):
         self.assertEqual(parse_host_network_check('"host-gateway"'), [NETWORK_PROBLEMS["host-gateway"]])
@@ -1211,9 +1251,10 @@ class HyperVNetworkGuardTest(unittest.TestCase):
                 self.assert_nothing_was_made(host)
 
     def test_several_problems_are_all_named(self):
-        _, error = self.refused_with('["switch-missing","host-gateway","open-allow:Remote Desktop"]')
+        _, error = self.refused_with(
+            '["switch-missing","host-gateway","block-rule-missing:szsandbox-block-proto-41"]')
         self.assertIn("The sandbox switch doesn't exist yet; The host's adapter", str(error))
-        self.assertIn("'Remote Desktop'", str(error))
+        self.assertIn("szsandbox-block-proto-41 is missing", str(error))
 
     def test_a_powershell_error_refuses_the_sandbox(self):
         host, error = self.refused_with(SandboxError("The Hyper-V service is stopped"))
@@ -1319,7 +1360,9 @@ class SandboxNetworkScriptTest(unittest.TestCase):
     def test_it_only_ever_changes_objects_named_for_the_sandboxes(self):
         text = self.text()
         self.assertIn('if (-not $Switch.StartsWith($Prefix))', text)
-        self.assertIn('$_.DisplayName -like "$Prefix*"', text)
+        self.assertIn('Get-NetFirewallRule -DisplayName "$Prefix*"', text)
+        self.assertNotIn("open-allow", text)
+        self.assertNotIn("Get-OpenAllowNames", text)
         self.assertNotIn("Set-NetAdapter", text)
         self.assertIsNone(re.search(r"Disable-NetAdapter\s", text), "only the IPv6 binding is ever disabled")
         self.assertIn("Disable-NetAdapterBinding -Name $Alias -ComponentID ms_tcpip6", text)
@@ -1334,6 +1377,8 @@ class SandboxNetworkScriptTest(unittest.TestCase):
                      "szsandbox-block-tcp-above", "szsandbox-block-udp", "szsandbox-block-icmp4",
                      "szsandbox-block-icmp6", "szsandbox-allow-proxy", '$Prefix = "szsandbox-"'):
             self.assertIn(name, text)
+        self.assertIn(NETWORK_BLOCK_PROTOCOLS_PS, text, "the protocol list is generated from sandbox.BLOCK_PROTOCOLS")
+        self.assertIn('"szsandbox-block-proto-$number"', text)
         self.assertEqual(sandbox.HOST_ADDRESS, "10.77.0.1")
         self.assertEqual(sandbox.GUEST_SUBNET, "10.77.0.0/24")
         self.assertEqual(sandbox.HOST_VNIC_NAME.format("szsandbox-internal"), "vEthernet (szsandbox-internal)")
@@ -1366,9 +1411,22 @@ class SandboxNetworkDriftTest(unittest.TestCase):
         names = set(re.findall(r'"(szsandbox-(?:block|allow)-[a-z0-9-]+)"', ps1_text()))
         self.assertEqual(names, {sandbox.BLOCK_TCP_BELOW, sandbox.BLOCK_TCP_ABOVE, sandbox.BLOCK_UDP,
                                  sandbox.BLOCK_ICMP4, sandbox.BLOCK_ICMP6, sandbox.PROXY_RULE})
+        self.assertEqual(sandbox.BLOCK_PROTO_RULE.format("$number"), "szsandbox-block-proto-$number")
         for port in (1, 3128, 65535):
             for name, _, _ in block_rule_specs(port):
                 self.assertIn(f"'{name}'", host_network_check_script("szsandbox-internal", port))
+
+    def test_the_protocol_list_is_generated_into_the_script(self):
+        self.assertIn(NETWORK_BLOCK_PROTOCOLS_PS, ps1_text())
+        self.assertIn(NETWORK_BLOCK_PROTOCOLS_PS.split("  #")[0], ps1_text())
+        self.assertEqual(NETWORK_BLOCK_PROTOCOLS_PS.split("@(")[1].split(")")[0],
+                         ", ".join(str(n) for n in BLOCK_PROTOCOLS))
+
+    def test_the_open_allow_scan_is_gone_from_both_copies(self):
+        for text in (ps1_text(), host_network_check_script("szsandbox-internal", 3128)):
+            self.assertNotIn("open-allow", text)
+            self.assertNotIn("RiskyPorts", text)
+            self.assertNotIn("Get-OpenAllowNames", text)
 
     def test_the_address_helpers_are_identical_in_both(self):
         self.assertIn(NETWORK_CHECK_HELPERS, ps1_text())

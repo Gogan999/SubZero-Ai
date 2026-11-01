@@ -138,6 +138,20 @@ class ChecksTest(unittest.TestCase):
         self.assertIn("sandbox-network.ps1 -Action Install", row.detail)
         self.assertIn("'8080'", seen[0])
 
+    def test_an_allow_default_for_the_public_profile_is_a_failure_with_the_fix(self):
+        settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx")
+
+        def runner(script):
+            self.assertIn("Get-NetFirewallProfile -Profile Public", script)
+            return '["default-inbound-allow","block-rule-missing:szsandbox-block-proto-41"]'
+
+        results = asyncio.run(run_checks(settings, slack=FakeSlack(), claude=GoodClaude(), sandbox_runner=runner))
+        [row] = self.sandbox_rows(results)
+        self.assertEqual(row.status, FAIL)
+        self.assertIn("Public profile", row.detail)
+        self.assertIn("szsandbox-block-proto-41 is missing", row.detail)
+        self.assertIn("sandbox-network.ps1 -Action Install", row.detail)
+
     def test_a_failing_host_command_is_a_failure_not_a_crash(self):
         settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx")
 
