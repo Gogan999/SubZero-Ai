@@ -1382,3 +1382,22 @@ class SandboxNetworkDriftTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SandboxScriptPitfallTest(unittest.TestCase):
+    """PowerShell pitfalls that made the network script silently do nothing on the mini PC."""
+
+    def test_script_does_not_use_a_switch_statement(self):
+        import re
+        from pathlib import Path
+        text = (Path(__file__).resolve().parent.parent / "packaging" / "windows" / "scripts"
+                / "sandbox-network.ps1").read_text(encoding="ascii")
+        self.assertIn("[string]$Switch", text)  # the parameter name stays
+        # A `switch (...)` statement would never run: -Switch is PowerShell's automatic $switch variable
+        self.assertIsNone(re.search(r"(?m)^\s*switch\s*\(", text))
+        self.assertIn('$Action -eq "Check"', text)
+
+    def test_generated_check_script_does_not_use_a_switch_statement(self):
+        import re
+        script = sandbox.host_network_check_script("szsandbox-internal", 3128)
+        self.assertIsNone(re.search(r"(?m)^\s*switch\s*\(", script))

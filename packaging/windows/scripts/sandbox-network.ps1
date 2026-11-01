@@ -301,11 +301,11 @@ try {
     if (-not (Get-Command Get-VMSwitch -ErrorAction SilentlyContinue)) {
         throw "Hyper-V's PowerShell tools aren't installed, or Hyper-V isn't turned on."
     }
-    switch ($Action) {
-        "Install" { Install-SandboxNetwork }
-        "Remove" { Remove-SandboxNetwork }
-        "Check" { if ((Show-SandboxCheck) -gt 0) { $code = 1 } }
-    }
+    # Not a `switch` statement: the -Switch parameter is the automatic $switch variable, so `switch` would run nothing
+    if ($Action -eq "Install") { Install-SandboxNetwork }
+    elseif ($Action -eq "Remove") { Remove-SandboxNetwork }
+    elseif ($Action -eq "Check") { if ((Show-SandboxCheck) -gt 0) { $code = 1 } }
+    else { throw "Unknown action $Action." }
 } catch {
     Write-Host "Stopped: $($_.Exception.Message)" -ForegroundColor Red
     $code = 1
