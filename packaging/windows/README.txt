@@ -15,7 +15,8 @@ Try it first without installing
   and keeps its data in a test-data folder here. Close the window to stop it.
 
 Where things are after installing
-  C:\Program Files\SubZeroAI       the app, its own Python, and these tools:
+  C:\Program Files\SubZeroAI       the app, its own Python, its own Node.js (the node folder, used by the
+                                    AI helper in app\pi_gateway), and these tools:
       update.cmd                    update to the newest release, keeping all data
       restore.cmd                   put a backup back
       back-up-now.cmd               make a backup now (one runs every night at 2:00 AM)

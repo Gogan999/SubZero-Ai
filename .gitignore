@@ -9,3 +9,4 @@ config.env
 *.db-shm
 dist/
 packaging/.cache/
+pi_gateway/node_modules/

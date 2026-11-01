@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Code · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <h1>Code</h1>
+  <p class="lede">Give Claude a task in the team's robot code. It works in a copy of the repository on this computer: it can read and search on its own, but a mentor approves every file change and every command first. Nothing is pushed to GitHub. When it's done, download the changes as a patch.</p>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if available and not models %}
+  <section class="panel">
+    <h2>Pick a Claude model first</h2>
+    <p class="field-hint">Code sessions need a Claude model. An admin can pick one in {% if viewer.is_admin %}<a href="/settings">Settings</a>{% else %}Settings{% endif %}.</p>
+  </section>
+  {% elif available %}
+  <section class="panel" aria-labelledby="new-code-title">
+    <h2 id="new-code-title">New session</h2>
+    <form method="post" action="/code">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        <div class="field">
+          <label for="code-task">What should Claude do?</label>
+          <textarea id="code-task" name="task" rows="5" maxlength="8000" required aria-describedby="code-task-hint"
+            placeholder="The arm overshoots at high speed. Find where the arm PID is set up and suggest a fix, then run the build."></textarea>
+          <p class="field-hint" id="code-task-hint">Works in <span class="mono">{{ settings.connector_github_repo }}</span>{% if settings.connector_github_branch %} on {{ settings.connector_github_branch }}{% endif %}. Claude can ask to run: {{ commands|join(', ') }}.</p>
+        </div>
+        <div class="field">
+          <label for="code-model">Model</label>
+          <select id="code-model" name="model">
+            {% for value, label in models %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">{{ icon('code') }} Start</button></div>
+    </form>
+  </section>
+  {% else %}
+  <section class="panel">
+    <h2>Connect the repository first</h2>
+    <p class="field-hint">Code works in the team's GitHub repository. {% if viewer.is_admin %}Add it in <a href="/settings#connectors">Settings, Connectors</a>.{% else %}An admin can add it in Settings, Connectors.{% endif %}</p>
+  </section>
+  {% endif %}
+  <h2>Sessions</h2>
+  <ol class="chat-rows">
+    {% for item in sessions %}
+    <li>
+      <a href="/code/{{ item.id }}">
+        <span class="chat-title">{{ item.title }}</span>
+        <span class="chat-meta">
+          {{ item.owner }} · <time>{{ item.updated }}</time>
+          <span class="pill {{ item.kind }}">{{ item.label }}</span>
+          {% if item.pending %}<span class="pill pending">{{ item.pending }} to approve</span>{% endif %}
+        </span>
+      </a>
+    </li>
+    {% else %}
+    <li class="empty-state">No sessions yet.</li>
+    {% endfor %}
+  </ol>
+</section>
+{% endblock %}

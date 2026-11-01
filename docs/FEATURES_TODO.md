@@ -18,19 +18,8 @@ keeps its status tag.
 
 ## Placeholders already on screen
 
-| Feature | Where the placeholder is | What it should do | Notes for building it |
-|---|---|---|---|
-| Projects | Sidebar, `/projects` | Group chats about one mechanism or subsystem, with shared reference files and project instructions that go into every chat. | New `projects` table; conversations get a `project_id`. Project files reuse the attachment store. Project instructions written by mentors, or reviewed like messages. |
-| Artifacts | Sidebar, `/artifacts` | The home for interactive explainers: a gallery of every explainer (later documents and code) from approved chats, with full screen and download. Explainers have no switch in the composer; Claude makes one when a student asks in words, or when it would clearly help. | Explainers already exist per reply (`render.explainers`), so a gallery query over approved replies is most of it. Private chats stay private. |
-| Claude Code | Sidebar, `/code` | Let Claude read the team's robot code repository, run builds and tests, and propose changes as a pull request. | The biggest item. Needs a sandboxed runner, a narrowly scoped GitHub token, and mentor approval for every step that writes. Probably mentors only at first. |
-| Web search | Composer tools menu | Let Claude look up datasheets, game rules and part specs. | API web search tool. Costs extra per search: add a daily cap and a Settings switch. Show the searches on the mentor's review card. |
-| Extended thinking | Composer tools menu | Let Claude think longer on hard problems. | API `thinking` setting. Costs more, so maybe mentors turn it on per chat, like the model switch. |
-| Research | Composer tools menu | Longer reports built from many searches. | Builds on web search. Likely mentors only because of cost. |
-| Response styles | Composer tools menu | Choose how Claude answers: concise, explanatory, step by step. | One extra system-prompt line per style, chosen per message. |
-| Connectors (GitHub, Drive) | Composer tools menu | Pull files from the team's GitHub or Google Drive into a message instead of attaching them. | OAuth per service. Pulled files show on the review card like attachments. |
-| Share | Chat header | A read-only link to a chat for people outside the team, such as a parent. | Chats are already visible to the team. Needs a revocable link and mentor approval. |
-| Profile and preferences | Account menu | Display name, default subteam, Slack DM notifications on or off. | Store on the `users` row. |
-| Appearance | Account menu | Light, dark or match the device. | Known gap 2 in `docs/DESIGN.md`: `data-theme` on `<html>`, remembered per browser. |
+None right now: every placeholder has been built (see Done below). If a new one is added, give it a
+row here with what it should do and notes for building it.
 
 The model name in the composer is not a placeholder: students see which model
 answers, and mentors get a picker there (or in the chat header when reading
@@ -65,11 +54,68 @@ Not on screen yet. Add a placeholder only when work on one starts.
 ### Team and mentor side
 
 - **Memory**: facts about the team's robot that Claude remembers across chats, edited by mentors like the prompt layers in Settings.
-- **Usage for students**: how many messages they have left today, in the account menu.
 - **Mentor dashboard**: approval times, busiest subteams, most-asked topics.
+
+## Follow-ups for the AI providers work (0.5)
+
+- **Bridge spike on the mini PC:** run `docs/BRIDGE_SPIKE.md` before turning on the Claude subscription provider for students.
+- **Real-API tests** for OpenAI and OpenRouter models through the Pi gateway (only Anthropic has been tried live; the suite uses fakes).
+- **Review-card labels** may still say "Web search" on a pending message after a model switch drops that feature. The reply is generated without it, but the card should say so.
 
 ## Done
 
+- AI providers (0.5): `AI_BACKEND` (anthropic, pi, fake) with the Node.js Pi gateway (`pi_gateway/`) and `PiClient`;
+  `provider/model` ids with a migration; an AI providers box and API keys on Settings; per-model feature gating
+  (web search, Research, Code, thinking, images); the model safety check (Settings box and `check --model`) that a
+  model must pass before it becomes the default, hard-problem or screener model; the optional Claude subscription
+  bridge (off by default, `claude-login`, `docs/BRIDGE_SPIKE.md`); Windows packaging with Node.js; and a backend
+  regression suite that runs the flow tests on all three backends.
+
+- Pi backend (0.5): `AI_BACKEND` (anthropic default, pi, fake) with the Node.js Pi gateway in `pi_gateway/` and `PiClient`;
+  `provider/model` ids (anthropic, openai, google, openrouter, claude-bridge) with a migration for saved models; the AI
+  providers setting and API keys box on Settings; per-model feature gating (web search, Research, Code, thinking,
+  images); the model safety check (Settings box and `check --model`) required before a model becomes the default,
+  hard-problem or screener model; the optional Claude subscription bridge (off by default, `claude-login`,
+  `docs/BRIDGE_SPIKE.md`); Windows packaging with Node.js; and the backend regression suite that runs the flow tests
+  against all three backends.
+
+- Code (`/code`, mentors only): a mentor gives Claude a task in the GitHub repository from Connectors.
+  Claude works in a copy on the mini PC (downloaded as a zip, so git isn't needed). It lists, reads and
+  searches files on its own; every file change (shown as a diff) and every command waits for a mentor to
+  approve or decline it with a note. Commands must start with a program allowed in Settings, Code
+  (gradlew by default), run in the copy's folder with no shell, a time limit, and none of the app's keys or
+  tokens in their environment. Nothing is pushed: the mentor downloads the changes as a patch. Sessions stop
+  after 40 Claude replies per run, and every step is in the audit log. Not a full OS sandbox: an approved
+  command runs as the app's Windows account, which is why each one needs a mentor.
+  Possible next step: open the patch as a pull request with a token that can write.
+- Connectors (composer tools menu, "Add files from"): GitHub browses the one repository an admin sets in
+  Settings, Connectors (with a read-only token for a private repository, kept in config.env); Google Drive
+  takes a link to a Doc, Sheet, Slides deck or file shared as "Anyone with the link" (there's no Google
+  sign-in, so private files can't be added). Files are fetched when the message is sent and stored like
+  attachments, so they show on the review card and count toward the 5-file limit.
+- Share (`/c/<id>/share`): the chat's student or a mentor makes a read-only link and says who it's for, such as
+  "my parents". A student's link waits for a mentor, who previews it and approves or declines it in Review
+  (with a note in #claude-approvals); a mentor's link works at once. The link shows the chat as it was when
+  shared: approved messages and finished replies, people as "Student" or "Mentor" without names, and no
+  attached files. Links expire after 30 days, can be revoked any time, stop working if the chat is made
+  private, aren't indexed by search engines, and every step is in the audit log.
+- Composer tools menu: Web search, Research (mentors only unless an admin allows students), Extended thinking
+  and Response styles (Normal, Concise, Explanatory, Step by step). They're picked per message, shown on the
+  review card and in the queue, and approved with the message. Web search uses the API's server-side search
+  tool with a team-wide daily limit and an on/off switch in Settings; replies list the pages Claude read.
+- Appearance: Light, Dark or Auto (match the device) in the account menu, saved on the person's profile so it
+  follows them to every device and draws without a flash.
+- Profile and preferences (`/profile`): name and picture from Slack, the person's subteam (tags new chats,
+  since the new-chat page has no picker), Slack DMs about reviews on or off, appearance, and for students
+  how many messages they have left today.
+- Projects (`/projects`): mentors make a project per mechanism or subsystem with a description, instructions
+  for Claude and up to 20 reference files (code, text, and up to 5 PNG/JPG images). Everyone can read them and start chats in the
+  project; Claude gets the instructions after the safety rules and the files before the first message. Only
+  mentors change a project, every change is in the audit log, and the review card names the project. Mentors
+  can archive a project; its chats keep working.
+- Artifacts (`/artifacts`): a gallery of every interactive explainer from chats the viewer can see, with
+  search and Team / From my chats tabs, and a page per explainer with Full screen, Download and View code.
+  An explainer is exactly as visible as the reply it's in, so private chats stay private.
 - Sidebar like claude.ai with New chat, Chats, Recents and an account menu.
 - Chats page (`/recents`) with search, subteam filter and Team/Mine, moved from the old sidebar.
 - Greeting on the new-chat page.
@@ -77,3 +123,6 @@ Not on screen yet. Add a placeholder only when work on one starts.
 - Model picker in the composer for mentors.
 - Video attachments (MP4, MOV, WebM) and a 50 MB per-file limit (90 MB per message, under Cloudflare's 100 MB cap). Claude can't watch video, so the browser sends it up to 8 still frames per video.
 - Attachments, interactive explainers and the mentor approval flow (versions 0.2 to 0.4).
+- Slack DMs (0.6): people can message the bot in Slack. Each top-level DM starts a chat and its Slack thread continues
+  it; every DM goes through `ApprovalService.submit` like a web message, and the reply is posted back in the thread
+  (`subzero_ai/slack_dm.py`, `SLACK_DMS` setting, `im:history` scope and `message.im` event).

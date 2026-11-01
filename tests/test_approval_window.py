@@ -12,6 +12,7 @@ from subzero_ai.claude import FakeClaude
 from subzero_ai.config import Settings
 from subzero_ai.screener import Screener
 
+from .backends import add_variants
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 HTML = {"Accept": "text/html"}
@@ -148,7 +149,7 @@ class WindowTest(unittest.TestCase):
         self.send(cid, "Follow-up")
         screens = [c for c in self.h.claude.calls if "Reply with one line: SAFE" in c.get("system", "")]
         self.assertEqual(len(screens), 1)
-        self.assertEqual(screens[0]["model"], "claude-haiku-5-5")
+        self.assertEqual(screens[0]["model"], "anthropic/claude-haiku-5-5")
         self.assertIn("<message>\nFollow-up\n</message>", screens[0]["messages"][0]["content"])
 
     def test_flagged_messages_go_to_mentors_with_the_reason(self):
@@ -284,6 +285,11 @@ class WindowSettingsTest(unittest.TestCase):
         self.assertIn("Enter a number from 0 to 120.", resp.text)
         self.assertIn("ava isn&#39;t a Slack member ID", resp.text)
         self.assertEqual(self.h.settings.approval_window_minutes, 0)
+
+
+# The same tests again on the other AI backends (tests/backends.py). Tests that inject behavior by subclassing
+# FakeClaude stay fake-only.
+add_variants(globals(), WindowTest)
 
 
 if __name__ == "__main__":

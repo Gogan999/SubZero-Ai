@@ -5,13 +5,14 @@
       {% if m.avatar %}<img class="avatar" src="{{ m.avatar }}" alt="" width="28" height="28">{% else %}<span class="avatar initial" aria-hidden="true">{{ m.student[0] }}</span>{% endif %}
       <div>
         <p class="queue-who"><strong>{{ m.student }}</strong>{% if m.subteam %}, {{ m.subteam }}{% endif %}</p>
-        <p class="queue-where"><a href="/c/{{ m.conversation_id }}">{{ m.title }}</a>, waiting {{ m.waited }}</p>
+        <p class="queue-where"><a href="/c/{{ m.conversation_id }}">{{ m.title }}</a>{% if m.project %}, in the project {{ m.project }}{% endif %}, waiting {{ m.waited }}</p>
       </div>
     </div>
     {% if m.previous %}<p class="queue-context">Replying to Claude: {{ m.previous }}</p>{% endif %}
     <div class="msg-body plain">{{ m.html|safe }}</div>
     {% if m.files %}{% include "_files.html" %}{% endif %}
     {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
+    {% if m.tools %}<p class="asked-explainer">Asked for: {{ m.tools|join(', ') }}</p>{% endif %}
     {% if m.screen_note %}<p class="queue-context">Sent in the approval window, but the screener flagged it: {{ m.screen_note }}</p>{% endif %}
     {% include "_review_controls.html" %}
   </li>

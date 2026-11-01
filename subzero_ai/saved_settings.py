@@ -14,14 +14,26 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .config import Settings, convert
+from .ai_backend import resolve_backend
+from .config import MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
 from .db import Database, utcnow
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
+from .model_check import requirement_problem
 
 log = logging.getLogger("subzero.settings")
 
 EFFORTS = ("low", "medium", "high")
-MODEL_RE = re.compile(r"claude-[a-z0-9][a-z0-9.\-]*")
+# provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
+MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
+PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "google": "Google (Gemini)",
+                   "openrouter": "OpenRouter", "claude-bridge": "Claude subscription (Claude Code)"}
+# A note shown under a provider's checkbox
+PROVIDER_HELP = {
+    "claude-bridge": ("Replies use the logged-in Claude subscription's limits. When they run out, students get an "
+                      "error until it resets, so keep an API-key model as the hard-problem fallback. It has to pass "
+                      "the safety check like any model. Sign in once under Claude subscription in AI and keys. "
+                      "Needs AI_BACKEND=pi."),
+}
 SLACK_ID_RE = re.compile(r"[UW][A-Z0-9]{2,}")
 # These cost more and need 30-day data retention at Anthropic, so the plan keeps them off.
 BLOCKED_MODEL_WORDS = ("fable", "mythos")
@@ -31,7 +43,7 @@ BLOCKED_MODEL_WORDS = ("fable", "mythos")
 class Field:
     name: str
     label: str
-    kind: str  # model, effort, int, bool, lines, ids
+    kind: str  # model, effort, int, bool, lines, ids, providers
     help: str = ""
     minimum: int = 0
     maximum: int = 0
@@ -40,10 +52,17 @@ class Field:
 
 SECTIONS: dict[str, tuple[str, list[Field]]] = {
     "claude": ("Claude", [
-        Field("model_default", "Default model", "model", "Every new chat uses this model."),
+        Field("ai_providers", "AI providers", "providers",
+              "Companies whose models can be used. Add each one's API key under API keys below. Anything besides "
+              "Anthropic also needs the AI helper (set in config.env)."),
+        Field("model_default", "Default model", "model",
+              "Every new chat uses this model. Write it as provider/model, like anthropic/claude-sonnet-5-5."),
         Field("model_hard", "Hard-problem model", "model",
               "Mentors can switch a chat to this model. It costs about twice as much."),
         Field("model_titles", "Title model", "model", "Writes the short titles in the chat list."),
+        Field("model_check_judge", "Safety check judge", "model",
+              "Grades the answers in the Model safety check. It has to be a Claude model, since it decides which "
+              "other models are safe enough for students."),
         Field("effort_default", "Everyday effort", "effort", "Higher effort gives more careful answers and costs more."),
         Field("effort_high", "Effort for explainers and files", "effort",
               "Used for interactive explainers and messages with files attached, which are usually code reviews."),
@@ -52,6 +71,12 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "An explainer is a whole web page, so it needs more room.", 1000, 64000),
         Field("long_chat_tokens", "Suggest a fresh chat after this many tokens", "int",
               "Long chats cost more on every reply.", 10000, 1000000),
+        Field("web_search_enabled", "Claude can search the web when asked", "bool",
+              "Web search and Research in the composer's tools menu. Each search costs about a cent."),
+        Field("web_search_daily_limit", "Web searches per day, for the whole team", "int",
+              "A web search reply uses up to 5, a Research report up to 20. Resets at midnight.", 0, 2000),
+        Field("research_for_students", "Students can ask for Research reports", "bool",
+              "Research runs many searches and writes a long report, so it starts as mentors only."),
     ]),
     "limits": ("Limits and review", [
         Field("limit_pending_per_student", "Waiting messages per student", "int",
@@ -61,6 +86,8 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("reminder_minutes", "Remind mentors after this many minutes", "int",
               "Posts one reminder in the card's Slack thread.", 10, 1440),
         Field("mentors_need_approval", "Mentors' messages also wait for another mentor", "bool"),
+        Field("slack_dms_enabled", "Let people message the bot in Slack", "bool",
+              "Messages sent to the bot in Slack wait for a mentor exactly like messages on the website."),
         Field("show_pending_to_team", "Other students can see messages that are waiting", "bool"),
         Field("show_rejected_to_team", "Other students can see rejected messages and the reason", "bool"),
     ]),
@@ -81,6 +108,13 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("retention_days", "Delete chats with no activity for this many days", "int",
               "730 days keeps this season and the next. 0 keeps chats forever.", 0, 3650),
         Field("backup_keep_days", "Keep nightly backups for this many days", "int", "", 1, 365),
+    ]),
+    "code": ("Code", [
+        Field("code_commands", "Commands Claude can ask to run", "lines",
+              "One program name per line, like gradlew. Claude can only ask to run these, from the repository "
+              "folder, and a mentor approves each command before it runs."),
+        Field("code_command_timeout", "Stop a command after this many seconds", "int",
+              "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
     ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),
@@ -107,7 +141,7 @@ def serialize(name: str, value: Any) -> str:
     kind = FIELDS[name].kind
     if kind == "bool":
         return "1" if value else "0"
-    if kind == "lines":
+    if kind in ("lines", "providers"):
         return "\n".join(value)
     if kind == "ids":
         return "\n".join(sorted(value))
@@ -129,11 +163,80 @@ def load_into(settings: Settings, db: Database) -> None:
             log.warning("Ignoring a saved setting that couldn't be read: %s", row["key"])
 
 
-def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "") -> tuple[dict[str, Any], dict[str, str]]:
-    """Check one section's form. Returns (values, errors), keyed by setting name."""
+def form_text(form: Mapping[str, Any], name: str) -> str:
+    """A form value as text. A field with several values (checkboxes) comes back one per line."""
+    getlist = getattr(form, "getlist", None)
+    if getlist is not None:
+        return "\n".join(str(v) for v in getlist(name))
+    return str(form.get(name, "") or "")
+
+
+def check_providers(raw: str) -> tuple[tuple[str, ...], str]:
+    """Turn the submitted provider list into (providers in a fixed order, error)."""
+    items = [part.lower() for part in re.split(r"[\s,]+", raw) if part]
+    unknown = [item for item in items if item not in PROVIDERS]
+    if unknown:
+        return (), f"{unknown[0]} isn't a provider we support. Choose from {', '.join(PROVIDERS)}."
+    chosen = tuple(p for p in PROVIDERS if p in items)
+    if not chosen:
+        return (), "Turn on at least one provider."
+    return chosen, ""
+
+
+def check_model(raw: str, providers, backend: str) -> tuple[str, str]:
+    """Check one model id. Returns (normalized id, error)."""
+    model = normalize_model_id(raw)
+    match = MODEL_RE.fullmatch(model)
+    if not match:
+        return "", "Use provider/model, like anthropic/claude-sonnet-5-5."
+    provider = match.group(1)
+    if any(word in model.lower() for word in BLOCKED_MODEL_WORDS):
+        return "", ("Fable and Mythos models are kept off: they cost more and Anthropic keeps their "
+                    "data for 30 days.")
+    if provider not in PROVIDERS:
+        return "", f"{provider} isn't a provider we support. Use {', '.join(PROVIDERS)}."
+    if provider not in providers:
+        return "", f"{PROVIDER_LABELS[provider]} isn't turned on. Turn it on under AI providers first."
+    if backend == "anthropic" and provider != "anthropic":
+        return "", ("Only anthropic/ models work with AI_BACKEND=anthropic. Set AI_BACKEND=pi in config.env to use "
+                    "other companies.")
+    return model, ""
+
+
+def judge_ok(model: str) -> bool:
+    """The safety check's judge decides which models students can use, so it must be a Claude model."""
+    provider, _, name = normalize_model_id(model).partition("/")
+    return provider in ("anthropic", "claude-bridge") and name.startswith("claude-")
+
+
+# The settings a model can only be newly set for after passing the Model safety check (True: the screener part)
+CHECKED_MODEL_SETTINGS = {"model_default": False, "model_hard": False, "model_screener": True}
+
+
+def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
+             settings: Settings | None = None, db: Database | None = None) -> tuple[dict[str, Any], dict[str, str]]:
+    """Check one section's form. Returns (values, errors), keyed by setting name.
+    Pass the current settings so models are checked against the providers that are on and the AI backend.
+    Pass the database to also require the Model safety check for a changed default, hard-problem or screener
+    model (a value that isn't changing is left alone)."""
     values: dict[str, Any] = {}
     errors: dict[str, str] = {}
-    for f in SECTIONS[section][1]:
+    fields = SECTIONS[section][1]
+    providers: tuple[str, ...] = tuple(settings.ai_providers) if settings is not None else ("anthropic",)
+    backend = resolve_backend(settings) if settings is not None else "anthropic"
+    if any(f.name == "ai_providers" for f in fields) and "ai_providers" in form:  # absent means unchanged
+        chosen, problem = check_providers(form_text(form, "ai_providers"))
+        if problem:
+            errors["ai_providers"] = problem
+        else:
+            providers = values["ai_providers"] = chosen
+            if ("claude-bridge" in chosen and settings is not None and "claude-bridge" not in settings.ai_providers
+                    and backend != "pi"):
+                errors["ai_providers"] = ("The Claude subscription needs the AI helper. Set AI_BACKEND=pi in "
+                                          "config.env and restart, then turn it on.")
+                del values["ai_providers"]
+                providers = tuple(settings.ai_providers)
+    for f in fields:
         raw = str(form.get(f.name, "") or "").strip()
         if f.kind == "bool":
             values[f.name] = raw in ("1", "on", "true")
@@ -148,13 +251,21 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "")
                 continue
             values[f.name] = number
         elif f.kind == "model":
-            if not MODEL_RE.fullmatch(raw):
-                errors[f.name] = "Enter a Claude model ID, like claude-sonnet-5-5."
-            elif any(word in raw for word in BLOCKED_MODEL_WORDS):
-                errors[f.name] = ("Fable and Mythos models are kept off: they cost more and Anthropic keeps their "
-                                  "data for 30 days.")
+            if f.name == "model_check_judge" and f.name not in form:
+                continue  # added in 0.7: a form from before then leaves it alone
+            model, problem = check_model(raw, providers, backend)
+            if not problem and db is not None and f.name in CHECKED_MODEL_SETTINGS:
+                unchanged = settings is not None and model == normalize_model_id(getattr(settings, f.name))
+                if not unchanged:
+                    problem = requirement_problem(db, model, screener=CHECKED_MODEL_SETTINGS[f.name])
+            if not problem and f.name == "model_check_judge" and not judge_ok(model):
+                problem = "The judge has to be a Claude model, like anthropic/claude-sonnet-5-5."
+            if problem:
+                errors[f.name] = problem
             else:
-                values[f.name] = raw
+                values[f.name] = model
+        elif f.kind == "providers":
+            continue  # checked above
         elif f.kind == "effort":
             if raw not in EFFORTS:
                 errors[f.name] = "Pick low, medium, or high."
@@ -180,6 +291,21 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "")
                 errors[f.name] = "You can't remove yourself. Ask another admin to do it."
             else:
                 values[f.name] = frozenset(items)
+    if "ai_providers" in values and settings is not None:
+        # A provider can't be turned off while a model setting still uses it
+        in_form = {f.name for f in fields}
+        for name in MODEL_ID_SETTINGS:
+            if name in in_form:
+                model = values.get(name, "")  # empty when it failed its own check, which is reported already
+            else:
+                model = getattr(settings, name)
+            provider = model.split("/", 1)[0] if "/" in model else ""
+            if provider and provider not in values["ai_providers"]:
+                errors["ai_providers"] = (f"{PROVIDER_LABELS.get(provider, provider)} is still used by "
+                                          f"{FIELDS[name].label.lower()}. Change that model first.")
+                break
+        if "ai_providers" in errors:
+            del values["ai_providers"]
     return values, errors
 
 

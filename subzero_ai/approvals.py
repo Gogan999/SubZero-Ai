@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -11,7 +13,7 @@ from . import slack_cards
 from .attachments import MAX_FILES, Attachments, Prepared
 from .config import Settings
 from .db import Database, utcnow
-from .generation import ReplyRunner, asks_for_explainer
+from .generation import ReplyRunner, asks_for_explainer, load_options, options_labels
 from .live import Broker, Tasks
 from .roles import is_builtin_user, is_excluded_account
 from .screener import Screener
@@ -72,6 +74,9 @@ class ApprovalService:
         self.broker = broker
         self.tasks = tasks
         self.runner = runner
+        # Posts a decision for a message that came in through a Slack DM and returns True if it did, so the usual
+        # DM isn't sent as well. Slack DMs register this.
+        self.on_decided: Callable[[int], Awaitable[bool]] | None = None
 
     # ------------------------------------------------------------------ helpers
     def link(self, conversation_id: int) -> str:
@@ -99,7 +104,10 @@ class ApprovalService:
     # ---------------------------------------------------------------- submit
     async def submit(self, viewer: Viewer, text: str, conversation_id: int | None = None,
                      subteam: str | None = None, files: list[Prepared] | tuple = (),
-                     explainer: bool = False) -> Outcome:
+                     explainer: bool = False, project_id: int | None = None,
+                     options: dict | None = None, on_saved: Callable[[int, int], None] | None = None) -> Outcome:
+        """on_saved(conversation_id, message_id), if given, is called right after the message is saved and
+        before anything else happens to it (the reply starting, the Slack card)."""
         text = clean_text(text)
         # There's no explainer switch any more: asking for one in words is how a student requests it
         explainer = explainer or asks_for_explainer(text)
@@ -113,10 +121,12 @@ class ApprovalService:
             return Outcome(False, "invalid", f"That message is over {MAX_MESSAGE_CHARS:,} characters. "
                                              "Shorten it or split it into parts.")
         if conversation_id is None:
-            return await self._submit(viewer, text, None, subteam, files, explainer)
+            return await self._submit(viewer, text, None, subteam, files, explainer, project_id, options or {},
+                                      on_saved)
         lock = self._chat_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            return await self._submit(viewer, text, conversation_id, subteam, files, explainer)
+            return await self._submit(viewer, text, conversation_id, subteam, files, explainer, None, options or {},
+                                      on_saved)
 
     def window_applies(self, viewer: Viewer, conversation_id: int | None, files=()) -> bool:
         """Whether this message can skip review because a mentor approved the chat a few minutes ago.
@@ -126,7 +136,8 @@ class ApprovalService:
                 and self.store.window_open(conversation_id, self.settings.approval_window_minutes))
 
     async def _submit(self, viewer: Viewer, text: str, conversation_id: int | None, subteam: str | None,
-                      files, explainer: bool) -> Outcome:
+                      files, explainer: bool, project_id: int | None, options: dict,
+                      on_saved: Callable[[int, int], None] | None = None) -> Outcome:
         needs_review = (not viewer.is_mentor) or self.settings.mentors_need_approval
 
         if conversation_id is not None:
@@ -146,10 +157,17 @@ class ApprovalService:
                 return Outcome(False, "limit", f"You've reached today's limit of {self.settings.limit_approved_per_day} "
                                                "approved messages. It resets at midnight.")
 
+        searching = bool(options.get("search") or options.get("research"))
+        if (options.get("search") or options.get("research")) and self.runner.searches_left() <= 0:
+            return Outcome(False, "limit", "Web search isn't available right now: the team has used today's "
+                                           "searches, or an admin turned it off. Turn off Web search in the tools "
+                                           "menu and send again.")
+
         status = PENDING if needs_review else AUTO
         screen = None  # "passed", "off", or the reason the screener flagged it
         screen_note = None
-        if needs_review and self.window_applies(viewer, conversation_id, files):
+        # Web searches cost money per search, so a message asking for them always waits for a mentor
+        if needs_review and not searching and self.window_applies(viewer, conversation_id, files):
             if self.settings.screener_enabled:
                 verdict = await self.screener.check(text)
                 if verdict.passed:
@@ -167,12 +185,14 @@ class ApprovalService:
         with self.db.transaction() as conn:
             if conversation_id is None:
                 conversation_id = self.store.create_conversation(
-                    conn, owner_id=viewer.id, model=self.settings.model_default, subteam=subteam)
+                    conn, owner_id=viewer.id, model=self.settings.model_default, subteam=subteam,
+                    project_id=project_id)
                 self.db.audit("conversation_started", actor_id=viewer.id, target_type="conversation",
                               target_id=conversation_id, conn=conn)
             message_id = self.store.add_message(conn, conversation_id=conversation_id, author_id=viewer.id,
                                                 role="user", content=text, status=status,
-                                                wants_explainer=explainer)
+                                                wants_explainer=explainer,
+                                                options=json.dumps(options) if options else None)
             if screen_note:
                 conn.execute("UPDATE messages SET screen_note = ? WHERE id = ?", (screen_note, message_id))
             for item in files:
@@ -182,6 +202,8 @@ class ApprovalService:
                 details["files"] = [f"{item.name} ({item.size:,} bytes)" for item in files if item.kind != "frame"]
             if explainer:
                 details["explainer"] = True
+            if options:
+                details["tools"] = options_labels(options)
             self.db.audit("message_sent", actor_id=viewer.id, target_type="message", target_id=message_id,
                           details=details, conn=conn)
             if status == GRACE:
@@ -194,6 +216,11 @@ class ApprovalService:
                               target_id=message_id, details={"conversation": conversation_id, "reason": screen_note},
                               conn=conn)
 
+        if on_saved is not None:
+            try:
+                on_saved(conversation_id, message_id)
+            except Exception:  # the message is saved; a failing caller hook must not stop review or the reply
+                log.exception("A submit hook failed for message %s", message_id)
         self._publish(conversation_id, {"type": "changed", "id": message_id})
         if status == PENDING:
             self._queue_changed()
@@ -213,7 +240,8 @@ class ApprovalService:
             text=msg["content"], link=self.link(conv["id"]),
             previous_reply=previous["content"] if previous else None,
             files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id) if f["kind"] != "frame"],
-            explainer=bool(msg["wants_explainer"]), screen_note=msg["screen_note"])
+            explainer=bool(msg["wants_explainer"]), project=conv["project_name"],
+            tools=options_labels(load_options(msg["options"])), screen_note=msg["screen_note"])
         try:
             posted = await self.slack.post_message(self.settings.slack_approvals_channel,
                                                    slack_cards.card_fallback_text(msg["author_name"]), blocks)
@@ -364,7 +392,13 @@ class ApprovalService:
                                                 slack_cards.card_fallback_text(msg["author_name"], outcome), blocks)
             except Exception:
                 log.exception("Couldn't update the Slack card for message %s", message_id)
-        if outcome in (APPROVED, EDITED, REJECTED) and self.slack is not None:
+        if outcome in (APPROVED, EDITED, REJECTED) and self.on_decided is not None:
+            try:
+                if await self.on_decided(message_id):
+                    return
+            except Exception:
+                log.exception("Couldn't post the decision for message %s in Slack", message_id)
+        if outcome in (APPROVED, EDITED, REJECTED) and self.slack is not None and msg["author_notify_dm"]:
             text = slack_cards.dm_text(outcome, title=conv["title"], link=link, mentor_name=msg["reviewer_name"],
                                        reason=msg["review_note"])
             try:

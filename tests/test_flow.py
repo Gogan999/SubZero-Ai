@@ -3,12 +3,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from subzero_ai.claude import FakeClaude, StreamEvent
+from subzero_ai.web import COMING_SOON
 
+from .backends import RecordingClaudeClient, RecordingPiClient, add_variants
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 
@@ -102,7 +108,7 @@ class FlowTest(unittest.TestCase):
         reply = self.h.reply_to(mid)
         self.assertEqual(reply["status"], "complete")
         self.assertEqual(reply["content"], FakeClaude.reply_for("How do I tune the arm's feedforward?"))
-        self.assertEqual(reply["model"], "claude-sonnet-5-5")
+        self.assertEqual(reply["model"], "anthropic/claude-sonnet-5-5")
         # Claude got the safety prompt and only the approved text, with no names
         call = self.h.claude.calls[0]
         self.assertIn("high school FIRST Robotics Competition team", call["system"])
@@ -389,11 +395,13 @@ class FlowTest(unittest.TestCase):
         self.assertIn('href="/recents"', page)
         self.assertIn(f'href="/c/{cid}"', page, "the sidebar's Recents lists the student's own chats")
         self.assertIn("1 waiting", page)
-        for path in ("/projects", "/artifacts", "/code"):
+        for path in ("/projects", "/artifacts"):
             self.assertIn(f'href="{path}"', page)
-            resp = self.ava.get(path)
-            self.assertEqual(resp.status_code, 200)
-            self.assertIn("Coming soon", resp.text)
+            self.assertEqual(self.ava.get(path).status_code, 200)
+        self.assertNotIn('href="/code"', page, "Code is for mentors")
+        self.assertIn('href="/code"', self.kim.get("/chats").text)
+        for key in COMING_SOON:  # the ones not built yet
+            self.assertIn("Coming soon", self.ava.get(f"/{key}").text)
         self.assertNotIn('href="/queue"', page, "students don't get mentor tools")
         self.assertIn('href="/queue"', self.kim.get("/chats").text)
         # Old chat-list links still work
@@ -486,7 +494,7 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.approve(mid)
         stream_calls = [c for c in self.h.claude.calls if c.get("kind") != "complete"]
-        self.assertEqual(stream_calls[-1]["model"], "claude-opus-5-5")
+        self.assertEqual(stream_calls[-1]["model"], "anthropic/claude-opus-5-5")
         self.assertIn("Opus 5.5", self.kim.get(f"/c/{cid}").text)
 
 
@@ -606,6 +614,43 @@ class ReplyProblemsTest(unittest.TestCase):
         self.h.client.__exit__(None, None, None)
         self.h.client.__enter__()
         self.assertEqual(self.h.services.store.message(reply["id"])["status"], "error")
+
+
+# The same tests again on the other AI backends (tests/backends.py). Tests that inject behavior by subclassing
+# FakeClaude stay fake-only.
+class SplitAlertTest(unittest.TestCase):
+    """The [MENTOR ALERT] marker arriving in small pieces on the real Anthropic and Pi clients (the fake-only
+    version is ReplyProblemsTest.test_alert_marker_split_across_chunks)."""
+
+    def tearDown(self):
+        self.h.close()
+
+    def check(self, claude):
+        self.h = Harness(claude=claude)
+        kim = self.h.login(MENTOR)
+        mid = kim.new_chat("ALERT-TEST I feel awful").json()["message_id"]
+        self.h.idle()
+        reply = self.h.reply_to(mid)
+        self.assertNotIn("MENTOR ALERT", reply["content"])
+        self.assertTrue(reply["content"].startswith("That sounds like a lot to carry."))
+        self.assertEqual(self.h.services.store.conversation(reply["conversation_id"])["visibility"], "private")
+
+    def test_anthropic(self):
+        self.check(RecordingClaudeClient(chunk=3))
+
+    def test_pi(self):
+        tmp = Path(tempfile.mkdtemp(prefix="subzero-split-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        client = RecordingPiClient(tmp / "calls.jsonl", chunk=3)
+        self.addCleanup(lambda: asyncio.run(client.aclose()))
+        self.check(client)
+
+
+add_variants(globals(), FlowTest, ReplyProblemsTest, fake_only={
+    "FlowTest": {"test_claude_html_is_not_rendered"},
+    "ReplyProblemsTest": {"test_failed_reply_can_be_retried_without_new_approval",
+                          "test_alert_marker_split_across_chunks"},
+})
 
 
 if __name__ == "__main__":

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
+{% block notice %}
+<aside class="notice" role="note">
+  <p>A read-only copy of a chat a student on the team had with an AI, usually Claude (made by Anthropic) but sometimes another company's model. A mentor reviewed every student message before the AI saw it. The AI can be wrong, so treat its answers as a starting point.</p>
+</aside>
+{% endblock %}
+{% block main %}
+<section class="thread-col shared">
+  {% if preview %}
+  <p class="private-note">Preview of the link for {{ share.audience }} ({{ share.label|lower }}). This is exactly what they see. Names typed in the messages still show, so check the text.{% if viewer.is_mentor and share.state == 'pending' %} <a href="/queue#shares">Approve or decline it</a>.{% endif %}</p>
+  {% endif %}
+  <header class="thread-head">
+    <div class="thread-title">
+      <h1>{{ title }}</h1>
+      <p class="thread-meta">Shared chat{% if share.expires %} · link works until {{ share.expires }}{% endif %}</p>
+    </div>
+  </header>
+  <ol class="thread">
+    {% for m in messages %}
+    {% if m.role == 'assistant' %}
+    <li class="msg claude">
+      <div class="msg-head"><span class="who">Claude</span></div>
+      <div class="msg-body prose">{{ m.html|safe }}</div>
+      {% if m.sources %}
+      <details class="sources">
+        <summary>Searched the web · {{ m.sources|length }} source{{ 's' if m.sources|length != 1 else '' }}</summary>
+        <ol>
+          {% for src in m.sources %}<li><a href="{{ src.url }}" target="_blank" rel="noopener noreferrer nofollow">{{ src.title }}</a></li>{% endfor %}
+        </ol>
+      </details>
+      {% endif %}
+    </li>
+    {% else %}
+    <li class="msg person{% if m.who == 'Mentor' %} by-mentor{% endif %}">
+      <div class="msg-head">
+        <span class="avatar initial" aria-hidden="true">{{ m.who[0] }}</span>
+        <span class="who">{{ m.who }}</span>
+        <time>{{ m.time }}</time>
+      </div>
+      <div class="msg-body plain">{{ m.html|safe }}</div>
+      {% if m.files %}<p class="asked-explainer">{{ m.files }} attached file{{ 's' if m.files != 1 else '' }}, not shared</p>{% endif %}
+    </li>
+    {% endif %}
+    {% endfor %}
+  </ol>
+  <p class="shared-foot fine">Shared from {{ settings.app_name }}. Only what mentors approved is shown, as it was when the link was made.</p>
+</section>
+{% endblock %}

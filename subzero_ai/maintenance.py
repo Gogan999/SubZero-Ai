@@ -57,6 +57,12 @@ def delete_old_chats(db: Database, files_dir: Path, days: int, *, now: datetime 
     return len(ids)
 
 
+def prune_dm_messages(db: Database, days: int = 7, *, now: datetime | None = None) -> int:
+    """Forget Slack message ids older than `days` days. They only exist to catch Slack delivering a message twice."""
+    cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=days)).isoformat(timespec="seconds")
+    return db.execute("DELETE FROM slack_dm_messages WHERE created_at < ?", (cutoff,)).rowcount
+
+
 class Nightly:
     """Runs the backup once a night at BACKUP_HOUR, then removes old backups and old chats."""
 
@@ -104,6 +110,15 @@ class Nightly:
                                         self.settings.retention_days)
             except Exception:
                 log.exception("Couldn't delete old chats")
+            try:
+                await asyncio.to_thread(prune_dm_messages, self.db)
+            except Exception:
+                log.exception("Couldn't prune old Slack message ids")
+            try:
+                from .code_runner import prune_workspaces
+                await asyncio.to_thread(prune_workspaces, self.db, self.settings.data_dir)
+            except Exception:
+                log.exception("Couldn't delete old Code copies")
             return path.name
 
 

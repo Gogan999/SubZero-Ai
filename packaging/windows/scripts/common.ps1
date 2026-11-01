@@ -130,13 +130,20 @@ function Copy-Mirror([string]$From, [string]$To) {
 }
 
 # The app's files that an install or update replaces. cloudflared and the data folder are left alone.
-$AppParts = @("app", "python", "scripts", "service")
+$AppParts = @("app", "python", "node", "scripts", "service")
+# Parts that older releases don't have. Copying from a release without one removes it from the destination.
+$OptionalParts = @("node")
 $AppFiles = @("VERSION", "release.json", "README.txt", "update.cmd", "restore.cmd", "back-up-now.cmd",
               "check-settings.cmd", "recovery-code.cmd", "uninstall.cmd")
 
 function Copy-AppFiles([string]$From, [string]$To) {
     New-Item -ItemType Directory -Force -Path $To | Out-Null
     foreach ($part in $AppParts) {
+        if (-not (Test-Path (Join-Path $From $part))) {
+            if ($OptionalParts -notcontains $part) { throw "The release is missing '$part'." }
+            Remove-Item -Recurse -Force (Join-Path $To $part) -ErrorAction SilentlyContinue
+            continue
+        }
         Copy-Mirror (Join-Path $From $part) (Join-Path $To $part)
     }
     foreach ($file in $AppFiles) {

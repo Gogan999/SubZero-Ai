@@ -6,7 +6,7 @@
   <header class="thread-head">
     <div class="thread-title">
       <h1 data-title>{{ title }}</h1>
-      <p class="thread-meta">Started by <a href="/recents?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}</p>
+      <p class="thread-meta">Started by <a href="/recents?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}{% if conv.project_name %} · in <a href="/projects/{{ conv.project_id }}">{{ conv.project_name }}</a>{% endif %}</p>
     </div>
     <div class="thread-actions">
       {% if viewer.is_mentor and not can_send %}
@@ -19,7 +19,9 @@
         <noscript><button class="button small" type="submit">Switch</button></noscript>
       </form>
       {% endif %}
-      <button class="button small" type="button" disabled title="Sharing a chat outside the team is coming soon">{{ icon('share') }} Share <span class="soon">Soon</span></button>
+      {% if (own or viewer.is_mentor) and conv.visibility != 'private' %}
+      <a class="button small" href="/c/{{ conv.id }}/share">{{ icon('share') }} Share</a>
+      {% endif %}
     </div>
     {% if conv.visibility == 'private' %}
     <p class="private-note">Private: only {{ 'you' if own else conv.owner_name }} and mentors can see this chat.</p>
@@ -60,6 +62,13 @@
       </div>
     </div>
     <p class="form-error" role="alert" hidden></p>
+    {% if viewer.is_mentor %}
+    {% set missing = [] %}
+    {% if not caps.web_search %}{% set _ = missing.append('search the web') %}{% endif %}
+    {% if not caps.thinking %}{% set _ = missing.append('think longer') %}{% endif %}
+    {% if not caps.images %}{% set _ = missing.append('read images') %}{% endif %}
+    {% if missing %}<p class="composer-note" data-model-note>This model can't {{ missing[:-1]|join(', ') ~ (' or ' if missing|length > 1 else '') ~ missing[-1] }}.</p>{% endif %}
+    {% endif %}
     <p class="composer-note">Attach code, text, screenshots or videos, up to {{ max_files }} files of 50 MB. Don't attach photos or videos of people. Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
   </form>
   {% else %}

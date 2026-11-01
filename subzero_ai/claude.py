@@ -13,18 +13,25 @@ from typing import Any
 
 import requests
 
+from .config import model_provider, normalize_model_id
+
 log = logging.getLogger("subzero.claude")
 
 API_VERSION = "2023-06-01"
 RETRY_STATUSES = {429, 500, 502, 503, 504, 529}
 
 
+# The server-side web search tool. Claude runs the searches on Anthropic's side and cites what it used.
+WEB_SEARCH_TOOL = "web_search_20260209"
+
+
 @dataclass
 class StreamEvent:
-    kind: str  # "text", "usage", "error", or "done"
+    kind: str  # "text", "usage", "search" (a query Claude searched for), "sources", "error", or "done"
     text: str = ""
     usage: dict[str, Any] | None = None
     error: str = ""
+    sources: list[dict[str, str]] | None = None
 
 
 class ClaudeError(Exception):
@@ -35,12 +42,13 @@ def parse_sse(lines: Iterable[str]) -> Iterator[StreamEvent]:
     """Turn the Messages API event stream into StreamEvents. Thinking blocks are skipped."""
     event_name: str | None = None
     data_lines: list[str] = []
+    searches: dict[int, list[str]] = {}  # content block index -> the search query's JSON, as it streams in
     for line in lines:
         if line is None:
             continue
         if line == "":
             if data_lines:
-                yield from _events_from(event_name, "\n".join(data_lines))
+                yield from _events_from(event_name, "\n".join(data_lines), searches)
             event_name, data_lines = None, []
             continue
         if line.startswith(":"):
@@ -50,19 +58,38 @@ def parse_sse(lines: Iterable[str]) -> Iterator[StreamEvent]:
         elif line.startswith("data:"):
             data_lines.append(line[5:].lstrip())
     if data_lines:
-        yield from _events_from(event_name, "\n".join(data_lines))
+        yield from _events_from(event_name, "\n".join(data_lines), searches)
 
 
-def _events_from(event_name: str | None, data: str) -> Iterator[StreamEvent]:
+def _events_from(event_name: str | None, data: str, searches: dict[int, list[str]] | None = None) -> Iterator[StreamEvent]:
+    searches = {} if searches is None else searches
     try:
         obj = json.loads(data)
     except ValueError:
         return
     kind = obj.get("type") or event_name
-    if kind == "content_block_delta":
+    if kind == "content_block_start":
+        block = obj.get("content_block") or {}
+        if block.get("type") == "server_tool_use" and block.get("name") == "web_search":
+            searches[obj.get("index", -1)] = []
+        elif block.get("type") == "web_search_tool_result" and isinstance(block.get("content"), list):
+            found = [{"url": item.get("url", ""), "title": item.get("title") or item.get("url", "")}
+                     for item in block["content"] if item.get("type") == "web_search_result" and item.get("url")]
+            if found:
+                yield StreamEvent("sources", sources=found)
+    elif kind == "content_block_stop" and obj.get("index", -1) in searches:
+        try:
+            query = (json.loads("".join(searches.pop(obj["index"])) or "{}") or {}).get("query", "")
+        except (ValueError, AttributeError):
+            query = ""
+        if query:
+            yield StreamEvent("search", text=str(query))
+    elif kind == "content_block_delta":
         delta = obj.get("delta") or {}
         if delta.get("type") == "text_delta":
             yield StreamEvent("text", text=delta.get("text", ""))
+        elif delta.get("type") == "input_json_delta" and obj.get("index", -1) in searches:
+            searches[obj["index"]].append(delta.get("partial_json", ""))
     elif kind == "message_start":
         usage = (obj.get("message") or {}).get("usage") or {}
         yield StreamEvent("usage", usage={
@@ -75,6 +102,7 @@ def _events_from(event_name: str | None, data: str) -> Iterator[StreamEvent]:
         yield StreamEvent("usage", usage={
             "output_tokens": usage.get("output_tokens"),
             "stop_reason": (obj.get("delta") or {}).get("stop_reason"),
+            "web_searches": (usage.get("server_tool_use") or {}).get("web_search_requests"),
         })
     elif kind == "message_stop":
         yield StreamEvent("done")
@@ -91,6 +119,17 @@ def _error_message(resp: requests.Response) -> str:
         return f"HTTP {resp.status_code}: {resp.text[:300]}"
 
 
+def api_model(model: str) -> str:
+    """The model name Anthropic's API wants: the id without its anthropic/ prefix. Other providers need the Pi
+    backend."""
+    provider = model_provider(model)
+    if provider == "anthropic":
+        return normalize_model_id(model).split("/", 1)[1]
+    if provider:
+        raise ClaudeError(f"This chat's model ({model}) needs AI_BACKEND=pi.")
+    return model
+
+
 class ClaudeClient:
     def __init__(self, api_key: str, *, base_url: str = "https://api.anthropic.com",
                  session: requests.Session | None = None, max_retries: int = 2):
@@ -101,9 +140,11 @@ class ClaudeClient:
 
     @staticmethod
     def request_body(*, model: str, system: str, messages: list[dict], max_tokens: int,
-                     effort: str | None = None, stream: bool = False, system_extra: str | None = None) -> dict[str, Any]:
+                     effort: str | None = None, stream: bool = False, system_extra: str | None = None,
+                     web_searches: int = 0) -> dict[str, Any]:
+        """web_searches: let Claude search the web up to this many times for this reply (0 means no search)."""
         body: dict[str, Any] = {
-            "model": model,
+            "model": api_model(model),
             "max_tokens": max_tokens,
             # Cache the system prompt: it's identical across requests, so repeats bill at the cache-read rate.
             # system_extra goes after the cached part, so it doesn't spoil the cache for other requests.
@@ -114,9 +155,16 @@ class ClaudeClient:
             body["system"].append({"type": "text", "text": system_extra})
         if effort:
             body["output_config"] = {"effort": effort}
+        if web_searches:
+            body["tools"] = [{"type": WEB_SEARCH_TOOL, "name": "web_search", "max_uses": web_searches}]
         if stream:
             body["stream"] = True
         return body
+
+    def set_keys(self, keys: dict[str, str]) -> None:
+        """Use the Anthropic key from a new set of provider keys (other providers need the Pi backend)."""
+        if keys.get("anthropic"):
+            self.api_key = keys["anthropic"]
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -144,9 +192,15 @@ class ClaudeClient:
         raise ClaudeError("Claude is busy right now. Try again in a minute.")
 
     async def stream(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
-                     effort: str | None = None, system_extra: str | None = None) -> AsyncIterator[StreamEvent]:
-        body = self.request_body(model=model, system=system, messages=messages, max_tokens=max_tokens,
-                                 effort=effort, stream=True, system_extra=system_extra)
+                     effort: str | None = None, system_extra: str | None = None,
+                     web_searches: int = 0) -> AsyncIterator[StreamEvent]:
+        try:
+            body = self.request_body(model=model, system=system, messages=messages, max_tokens=max_tokens,
+                                     effort=effort, stream=True, system_extra=system_extra,
+                                     web_searches=web_searches)
+        except ClaudeError as exc:
+            yield StreamEvent("error", error=str(exc))
+            return
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
         stop = threading.Event()
@@ -190,6 +244,20 @@ class ClaudeClient:
             with resp:
                 data = resp.json()
             return "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
+
+        return await asyncio.get_running_loop().run_in_executor(None, call)
+
+
+    async def tool_turn(self, *, model: str, system: str, messages: list[dict], tools: list[dict], max_tokens: int,
+                        effort: str | None = None) -> dict[str, Any]:
+        """One step of a tool-using conversation (Code sessions): Claude's whole reply, with its tool calls."""
+        body = self.request_body(model=model, system=system, messages=messages, max_tokens=max_tokens, effort=effort)
+        body["tools"] = tools
+
+        def call() -> dict[str, Any]:
+            resp = self._post(body, stream=False)
+            with resp:
+                return resp.json()
 
         return await asyncio.get_running_loop().run_in_executor(None, call)
 
@@ -290,9 +358,10 @@ class FakeClaude:
         )
 
     async def stream(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
-                     effort: str | None = None, system_extra: str | None = None) -> AsyncIterator[StreamEvent]:
-        self.calls.append({"model": model, "system": system, "messages": messages,
-                           "max_tokens": max_tokens, "effort": effort, "system_extra": system_extra})
+                     effort: str | None = None, system_extra: str | None = None,
+                     web_searches: int = 0) -> AsyncIterator[StreamEvent]:
+        self.calls.append({"model": model, "system": system, "messages": messages, "max_tokens": max_tokens,
+                           "effort": effort, "system_extra": system_extra, "web_searches": web_searches})
         question = _last_user_text(messages)
         if "ERROR-TEST" in question:
             yield StreamEvent("error", error="Simulated failure for testing.")
@@ -302,7 +371,7 @@ class FakeClaude:
         if texts or images:
             reply += (f"\n\nYou attached {texts} text file{'s' if texts != 1 else ''} and "
                       f"{images} image{'s' if images != 1 else ''}. The real Claude would read them.")
-        if system_extra:
+        if system_extra and "interactive explainer" in system_extra:
             reply += ("\n\nHere's a sample interactive explainer. Drag the sliders to see how kP changes the way "
                       "the arm settles.\n\n```explainer\n" + SAMPLE_EXPLAINER + "```")
         if "ALERT-TEST" in question:
@@ -310,11 +379,45 @@ class FakeClaude:
                      "Please talk to a trusted adult today, like a parent, a mentor, or your school counselor. "
                      "If you're in the US you can call or text 988 any time, and call 911 in an emergency.")
         yield StreamEvent("usage", usage={"input_tokens": sum(len(str(m["content"])) for m in messages) // 4})
+        searched = 0
+        if web_searches:
+            searched = 1
+            yield StreamEvent("search", text=" ".join(question.split()[:6]))
+            yield StreamEvent("sources", sources=[
+                {"url": "https://docs.wpilib.org/en/stable/", "title": "WPILib documentation (sample search result)"}])
         for start in range(0, len(reply), 14):
             await asyncio.sleep(self.delay)
             yield StreamEvent("text", text=reply[start:start + 14])
-        yield StreamEvent("usage", usage={"output_tokens": len(reply) // 4, "stop_reason": "end_turn"})
+        yield StreamEvent("usage", usage={"output_tokens": len(reply) // 4, "stop_reason": "end_turn",
+                                          "web_searches": searched or None})
         yield StreamEvent("done")
+
+    async def tool_turn(self, *, model: str, system: str, messages: list[dict], tools: list[dict], max_tokens: int,
+                        effort: str | None = None) -> dict[str, Any]:
+        """A scripted Code session: look around, read a file, propose a new file, run the build, then sum up.
+        Each tool call waits for the previous one's result. Put CODE-ERROR in the task to simulate a failure."""
+        self.calls.append({"model": model, "system": system, "messages": messages, "kind": "tool_turn"})
+        if "CODE-ERROR" in str(messages[0]["content"]):
+            raise ClaudeError("Simulated failure for testing.")
+        step = sum(1 for m in messages if m["role"] == "assistant")
+        script = [
+            ("I'll start by looking at what's in the repository.", "list_files", {"path": ""}),
+            ("Let me read the build file.", "read_file", {"path": "build.gradle"}),
+            ("I'll add a short notes file describing the change.", "write_file",
+             {"path": "NOTES.md", "content": "# Notes\n\nWritten by the offline test version of Claude.\n",
+              "reason": "Record what this session changed."}),
+            ("Now I'll run the build to check nothing broke.", "run_command",
+             {"command": "gradlew build", "reason": "Check the project still builds."}),
+        ]
+        usage = {"input_tokens": len(str(messages)) // 4, "output_tokens": 50}
+        if step < len(script):
+            text, tool, tool_input = script[step]
+            return {"content": [{"type": "text", "text": text},
+                                {"type": "tool_use", "id": f"toolu_fake_{step}", "name": tool, "input": tool_input}],
+                    "stop_reason": "tool_use", "usage": usage}
+        return {"content": [{"type": "text", "text": "Done. I added NOTES.md and ran the build. This is the offline "
+                                                     "test version of Claude, so nothing real was changed."}],
+                "stop_reason": "end_turn", "usage": usage}
 
     async def complete(self, *, model: str, system: str, messages: list[dict], max_tokens: int,
                        effort: str | None = None) -> str:

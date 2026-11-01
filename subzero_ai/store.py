@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from .db import Database, utcnow
 
 MENTOR_ROLES = {"mentor", "admin"}
+THEMES = ("system", "light", "dark")
 
 # Statuses a user message can have
 PENDING = "pending"
@@ -37,6 +38,7 @@ class Viewer:
     name: str
     role: str
     avatar_url: str | None = None
+    theme: str = "system"
 
     @property
     def is_mentor(self) -> bool:
@@ -87,6 +89,16 @@ class Store:
     def set_user_role(self, user_id: int, role: str) -> None:
         self.db.execute("UPDATE users SET role = ? WHERE id = ? AND role != ?", (role, user_id, role))
 
+    def save_preferences(self, user_id: int, *, theme: str | None = None, notify_dm: bool | None = None,
+                         default_subteam: str | None | bool = False) -> None:
+        """Change any of the given preferences. default_subteam=None clears it; False leaves it alone."""
+        if theme is not None:
+            self.db.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, user_id))
+        if notify_dm is not None:
+            self.db.execute("UPDATE users SET notify_dm = ? WHERE id = ?", (int(notify_dm), user_id))
+        if default_subteam is not False:
+            self.db.execute("UPDATE users SET default_subteam = ? WHERE id = ?", (default_subteam, user_id))
+
     def deactivate_user(self, user_id: int) -> None:
         self.db.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
 
@@ -95,18 +107,20 @@ class Store:
 
     # ---------------------------------------------------------- conversations
     def create_conversation(self, conn: sqlite3.Connection, *, owner_id: int, model: str,
-                            subteam: str | None = None) -> int:
+                            subteam: str | None = None, project_id: int | None = None) -> int:
         now = utcnow()
         cur = conn.execute(
-            "INSERT INTO conversations (owner_id, subteam, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (owner_id, subteam, model, now, now),
+            "INSERT INTO conversations (owner_id, subteam, model, project_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (owner_id, subteam, model, project_id, now, now),
         )
         return cur.lastrowid
 
     def conversation(self, conversation_id: int) -> sqlite3.Row | None:
         return self.db.one(
-            "SELECT c.*, u.name AS owner_name, u.slack_user_id AS owner_slack_id, u.avatar_url AS owner_avatar "
-            "FROM conversations c JOIN users u ON u.id = c.owner_id WHERE c.id = ?",
+            "SELECT c.*, u.name AS owner_name, u.slack_user_id AS owner_slack_id, u.avatar_url AS owner_avatar, "
+            "p.name AS project_name FROM conversations c JOIN users u ON u.id = c.owner_id "
+            "LEFT JOIN projects p ON p.id = c.project_id WHERE c.id = ?",
             (conversation_id,),
         )
 
@@ -140,9 +154,12 @@ class Store:
 
     def list_conversations(self, viewer: Viewer, *, scope: str = "team", query: str = "",
                            subteam: str | None = None, owner_id: int | None = None,
-                           limit: int = 200) -> list[sqlite3.Row]:
+                           project_id: int | None = None, limit: int = 200) -> list[sqlite3.Row]:
         params: list = []
         where = []
+        if project_id is not None:
+            where.append("c.project_id = ?")
+            params.append(project_id)
         if subteam:
             where.append("c.subteam = ?")
             params.append(subteam)
@@ -181,12 +198,13 @@ class Store:
     # --------------------------------------------------------------- messages
     def add_message(self, conn: sqlite3.Connection, *, conversation_id: int, author_id: int | None,
                     role: str, content: str, status: str, reply_to: int | None = None,
-                    model: str | None = None, wants_explainer: bool = False) -> int:
+                    model: str | None = None, wants_explainer: bool = False, options: str | None = None) -> int:
         now = utcnow()
         cur = conn.execute(
             "INSERT INTO messages (conversation_id, author_id, role, content, status, reply_to, model, "
-            "wants_explainer, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (conversation_id, author_id, role, content, status, reply_to, model, int(wants_explainer), now, now),
+            "wants_explainer, options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (conversation_id, author_id, role, content, status, reply_to, model, int(wants_explainer), options,
+             now, now),
         )
         self.touch(conn, conversation_id)
         return cur.lastrowid
@@ -194,7 +212,8 @@ class Store:
     def message(self, message_id: int) -> sqlite3.Row | None:
         return self.db.one(
             "SELECT m.*, a.name AS author_name, a.avatar_url AS author_avatar, a.slack_user_id AS author_slack_id, "
-            "a.role AS author_role, r.name AS reviewer_name, r.slack_user_id AS reviewer_slack_id "
+            "a.role AS author_role, a.notify_dm AS author_notify_dm, r.name AS reviewer_name, "
+            "r.slack_user_id AS reviewer_slack_id "
             "FROM messages m LEFT JOIN users a ON a.id = m.author_id LEFT JOIN users r ON r.id = m.reviewed_by "
             "WHERE m.id = ?",
             (message_id,),
@@ -231,8 +250,9 @@ class Store:
     def pending_messages(self) -> list[sqlite3.Row]:
         return self.db.all(
             "SELECT m.*, a.name AS author_name, a.avatar_url AS author_avatar, a.slack_user_id AS author_slack_id, "
-            "c.title AS conversation_title, c.subteam AS conversation_subteam "
+            "c.title AS conversation_title, c.subteam AS conversation_subteam, p.name AS project_name "
             "FROM messages m JOIN users a ON a.id = m.author_id JOIN conversations c ON c.id = m.conversation_id "
+            "LEFT JOIN projects p ON p.id = c.project_id "
             "WHERE m.status = 'pending' ORDER BY m.id"
         )
 
@@ -262,6 +282,14 @@ class Store:
             "AND reviewed_at >= ?) OR (status = 'grace' AND created_at >= ?))",
             (user_id, since, since),
         )
+        return row["n"]
+
+    def web_searches_today(self) -> int:
+        """Web searches the whole team's replies have used since local midnight."""
+        local_midnight = datetime.now(self.tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        since = local_midnight.astimezone(timezone.utc).isoformat(timespec="seconds")
+        row = self.db.one("SELECT COALESCE(SUM(web_searches), 0) AS n FROM messages WHERE role = 'assistant' "
+                          "AND created_at >= ?", (since,))
         return row["n"]
 
     def window_open(self, conversation_id: int, minutes: int) -> bool:
@@ -327,6 +355,22 @@ class Store:
         )
         return row["n"]
 
+    def explainer_replies(self, *, owner_id: int | None = None, limit: int = 5000) -> list[sqlite3.Row]:
+        """Finished replies that hold at least one interactive explainer, newest first, without their text. The
+        caller checks who may see each one."""
+        where = ("m.role = 'assistant' AND m.status = 'complete' "
+                 "AND (m.content LIKE '%```explainer%' OR m.content LIKE '%~~~explainer%')")
+        params: list = []
+        if owner_id is not None:
+            where += " AND c.owner_id = ?"
+            params.append(owner_id)
+        params.append(limit)
+        return self.db.all(
+            "SELECT m.id, m.conversation_id, m.created_at FROM messages m "
+            f"JOIN conversations c ON c.id = m.conversation_id WHERE {where} ORDER BY m.id DESC LIMIT ?",
+            tuple(params),
+        )
+
     # ------------------------------------------------------------ slack cards
     def save_card(self, message_id: int, channel: str, ts: str) -> None:
         self.db.execute(
@@ -347,6 +391,38 @@ class Store:
 
     def mark_reminded(self, message_id: int) -> None:
         self.db.execute("UPDATE slack_cards SET reminded_at = ? WHERE message_id = ?", (utcnow(), message_id))
+
+    # -------------------------------------------------------------- slack DMs
+    def claim_dm_event(self, channel: str, ts: str) -> bool:
+        """Remember a Slack message. False when it was seen before (Slack delivered it twice)."""
+        cur = self.db.execute("INSERT OR IGNORE INTO slack_dm_messages (channel, ts, created_at) VALUES (?, ?, ?)",
+                              (channel, ts, utcnow()))
+        return cur.rowcount > 0
+
+    def release_dm_event(self, channel: str, ts: str) -> None:
+        """Forget a Slack message that couldn't be processed, so Slack's retry is handled."""
+        self.db.execute("DELETE FROM slack_dm_messages WHERE channel = ? AND ts = ? AND message_id IS NULL",
+                        (channel, ts))
+
+    def link_dm_message(self, channel: str, ts: str, message_id: int) -> None:
+        self.db.execute("UPDATE slack_dm_messages SET message_id = ? WHERE channel = ? AND ts = ?",
+                        (message_id, channel, ts))
+
+    def dm_message(self, message_id: int) -> sqlite3.Row | None:
+        """Where a message came in from Slack, or None if it was sent on the website."""
+        return self.db.one("SELECT * FROM slack_dm_messages WHERE message_id = ?", (message_id,))
+
+    def link_slack_thread(self, conversation_id: int, channel: str, thread_ts: str) -> None:
+        self.db.execute("INSERT OR IGNORE INTO slack_threads (conversation_id, channel, thread_ts) VALUES (?, ?, ?)",
+                        (conversation_id, channel, thread_ts))
+
+    def slack_thread(self, conversation_id: int) -> sqlite3.Row | None:
+        return self.db.one("SELECT * FROM slack_threads WHERE conversation_id = ?", (conversation_id,))
+
+    def conversation_in_thread(self, channel: str, thread_ts: str) -> int | None:
+        row = self.db.one("SELECT conversation_id FROM slack_threads WHERE channel = ? AND thread_ts = ?",
+                          (channel, thread_ts))
+        return row["conversation_id"] if row else None
 
     # ------------------------------------------------------------------ audit
     def audit_entries(self, limit: int = 300) -> list[sqlite3.Row]:

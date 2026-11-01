@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Profile and preferences · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <h1>Profile and preferences</h1>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  <section class="panel" aria-labelledby="account-title">
+    <h2 id="account-title">Your account</h2>
+    <div class="profile-card">
+      {% if viewer.avatar_url %}<img class="avatar" src="{{ viewer.avatar_url }}" alt="" width="48" height="48">{% else %}<span class="avatar initial" aria-hidden="true">{{ viewer.name[0] }}</span>{% endif %}
+      <div>
+        <p class="profile-name">{{ viewer.name }}</p>
+        <p class="fine">{{ viewer.role|capitalize }}. Your name and picture come from Slack, so change them there.</p>
+      </div>
+    </div>
+  </section>
+  {% if usage %}
+  <section class="panel" aria-labelledby="usage-title">
+    <h2 id="usage-title">Today's messages</h2>
+    <ul class="health">
+      <li><span class="health-label">Approved today</span><span class="pill plain">{{ usage.approved }} of {{ usage.daily }}</span><span class="health-detail">The count starts again at midnight.</span></li>
+      <li><span class="health-label">Waiting now</span><span class="pill plain">{{ usage.waiting }} of {{ usage.max_waiting }}</span><span class="health-detail">How many of your messages can wait for a mentor at once.</span></li>
+    </ul>
+  </section>
+  {% endif %}
+  <section class="panel" aria-labelledby="prefs-title">
+    <h2 id="prefs-title">Preferences</h2>
+    <form method="post" action="/profile">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        <div class="field">
+          <label for="default-subteam">Your subteam</label>
+          <select id="default-subteam" name="default_subteam" aria-describedby="default-subteam-hint">
+            <option value="">None</option>
+            {% for st in subteams %}<option {% if st == row.default_subteam %}selected{% endif %}>{{ st }}</option>{% endfor %}
+          </select>
+          <p class="field-hint" id="default-subteam-hint">New chats you start are tagged with it, so the team can filter by subteam on the Chats page.</p>
+        </div>
+        {% if slack_on %}
+        <div class="field check">
+          <input type="checkbox" id="notify-dm" name="notify_dm" value="1" {% if row.notify_dm %}checked{% endif %} aria-describedby="notify-dm-hint">
+          <label for="notify-dm">Slack messages when a mentor reviews my message</label>
+          <p class="field-hint" id="notify-dm-hint">The Slack app tells you when a message is approved or not approved. You'll still see it here either way.</p>
+        </div>
+        {% else %}
+        <input type="hidden" name="notify_dm" value="{{ '1' if row.notify_dm else '0' }}">
+        {% endif %}
+        <fieldset class="field">
+          <legend>Appearance</legend>
+          {% for value, label in (('system', 'Match this device'), ('light', 'Light'), ('dark', 'Dark')) %}
+          <label class="radio"><input type="radio" name="theme" value="{{ value }}" {% if viewer.theme == value %}checked{% endif %}> {{ label }}</label>
+          {% endfor %}
+        </fieldset>
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">Save preferences</button></div>
+    </form>
+  </section>
+</section>
+{% endblock %}

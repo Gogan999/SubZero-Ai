@@ -174,7 +174,7 @@ here in the same PR.
 - Brand (hidden on phones, where the mobile bar shows it).
 - `.side-new`: New chat, with a 28px brand-filled circle around the plus icon.
   This is the sidebar's one brand-filled element.
-- `.side-nav`: Chats (`/recents`), Projects, Artifacts, Code. Each row is
+- `.side-nav`: Chats (`/recents`), Projects (`/projects`), Artifacts (`/artifacts`), Code. Each row is
   icon + label, with a `.soon` pill or `.count` pushed right. The current page
   gets `aria-current="page"` and a `--frost` fill.
 - Mentor tools (mentors only, with an `.side-label` heading): Review with the
@@ -183,6 +183,22 @@ here in the same PR.
 - Recents (`.chat-list`): the viewer's own chats, newest first, at most 25,
   then a link to the full Chats page. Pills show Private and "n waiting".
 - The account button (`.account`) pinned to the bottom: avatar, name, role.
+
+### Composer tools menu
+
+The tools menu holds `.menu-group` fieldsets: Tools (Web search, Research,
+Extended thinking as checkboxes, each a `.menu-item.toggle` with a
+`.menu-hint` line) and Response style (radios). Tools that are on show as
+`.tool-chip`s beside the button. A reply that searched the web ends with a
+`.sources` disclosure listing the pages, opened in a new tab with
+`rel="noopener noreferrer nofollow"`.
+
+### Appearance switch
+
+In the account menu, `.theme-switch` holds a `.segmented` group of three
+buttons (Light, Dark, Auto) with `aria-pressed`. The pressed one gets a
+`--sheet` fill on the `--muted-bg` track. The script applies the theme at once
+and saves it; without the script the form posts and the page reloads.
 
 ### Menus
 
@@ -281,6 +297,63 @@ Interactive explainers sit in an `.explainer` frame with a bar holding the
 label and text-style actions (Full screen, Download, View code). The iframe is
 sandboxed; never relax the sandbox for styling reasons.
 
+### Artifact cards
+
+The Artifacts gallery (`artifacts.html`) is a `.artifact-grid` of
+`.artifact-card`s: a `--sheet` card with the artifacts icon in a 36px
+`--muted-bg` square, the title, a `.chat-meta` line (kind, owner, time,
+Private pill) and a link back to the chat. The title link covers the whole
+card (the focus ring goes around the card); the chat link sits above it so it
+stays clickable. Each artifact gets its own page (`artifact.html`) showing the
+same `.explainer` frame as the chat, taller, under a `.crumbs` link back to the
+gallery.
+
+### Projects
+
+The Projects page reuses the artifact cards (with a `.card-text` description
+line). A project page is `.project-layout`: the project's composer
+(`.composer.big`) and its chat list on the left, and the `.project-side`
+"Project knowledge" card on the right (below on phones under 900px) with the
+instructions, files and, for mentors, the upload form and an "Edit project"
+disclosure. Archiving uses `.button.reject` with `data-confirm`.
+
+### Connector dialogs
+
+"Add files from" in the composer's tools menu opens a modal `<dialog
+class="connector-dialog">`: a `.connector-head` with the title and a close
+`.icon-button`, then the body and `.form-actions`. The GitHub picker has
+`.connector-crumbs` (`.link-button`s, the current folder in bold) over a
+bordered `.connector-list` of 44px `.connector-entry` rows: folder or file
+icon, name, and a `.connector-meta` size on the right. Files that can't be
+added are disabled with the reason; added ones get `aria-pressed="true"` and
+the `--approved` colors. Picked files join the attached files as
+`.chosen-files` chips.
+
+### Code sessions
+
+A Code session page lists the steps in order (`.code-steps`). The task and a
+mentor's follow-ups are `.code-step.note` boxes (`--frost`); Claude's words are
+plain prose; each tool call is a bordered `.code-step.tool` with a
+`.code-label` (quieter once done) and the reason. A step waiting for approval
+gets the `--pending-edge` border, its diff in `.code-diff` (added lines in the
+approved colors, removed in the rejected colors) or its command in
+`.code-command`, and `.code-review`: a primary approve button and a decline
+form with an optional note. Output sits in a closed `<details
+class="code-output">`. The `.code-status` row shows the status pill and Stop;
+while Claude works the steps redraw every few seconds.
+
+### Share links
+
+The chat header's Share button (`.button.small` with the share icon) opens the
+Share page. Each link is a `.share-link` box (1px `--rule` border, 10px
+corners) with who it's for, a status `.pill` (`ok` working, `pending` waiting,
+`bad` not approved, `unknown` expired or revoked), the read-only URL in a mono
+`.share-url` field with a Copy button (`data-copy-value`), a `.fine` line of
+who asked and when, and `.share-actions`. The mentor queue lists waiting links
+the same way in its own `#shares` panel. The page a link opens has no sidebar
+and its own notice saying it's a read-only copy reviewed by mentors; people
+show as "Student" or "Mentor" with an initial instead of a name or photo.
+
 ### Composer
 
 - Sticky at the bottom of the thread, fading the page behind it with a
@@ -288,8 +361,8 @@ sandboxed; never relax the sandbox for styling reasons.
 - One `.composer-box` (14px radius, `--field-edge` border, `--sheet` fill)
   holds the borderless textarea, the chosen files as removable chips, and the
   `.composer-bar`. The focus ring goes around the whole box.
-- The bar: on the left, the attach button (plus icon) and the tools menu
-  (placeholders for web search, extended thinking and so on); on the right,
+- The bar: on the left, the attach button (plus icon), the tools menu and
+  `.tool-chip`s naming the tools that are on; on the right,
   the model (a picker for mentors, the model's name for students) and the
   Send button. Students' Send button says "Send for review". There is no
   explainer switch: Claude makes an interactive explainer when asked in words
@@ -312,8 +385,15 @@ sandboxed; never relax the sandbox for styling reasons.
 
 Admin pages built from forms (Settings, setup, recovery sign-in) use these:
 
-- `.panel`: a `--sheet` card (`--radius`, 1px `--rule`) for each section, with
-  an `h2` and an `id` so the `.settings-nav` links at the top can jump to it.
+- `.panel`: a `--sheet` card (`--radius`, 1px `--rule`) for each box, with
+  an `h2` and an `id` so links and saves can come back to it (`/settings#bridge`).
+- Settings sections: `.settings-layout` puts the `.settings-nav` menu (links to
+  `#tab-<name>`, the open one marked `aria-current="true"` with the `--frost`
+  fill used by the sidebar) beside the `.settings-tab` groups of panels. The
+  script shows one group at a time and opens the group holding the box in the
+  address or the first field with a mistake. Without the script every group
+  shows in order. At 900px and below the menu is a sticky row of 44px tabs
+  under the top bar that scrolls sideways.
 - `.field`: label, control, `.field-hint` and `.field-error`, stacked. Controls
   use the `--field-edge` border. `.field.check` puts a checkbox beside its label.
 - `.form-actions`: the row of buttons under a form. Each panel's form has one
@@ -374,11 +454,14 @@ Target: WCAG 2.2 level AA.
 
 ## 8. Dark mode
 
-- The site follows the device setting via `prefers-color-scheme`, and
-  `<meta name="color-scheme" content="light dark">` keeps form controls and
-  scrollbars matched.
-- Dark mode is a set of token overrides in one `@media
-  (prefers-color-scheme: dark)` block. Components must not have their own dark
+- The site follows the device setting via `prefers-color-scheme` unless the
+  person picks Light or Dark under Appearance (account menu or Profile). The
+  choice is saved on their profile and drawn as `data-theme` on `<html>` and in
+  `<meta name="color-scheme">`, so there's no flash of the wrong theme.
+- Dark mode is a set of token overrides, written twice: under `@media
+  (prefers-color-scheme: dark)` for `:root:not([data-theme="light"])`, and for
+  `:root[data-theme="dark"]`. Keep the two blocks identical. `/assets/code.css`
+  switches the Pygments colors the same way. Components must not have their own dark
   rules; if something looks wrong in dark mode, fix or add a token.
 - Dark surfaces are deep blue-gray, never pure black. Dark text is off-white,
   never pure white. Brand and status colors get lighter in dark mode so they
@@ -443,10 +526,8 @@ Each should be fixed in its own small PR.
    border that shows where a field is. The `--field-edge` token now exists and
    the Settings and setup forms use it; switch these older fields to it too and
    keep `--rule` for dividers.
-2. **No manual theme switch.** claude.ai lets people pick light, dark or
-   system. Add a `data-theme` attribute on `<html>` with the dark tokens also
-   applied under `:root[data-theme="dark"]`, and a small switch in the top bar,
-   remembered per browser.
+2. ~~No manual theme switch.~~ Fixed: Appearance in the account menu sets
+   `data-theme` on `<html>` (see [Dark mode](#8-dark-mode)).
 3. **Spacing and type sizes aren't tokens.** Sizes are written as literal
    `rem` values. Once the scale in sections 3 and 4 settles, turn them into
    `--space-*` and `--text-*` tokens.

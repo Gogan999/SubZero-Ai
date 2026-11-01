@@ -53,14 +53,21 @@ def files_line(files: list[tuple[str, int]], link: str) -> str:
 def approval_card(*, message_id: int, student_name: str, subteam: str | None, title: str | None,
                   text: str, link: str, previous_reply: str | None = None,
                   files: list[tuple[str, int]] | None = None, explainer: bool = False,
+                  project: str | None = None, tools: list[str] | None = None,
                   screen_note: str | None = None) -> list[dict]:
     blocks: list[dict] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": card_header(student_name, subteam, title, link)}},
         {"type": "section", "text": {"type": "mrkdwn", "text": card_body(text, link)}},
     ]
     extras = []
+    if project:
+        extras.append({"type": "mrkdwn", "text": "In the project *" + _mrkdwn_escape(project) + "*, so Claude also "
+                                                 "reads its instructions and files"})
     if files:
         extras.append({"type": "mrkdwn", "text": files_line(files, link)})
+    if tools:
+        extras.append({"type": "mrkdwn", "text": "Asked for: " + _mrkdwn_escape(", ".join(tools))
+                       + (" (web searches cost extra)" if any("search" in t for t in tools) else "")})
     if explainer:
         extras.append({"type": "mrkdwn", "text": ":bulb: Asked for an interactive explainer (costs a little more)"})
     if screen_note:
