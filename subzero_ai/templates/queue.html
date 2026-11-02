@@ -12,7 +12,7 @@
   <section class="panel" id="code" aria-labelledby="code-title">
     <h2 id="code-title">Code steps to approve</h2>
     <ul class="simple-list">
-      {% for c in code_waiting %}<li><a href="/code/{{ c.id }}">{{ c.title }}</a> <span class="field-hint">{{ c.pending }} step{{ 's' if c.pending != 1 else '' }}, started by {{ c.owner }}</span></li>{% endfor %}
+      {% for c in code_waiting %}<li><a href="/code/{{ c.id }}">{{ c.title }}</a> <span class="field-hint">{% if c.request %}New request from {{ c.owner }}{% else %}{{ c.pending }} step{{ 's' if c.pending != 1 else '' }}, started by {{ c.owner }}{% endif %}</span></li>{% endfor %}
     </ul>
   </section>
   {% endif %}

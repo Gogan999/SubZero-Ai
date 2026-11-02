@@ -15,7 +15,7 @@ from subzero_ai.claude import FakeClaude, StreamEvent
 from subzero_ai.web import COMING_SOON
 
 from .backends import RecordingClaudeClient, RecordingPiClient, add_variants
-from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
+from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness, pass_model_check
 
 
 class FlowTest(unittest.TestCase):
@@ -487,6 +487,8 @@ class FlowTest(unittest.TestCase):
 
     # ----------------------------------------------------------------- model
     def test_mentor_can_switch_a_chat_to_the_bigger_model(self):
+        self.h.settings.anthropic_api_key = "sk-ant-test-key-0123456789"  # the picker lists only keyed models
+        pass_model_check(self.h, "anthropic/claude-opus-5-5")
         mid, cid = self.start()
         self.assertEqual(self.ava.post(f"/c/{cid}/model", {"model": "claude-opus-5-5"}).status_code, 403)
         self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": "gpt-9"}).status_code, 400)

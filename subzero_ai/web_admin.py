@@ -20,10 +20,11 @@ from . import __version__, model_check, saved_settings, server_settings, setup_f
 from .ai_backend import resolve_backend
 from .bridge_login import LoginError, login_env, looks_like_code
 from .backup import list_backups, size_text
-from .config import MODEL_ID_SETTINGS, PROVIDERS, model_provider, parse_env_file, update_env_file
+from .config import MODEL_ID_SETTINGS, PROVIDERS, model_provider, normalize_model_id, parse_env_file, update_env_file
 from .connectors import BRANCH_RE, REPO_RE, ConnectorError
 from .db import utcnow
 from .maintenance import update_available
+from .model_choices import MODEL_PURPOSE, group_options, selectable_models
 from .pi_client import (
     BRIDGE_PROVIDER,
     KEY_SETTINGS,
@@ -149,7 +150,15 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
             if value is None:
                 value = saved_settings.current(s.settings, f.name)
             item = {"field": f, "value": value, "error": (db_errors or {}).get(f.name)}
-            if f.kind == "ids":
+            if f.kind == "model":
+                # A dropdown of the models that can be picked here, plus Other for a model id not in the list
+                options = selectable_models(s, purpose=MODEL_PURPOSE[f.name], include_unchecked=True)
+                listed = {o["id"] for o in options}
+                chosen = normalize_model_id(value)
+                item.update(groups=group_options(options), other=saved_settings.OTHER_MODEL,
+                            pick=chosen if chosen in listed else saved_settings.OTHER_MODEL,
+                            typed="" if chosen in listed else value)
+            elif f.kind == "ids":
                 item["people"] = _names_for(s, getattr(s.settings, f.name))
             elif f.kind == "providers":
                 on = set(value.split())
@@ -324,7 +333,7 @@ async def save_section(request: Request, viewer: Viewer) -> Response:
     section = request.path_params["section"]
     if section not in saved_settings.SECTIONS:
         return error_page(request, viewer, 404, "Not found", "That settings section doesn't exist.")
-    form = await request.form()
+    form = saved_settings.model_choices_form(await request.form(), section)
     values, errors = saved_settings.validate(section, form, actor_slack_id=viewer.slack_user_id,
                                                     settings=s.settings, db=s.db)
     if errors:
@@ -592,7 +601,7 @@ async def _run_checks(s: Services, actor_id: int, actor_name: str) -> None:
     """The background job behind Run checks. Saves the results for the Settings page; always clears the mark."""
     from .checks import run_checks
     try:
-        results = await run_checks(s.settings, slack=s.slack, claude=s.claude)
+        results = await run_checks(s.settings, slack=s.slack, claude=s.claude, egress=s.egress)
         s.db.set_kv("settings_checks", json.dumps({
             "at": utcnow(), "by": actor_name,
             "results": [{"status": r.status, "title": r.title, "detail": r.detail} for r in results]}))

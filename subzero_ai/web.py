@@ -55,6 +55,8 @@ from .auth import LoginError, SlackLogin, profile_from_claims
 from .ai_backend import Capabilities, capabilities_for, make_client, resolve_backend
 from .claude import ClaudeClient
 from .code_runner import CodeRunner
+from .egress_proxy import EgressProxy, TokenStore
+from .sandbox import SandboxManager, reap_sandboxes, watch_sandbox_disks
 from .config import Settings, load_settings, normalize_model_id
 from .connectors import ConnectorError, Drive, GitHub
 from .db import Database
@@ -62,6 +64,8 @@ from .generation import STYLES, ReplyRunner, clean_options, load_options, option
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
+# MODEL_LABELS and model_label stay importable from here (tests and older code use them)
+from .model_choices import model_block, model_label, option_label, selectable_models
 from .projects import MAX_PROJECT_FILES, ProjectError, Projects
 from .shares import SHARE_DAYS, ShareError, Shares, state as share_state
 from .render import (
@@ -100,13 +104,6 @@ from .store import (
 log = logging.getLogger("subzero.web")
 HERE = Path(__file__).parent
 
-MODEL_LABELS = {
-    "anthropic/claude-sonnet-5-5": "Sonnet 5.5",
-    "anthropic/claude-opus-5-5": "Opus 5.5",
-    "anthropic/claude-haiku-5-5": "Haiku 5.5",
-}
-
-
 # How many of a person's own chats the sidebar lists before "All chats"
 RECENTS = 25
 
@@ -130,11 +127,18 @@ async def _load_model_names(s: Services) -> None:
         log.info("Couldn't get model names from the AI helper: %s", exc)
 
 
-def model_label(model_id: str, names: dict[str, str] | None = None) -> str:
-    """A short name for a model: the built-in label, else the name the gateway gave it (Pi backend), else the part
-    of the id after the provider."""
-    model_id = normalize_model_id(model_id)
-    return MODEL_LABELS.get(model_id) or (names or {}).get(model_id) or model_id.split("/", 1)[-1]
+def mentor_chat_model(s: Services, raw: object) -> tuple[str, str]:
+    """The model a mentor picked for a new chat, or the default. A pick that isn't in the list for new chats (or
+    that fails a check now) gives the default and a plain note saying why."""
+    default = normalize_model_id(s.settings.model_default)
+    model = normalize_model_id(str(raw or "").strip())
+    if not model:
+        return default, ""
+    if model in {option["id"] for option in selectable_models(s, purpose="chat")}:
+        return model, ""
+    problem = model_block(s.settings, s.db, model) or "It isn't on the list of models for new chats."
+    return default, (f"{model_label(model, s.model_names)} can't be used for this chat. {problem} "
+                     f"This chat uses {model_label(default, s.model_names)} instead.")
 
 
 def short_text(text: str, limit: int = 60) -> str:
@@ -187,6 +191,7 @@ class Services:
     # Model safety checks in progress: model id -> when it started (the background task itself is in `tasks`)
     model_checks_running: dict[str, str] = field(default_factory=dict)
     dms: SlackDMs | None = None  # messaging the bot in Slack (None without Slack)
+    egress: EgressProxy | None = None  # the sandboxes' internet proxy (egress_proxy.py), started for Hyper-V sandboxes
     # config.env settings saved on the Settings page that apply after a restart: name -> saved value ("" for secrets)
     pending_restart: dict[str, str] = field(default_factory=dict)
     checks_running: str = ""  # when the Settings page's Run checks job started ("" when none is running)
@@ -195,6 +200,7 @@ class Services:
     # Clients made from tokens typed on the setup page, before they're saved (tests swap these out)
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
+    sandboxes: SandboxManager | None = None  # where Code sessions' commands run (sandbox.py)
 
     def capabilities(self, model: str) -> Capabilities:
         """What this model can do with the backend in use: the one place templates and routes ask."""
@@ -214,6 +220,9 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     if claude is None:
         claude = make_client(settings)
     broker, tasks = Broker(), Tasks()
+    tokens = TokenStore()  # per-sandbox proxy logins: the proxy checks them, the sandboxes manager issues them
+    egress = EgressProxy.from_settings(settings, tokens=tokens, db=db)
+    sandboxes = SandboxManager(settings, db, tokens=tokens, egress=egress)
     attachments = Attachments(db, settings.data_dir / "files")
     projects = Projects(db, settings.data_dir / "files")
     github = GitHub(settings)
@@ -230,7 +239,11 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     svc = Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
                    Shares(db), github, Drive(settings),
-                   CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks))
+                   CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks,
+                              sandboxes=sandboxes, slack=slack), sandboxes=sandboxes)
+    svc.nightly.reap = lambda: reap_sandboxes(svc)
+    svc.nightly.watch_disks = lambda: watch_sandbox_disks(svc)
+    svc.egress = egress
     runner.capabilities_of = svc.capabilities
     if slack is not None:
         dms = SlackDMs(settings=settings, store=store, approvals=approvals, directory=directory, slack=slack,
@@ -725,8 +738,11 @@ async def chats(request: Request, viewer: Viewer) -> Response:
     if any(key in request.query_params for key in ("q", "scope", "subteam", "owner")):
         # The chat list and its filters moved to the Chats page; keep old links working
         return RedirectResponse(f"/recents?{request.url.query}", status_code=303)
+    model_options = ([(o["id"], option_label(o)) for o in selectable_models(s, purpose="chat")]
+                     if viewer.is_mentor else [])
     return render(request, "chats.html", viewer, current_id=None, subteams=s.settings.subteams,
                   greeting=greeting(s, viewer), model_name=model_label(s.settings.model_default, s.model_names),
+                  model_options=model_options, model_default_id=normalize_model_id(s.settings.model_default),
                   **upload_context(s.capabilities(s.settings.model_default)))
 
 
@@ -994,12 +1010,16 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
     if not title:
         first = next((m for m in visible if m["role"] == "user"), None)
         title = short_text(first["content"]) if first and (own or viewer.is_mentor) else "New chat"
-    models = [(m, model_label(m, s.model_names)) for m in dict.fromkeys(
-        normalize_model_id(m) for m in (s.settings.model_default, s.settings.model_hard, conv["model"]))]
+    models = []
+    if viewer.is_mentor:
+        models = [(o["id"], option_label(o)) for o in selectable_models(s, purpose="chat")]
+        if normalize_model_id(conv["model"]) not in {value for value, _ in models}:
+            models.append((conv["model"], f"{model_label(conv['model'], s.model_names)} (not allowed now)"))
     return render(request, "conversation.html", viewer, conv=conv, messages=messages, own=own, title=title,
                   can_send=own, waiting=waiting, replying=replying, composer_hint=hint, needs_review=needs_review,
                   model_options=models, model_name=model_label(conv["model"], s.model_names), current_id=conv["id"],
-                  long_chat=long_chat, **upload_context(s.capabilities(conv["model"])))
+                  long_chat=long_chat, flash=request.session.pop("flash", None),
+                  **upload_context(s.capabilities(conv["model"])))
 
 
 @page()
@@ -1015,14 +1035,14 @@ async def message_partial(request: Request, viewer: Viewer) -> Response:
 
 @page(require="mentor")
 async def set_model(request: Request, viewer: Viewer) -> Response:
-    """Mentors can move a conversation to the bigger model for hard problems (it costs about twice as much)."""
+    """Mentors can move a conversation to any model in the list for new chats (see model_choices)."""
     s = services(request)
     conv = s.store.conversation(request.path_params["cid"])
     if conv is None:
         return error_page(request, viewer, 404, "Chat not found", "This chat doesn't exist.")
     form = await request.form()
     model = normalize_model_id(form.get("model", ""))
-    if model not in (normalize_model_id(s.settings.model_default), normalize_model_id(s.settings.model_hard)):
+    if model not in {option["id"] for option in selectable_models(s, purpose="chat")}:
         return JSONResponse({"ok": False, "error": "Pick one of the listed models."}, status_code=400)
     if model != normalize_model_id(conv["model"]):
         s.store.set_model(conv["id"], model)
@@ -1055,14 +1075,21 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
         files += await connector_files(s, form, len(files))
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
-    refusal = feature_refusal(s.capabilities(s.settings.model_default), form, files)
+    # Only mentors pick the model. A student's "model" field is ignored: the chat gets the default model.
+    chat_model, note = s.settings.model_default, ""
+    if viewer.is_mentor:
+        chat_model, note = mentor_chat_model(s, form.get("model"))
+    refusal = feature_refusal(s.capabilities(chat_model), form, files)
     if refusal:
         return JSONResponse({"ok": False, "error": refusal, "code": "invalid"}, status_code=400)
     outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam, files=files,
                                        explainer=form.get("explainer") == "1", project_id=project_id,
-                                       options=tool_options(s, viewer, form))
+                                       options=tool_options(s, viewer, form),
+                                       model=chat_model if viewer.is_mentor else None)
     if not outcome.ok:
         return json_error(outcome)
+    if note:
+        request.session["flash"] = note
     return JSONResponse({"ok": True, "url": f"/c/{outcome.conversation_id}", "message_id": outcome.message_id})
 
 
@@ -1126,8 +1153,9 @@ async def queue_page(request: Request, viewer: Viewer) -> Response:
     window = [{"id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
                "title": m["conversation_title"] or "New chat", "text": short_text(m["content"], 120),
                "time": fmt_time(s.store, m["created_at"])} for m in s.store.window_messages()]
-    code_waiting = [{"id": r["id"], "title": r["title"], "owner": r["owner_name"], "pending": r["pending"]}
-                    for r in s.code.list() if r["status"] == "waiting"]
+    code_waiting = [{"id": r["id"], "title": r["title"], "owner": r["owner_name"], "pending": r["pending"],
+                     "request": r["status"] == "awaiting_approval"}
+                    for r in s.code.list() if r["status"] in ("waiting", "awaiting_approval")]
     return render(request, "queue.html", viewer, items=_queue_items(s), window=window, shares=shares,
                   code_waiting=code_waiting, flash=request.session.pop("flash", None))
 
@@ -1595,6 +1623,12 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         s.db.execute("UPDATE code_sessions SET status = 'failed', error = 'The server restarted while Claude was "
                      "working. Send a follow-up to carry on.' WHERE status IN ('preparing', 'running')")
         await ensure_team_id(s)
+        if settings.code_sandbox == "hyperv" and s.egress is not None:
+            await s.egress.start()  # a failure is kept as a plain message: sandboxes then refuse to start
+        try:
+            await asyncio.to_thread(reap_sandboxes, s)  # sandboxes left by the last run, before any session starts
+        except Exception:
+            log.exception("Sandbox cleanup failed at startup")
         stop = asyncio.Event()
         loops: list[asyncio.Task] = []
         if background:
@@ -1623,6 +1657,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
             await asyncio.gather(*loops, return_exceptions=True)
             await s.tasks.cancel_all()
             s.bridge_login.cancel()  # a Claude subscription sign-in nobody finished
+            if s.egress is not None:
+                await s.egress.stop()  # closes any sandbox connection still open
             closer = getattr(s.claude, "aclose", None)
             if closer is not None:
                 try:

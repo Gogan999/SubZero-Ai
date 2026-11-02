@@ -143,6 +143,40 @@ class Settings:
     # Code: Claude works in a copy of the GitHub repository above; a mentor approves each change and command
     code_commands: tuple[str, ...] = ("gradlew",)  # programs Claude may ask to run, by name
     code_command_timeout: int = 600  # seconds
+    # Each Code session runs its commands in its own sandbox (sandbox.py): off, hyperv, or fake (this computer,
+    # with no isolation, for tests only)
+    code_sandbox: str = "off"
+    sandbox_ttl_hours: int = 48  # a sandbox is deleted this long after it was made, whatever its session is doing
+    sandbox_max_sessions: int = 3  # sandboxes alive at once; a new one waits for a slot
+    sandbox_memory_mb: int = 2048
+    sandbox_cpus: int = 2
+    sandbox_disk_gb: int = 31  # the biggest base disk allowed (the base image is 30 GB; a sandbox's own disk grows as used)
+    sandbox_disk_cap_gb: int = 8  # a running sandbox whose own disk grows past this is deleted (0: no limit)
+    sandbox_min_free_gb: int = 20  # no new sandbox while the disk holding the base image has less free
+    sandbox_base_image: str = ""  # the base disk (a .vhdx) that every sandbox is made from
+    # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24
+    sandbox_switch: str = "szsandbox-internal"
+    sandbox_proxy_port: int = 3128  # the one host TCP port a sandbox may reach: the egress proxy (egress_proxy.py)
+    sandbox_host_address: str = "10.77.0.1"  # the host's address on the sandbox switch; the proxy listens here only
+    # names a sandbox may open a secure (443) connection to, through the proxy. `*.x` matches names under x.
+    sandbox_allowed_hosts: str = ("repo.maven.apache.org, repo1.maven.org, plugins.gradle.org, services.gradle.org, "
+                                  "downloads.gradle.org, plugins-artifacts.gradle.org, frcmaven.wpi.edu, "
+                                  "maven.ctr-electronics.com, maven.revrobotics.com, github.com, "
+                                  "objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, registry.npmjs.org")
+    sandbox_allowed_ports: str = "443"  # ports a tunnel may use
+    sandbox_proxy_mb_limit: int = 2048  # the most a sandbox may move through the proxy in its whole life, both ways
+    sandbox_proxy_max_per_sandbox: int = 16  # open proxy connections at once for one sandbox
+    sandbox_guest_sudo: bool = False  # the sandbox's user may use sudo: root inside that disposable VM only
+    # Students and Code (M6). A student's session is started only after a mentor approves the request, and needs a
+    # sandbox. Inside a student's sandbox, file changes and commands run without a mentor's click (free rein).
+    code_student_access: bool = False  # students may ask for Code sessions (off until a mentor or admin turns it on)
+    code_student_free_rein: bool = True  # inside a student's sandbox, changes and commands run without a click
+    code_mentor_free_rein: bool = False  # the same for mentors' own sessions, when the sandbox is on
+    code_sandbox_commands: tuple[str, ...] = ("gradlew", "python3", "pip", "npm", "node", "java", "git")  # in a sandbox
+    code_student_max_open: int = 1  # a student's sessions waiting, running or preparing at the same time
+    code_student_daily_sessions: int = 3  # a student's requests (new sessions and follow-ups) in 24 hours
+    code_student_max_turns: int = 40  # Claude replies per run in a student's session
+    code_student_command_timeout: int = 600  # seconds a command in a student's sandbox may run
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200
@@ -210,6 +244,19 @@ _CONVERTERS = {
 
 # Settings whose config.env key isn't just the upper-cased name
 ENV_NAMES = {"slack_dms_enabled": "SLACK_DMS"}
+# The code_sandbox values that can run student Code sessions (the fake one is for tests only)
+FAKE_SANDBOX_ENV = "SUBZERO_TESTING_FAKE_SANDBOX"
+
+
+def fake_sandbox_allowed() -> bool:
+    """The Fake sandbox runs commands on this computer with no isolation. It exists for the tests, which set this
+    environment variable (tests/__init__.py); a real install never does, so it can't be chosen there."""
+    return os.environ.get(FAKE_SANDBOX_ENV) == "1"
+
+
+def student_sandboxes() -> tuple[str, ...]:
+    """The sandbox kinds a student's Code session may run in: Hyper-V only (the Fake one only while testing)."""
+    return ("hyperv", "fake") if fake_sandbox_allowed() else ("hyperv",)
 MODEL_SETTINGS = ("model_default", "model_hard", "model_titles", "model_screener")
 MODEL_ID_SETTINGS = MODEL_SETTINGS + ("model_check_judge",)  # every setting that holds a model id
 

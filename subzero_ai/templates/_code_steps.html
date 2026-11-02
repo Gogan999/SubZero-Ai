@@ -1,22 +1,66 @@
 <div class="code-status" data-code-status="{{ session.status }}" {% if session.live %}data-code-live{% endif %}>
   <span class="pill {{ session.kind }}">{{ session.label }}</span>
   {% if session.live %}<span class="typing">Claude is working…</span>{% endif %}
-  {% if session.tokens %}<span class="fine">{{ '{:,}'.format(session.tokens) }} tokens so far</span>{% endif %}
-  {% if session.status in ('preparing', 'running', 'waiting') %}
+  {% if session.tokens and mentor %}<span class="fine">{{ '{:,}'.format(session.tokens) }} tokens so far</span>{% endif %}
+  {% if can_stop %}
   <form method="post" action="/code/{{ session.id }}/stop">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="button small quiet" type="submit" data-confirm="Stop this session? Steps waiting for approval are declined.">Stop</button>
   </form>
   {% endif %}
+  {% if can_extend %}
+  <form method="post" action="/code/{{ session.id }}/extend">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="button small quiet" type="submit">Give the sandbox more time</button>
+  </form>
+  {% endif %}
 </div>
+{% if sandbox_left %}<p class="code-warning" role="note">This workspace is deleted in {{ sandbox_left }}.</p>{% endif %}
 {% if session.error %}<p class="form-error" role="alert">{{ session.error }}</p>{% endif %}
+{% if mentor and screen_note %}<p class="code-warning" role="note">{{ screen_note }}</p>{% endif %}
+{% if awaiting and not mentor %}<p class="code-reason">Waiting for a mentor to approve your request. Nothing has started yet, and no sandbox has been made.</p>{% endif %}
+{% if follow_up_waiting and not mentor %}<p class="code-reason">Waiting for a mentor to approve your follow-up before Claude sees it.</p>{% endif %}
+{% if awaiting and mentor %}
+<section class="panel" aria-labelledby="request-title">
+  <h2 id="request-title">Approve this request?</h2>
+  <p class="field-hint">Approving makes this session's sandbox and starts Claude. Declining stops the request, and the student sees your note.</p>
+  <div class="code-review">
+    <form method="post" action="/code/{{ session.id }}/approve-request">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button small primary" type="submit">Approve and start</button>
+    </form>
+    <form method="post" action="/code/{{ session.id }}/decline-request" class="code-decline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="visually-hidden" for="request-note">Note for the student</label>
+      <input id="request-note" name="note" maxlength="500" placeholder="Why not, or what to change (the student sees this)">
+      <button class="button small quiet" type="submit">Decline</button>
+    </form>
+  </div>
+</section>
+{% endif %}
 <ol class="code-steps">
   <li class="code-step note"><p class="code-label">Task</p><div class="plain">{{ session.task }}</div></li>
   {% for step in steps %}
   {% if step.kind == 'text' %}
   <li class="code-step claude"><div class="prose">{{ step.html|safe }}</div></li>
   {% elif step.kind == 'note' %}
-  <li class="code-step note">{% if step.label %}<p class="code-label">{{ step.label }}</p>{% endif %}<div class="plain">{{ step.output }}</div></li>
+  <li class="code-step note">{% if step.label %}<p class="code-label">{{ step.label }}</p>{% endif %}<div class="plain">{{ step.output }}</div>
+    {% if step.note %}<p class="tag-reason">Note: {{ step.note }}</p>{% endif %}
+    {% if step.status == 'pending' and mentor %}
+    <div class="code-review">
+      <form method="post" action="/code/steps/{{ step.id }}/approve-follow-up">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button small primary" type="submit">Send to Claude</button>
+      </form>
+      <form method="post" action="/code/steps/{{ step.id }}/decline-follow-up" class="code-decline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label class="visually-hidden" for="decline-follow-{{ step.id }}">Note for the student</label>
+        <input id="decline-follow-{{ step.id }}" name="note" maxlength="500" placeholder="Why not, or what to ask instead (optional)">
+        <button class="button small quiet" type="submit">Decline</button>
+      </form>
+    </div>
+    {% endif %}
+  </li>
   {% else %}
   <li class="code-step tool {{ step.status }}" id="step{{ step.id }}">
     <p class="code-label">
@@ -33,18 +77,22 @@
 {% endfor %}</code></pre>{% endif %}
     {% if step.note %}<p class="tag-reason">Note: {{ step.note }}</p>{% endif %}
     {% if step.status == 'pending' %}
-    <div class="code-review">
-      <form method="post" action="/code/steps/{{ step.id }}/approve">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <button class="button small primary" type="submit">{{ 'Run it' if step.tool == 'run_command' else 'Approve change' }}</button>
-      </form>
-      <form method="post" action="/code/steps/{{ step.id }}/decline" class="code-decline">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <label class="visually-hidden" for="decline-{{ step.id }}">Note for Claude</label>
-        <input id="decline-{{ step.id }}" name="note" maxlength="500" placeholder="Why not, or what to do instead (optional)">
-        <button class="button small quiet" type="submit">Decline</button>
-      </form>
-    </div>
+      {% if mentor %}
+      <div class="code-review">
+        <form method="post" action="/code/steps/{{ step.id }}/approve">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="button small primary" type="submit">{{ 'Run it' if step.tool == 'run_command' else 'Approve change' }}</button>
+        </form>
+        <form method="post" action="/code/steps/{{ step.id }}/decline" class="code-decline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label class="visually-hidden" for="decline-{{ step.id }}">Note for Claude</label>
+          <input id="decline-{{ step.id }}" name="note" maxlength="500" placeholder="Why not, or what to do instead (optional)">
+          <button class="button small quiet" type="submit">Decline</button>
+        </form>
+      </div>
+      {% else %}
+      <p class="code-reason">Waiting for a mentor to look at this step.</p>
+      {% endif %}
     {% elif step.output and step.status in ('done', 'error') and not step.diff %}
     <details class="code-output"><summary>{{ 'Output' if step.tool == 'run_command' else 'Details' }}</summary><pre><code>{{ step.output }}</code></pre></details>
     {% endif %}
@@ -52,6 +100,9 @@
   {% endif %}
   {% endfor %}
 </ol>
+{% if waiting_for_changes %}
+<p class="code-reason" role="status">Waiting for a mentor to look at your changes. You can download them once a mentor releases them.</p>
+{% endif %}
 {% if changes %}
 <section class="panel" aria-labelledby="changes-title">
   <h2 id="changes-title">Changes</h2>
@@ -62,13 +113,32 @@
   <div class="form-actions"><a class="button" href="/code/{{ session.id }}/changes.patch" download>Download patch</a></div>
 </section>
 {% endif %}
+{% if can_release and changes %}
+<section class="panel" aria-labelledby="release-title">
+  <h2 id="release-title">Release to student</h2>
+  <p class="field-hint">Read the changes above first. Once you release them, {{ session.owner }} can download the patch.</p>
+  <form method="post" action="/code/{{ session.id }}/release">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="button small primary" type="submit">Release to student</button>
+  </form>
+</section>
+{% elif mentor and released %}
+<p class="field-hint">Released to {{ session.owner }}, who can download the patch.</p>
+{% endif %}
 {% if can_follow_up %}
 <form class="panel" method="post" action="/code/{{ session.id }}/follow-up">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <div class="field">
-    <label for="follow-up">Ask Claude to do more</label>
+    <label for="follow-up">{{ 'Ask Claude to do more' if mentor else 'Ask for more' }}</label>
     <textarea id="follow-up" name="text" rows="3" maxlength="8000" required placeholder="Also add a unit test for the new limit."></textarea>
+    {% if not mentor %}<p class="field-hint">A mentor reads this before Claude sees it.</p>{% endif %}
   </div>
-  <div class="form-actions"><button class="button primary" type="submit">Send</button></div>
+  <div class="form-actions"><button class="button primary" type="submit">{{ 'Send' if mentor else 'Ask a mentor' }}</button></div>
+</form>
+{% endif %}
+{% if mentor %}
+<form class="form-actions" method="post" action="/code/{{ session.id }}/delete">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="button small quiet" type="submit" data-confirm="Delete this session? Its sandbox and copies of the repository are deleted, and its steps are removed. This can't be undone.">Delete session</button>
 </form>
 {% endif %}

@@ -15,7 +15,14 @@
         <div class="composer-bar">
           {% include "_composer_tools.html" %}
           <div class="composer-send">
+            {% if viewer.is_mentor and model_options %}
+            <label class="visually-hidden" for="new-model">Model for this chat</label>
+            <select id="new-model" class="model-chip" name="model" title="Pick the model for this chat">
+              {% for value, label in model_options %}<option value="{{ value }}" {% if value == model_default_id %}selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+            {% else %}
             <span class="model-chip" title="New chats use this model. Mentors can move a chat to a bigger one.">{{ model_name }}</span>
+            {% endif %}
             <button class="button primary" type="submit">{{ 'Send for review' if not viewer.is_mentor else 'Send' }}</button>
           </div>
         </div>

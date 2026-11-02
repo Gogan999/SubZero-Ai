@@ -7,22 +7,31 @@ Every change goes in the audit log with the old and new value.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .ai_backend import resolve_backend
-from .config import MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
+from .config import MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, fake_sandbox_allowed, normalize_model_id, student_sandboxes
 from .db import Database, utcnow
+from .egress_proxy import parse_hosts, parse_ports
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
 from .model_check import requirement_problem
 
 log = logging.getLogger("subzero.settings")
 
-EFFORTS = ("low", "medium", "high")
+EFFORT_CHOICES = (("low", "Low"), ("medium", "Medium"), ("high", "High"))
+SANDBOX_CHOICES = (("off", "Off: commands run on the computer (as before)"),
+                   ("hyperv", "Hyper-V: each session gets its own virtual computer"),
+                   ) + ((("fake", "Fake: this computer, no isolation (testing only)"),) if fake_sandbox_allowed() else ())
+SWITCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}")
+# The dropdown value that means "type the model id under Other"; never a real model id
+OTHER_MODEL = "__other__"
 # provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
 MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
 PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "google": "Google (Gemini)",
@@ -43,11 +52,13 @@ BLOCKED_MODEL_WORDS = ("fable", "mythos")
 class Field:
     name: str
     label: str
-    kind: str  # model, effort, int, bool, lines, ids, providers
+    kind: str  # model, choice, int, bool, lines, ids, providers, path, name
     help: str = ""
     minimum: int = 0
     maximum: int = 0
-    optional: bool = False  # for ids: an empty list is allowed
+    optional: bool = False  # for ids and path: an empty value is allowed
+    choices: tuple[tuple[str, str], ...] = ()  # for choice: (saved value, label) pairs
+    error: str = ""  # for path and name: what a value that isn't allowed looks like, in plain words
 
 
 SECTIONS: dict[str, tuple[str, list[Field]]] = {
@@ -63,9 +74,11 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("model_check_judge", "Safety check judge", "model",
               "Grades the answers in the Model safety check. It has to be a Claude model, since it decides which "
               "other models are safe enough for students."),
-        Field("effort_default", "Everyday effort", "effort", "Higher effort gives more careful answers and costs more."),
-        Field("effort_high", "Effort for explainers and files", "effort",
-              "Used for interactive explainers and messages with files attached, which are usually code reviews."),
+        Field("effort_default", "Everyday effort", "choice", "Higher effort gives more careful answers and costs more.",
+              choices=EFFORT_CHOICES),
+        Field("effort_high", "Effort for explainers and files", "choice",
+              "Used for interactive explainers and messages with files attached, which are usually code reviews.",
+              choices=EFFORT_CHOICES),
         Field("max_tokens_chat", "Longest reply, in tokens", "int", "8,000 tokens is about 6,000 words.", 500, 64000),
         Field("max_tokens_explainer", "Longest explainer reply, in tokens", "int",
               "An explainer is a whole web page, so it needs more room.", 1000, 64000),
@@ -115,6 +128,76 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "folder, and a mentor approves each command before it runs."),
         Field("code_command_timeout", "Stop a command after this many seconds", "int",
               "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
+        Field("code_sandbox", "Run Code commands in a sandbox", "choice",
+              "Hyper-V gives each Code session its own virtual computer on an internal network, deleted when the "
+              "session ends. Fake runs commands on this computer with no protection, so use it only for testing. "
+              "Changing this applies to the next command.", choices=SANDBOX_CHOICES),
+        Field("sandbox_ttl_hours", "Delete a sandbox this many hours after it was made", "int",
+              "Even if its session is still waiting. The session's copy of the repository is kept, and a new "
+              "sandbox is made when it's needed again.", 1, 168),
+        Field("sandbox_max_sessions", "Sandboxes that can run at the same time", "int",
+              "A new session waits for a free sandbox.", 1, 10),
+        Field("sandbox_memory_mb", "Memory for each sandbox, in MB", "int",
+              "Applies to sandboxes made after the change.", 1024, 16384),
+        Field("sandbox_cpus", "Processors for each sandbox", "int",
+              "Applies to sandboxes made after the change.", 1, 8),
+        Field("sandbox_disk_gb", "Disk space each sandbox can use, in GB", "int",
+              "The base disk must be this small or smaller (the standard base disk is 30 GB). A sandbox's own disk grows "
+              "only as it is used, and can't be capped below the base disk's size.", 5, 100),
+        Field("sandbox_disk_cap_gb", "Delete a sandbox that grows past, in GB", "int",
+              "Checked every minute. A sandbox whose own disk grows past this is deleted, so a few busy sandboxes "
+              "can't fill the drive. 0 turns the limit off.", 0, 100),
+        Field("sandbox_min_free_gb", "Keep this much disk free, in GB", "int",
+              "No new sandbox is made while the disk holding the base image has less free space than this.", 1, 500),
+        Field("sandbox_base_image", "Base disk for sandboxes", "path",
+              "The full path to the base disk file (.vhdx) on the mini PC. Leave empty unless sandboxes are on.",
+              optional=True, error="Use the full path to the disk file, like C:\\SubZeroAI\\sandbox\\base.vhdx."),
+        Field("sandbox_switch", "Internal network switch for sandboxes", "name",
+              "The Hyper-V internal switch sandboxes are attached to, with the host on 10.77.0.1. The host must "
+              "firewall that adapter. A sandbox on any other switch is never started.",
+              error="Use letters, numbers, spaces, dots, dashes and underscores, up to 63 characters."),
+        Field("sandbox_proxy_port", "Host port sandboxes may reach", "int",
+              "The one port on this PC that a sandbox may reach over the internal switch, for the egress proxy. "
+              "The sandbox network setup script and the check both use it. Applies after a restart.", 1, 65535),
+        Field("sandbox_host_address", "This PC's address on the sandbox switch", "address",
+              "The proxy listens only on this address. It is 10.77.0.1 unless the sandbox network was set up "
+              "differently. Applies after a restart.",
+              error="Use the PC's private IPv4 address on the sandbox switch, like 10.77.0.1."),
+        Field("sandbox_allowed_hosts", "Websites a sandbox may reach", "hosts",
+              "Names separated by commas, like pypi.org or *.example.com (any name under example.com). Sandboxes "
+              "reach only these, and only over secure connections. Leave empty to allow none. Applies to the next "
+              "connection.", optional=True),
+        Field("sandbox_allowed_ports", "Ports a sandbox may use through the proxy", "ports",
+              "Usually just 443, the secure web port. Applies to the next connection."),
+        Field("sandbox_proxy_mb_limit", "Data a sandbox may move through the proxy, in MB", "int",
+              "Counted over the sandbox's whole life, in both directions. A sandbox that goes over is cut off.",
+              64, 102400),
+        Field("sandbox_proxy_max_per_sandbox", "Connections one sandbox may hold open at once", "int",
+              "Each download or web request uses one connection.", 1, 64),
+        Field("sandbox_guest_sudo", "Let the sandbox's user use sudo (root inside the sandbox)", "bool",
+              "Off by default. When on, a student's commands in a sandbox can run as root, but only inside that "
+              "disposable virtual computer. It does not reach the mini PC. Applies to sandboxes made after the "
+              "change."),
+        Field("code_student_access", "Students can start Code sessions", "bool",
+              "Each request waits for a mentor to approve it before Claude starts. Needs Hyper-V sandboxes turned on "
+              "above (the fake sandbox is for testing only). Students see only their own sessions."),
+        Field("code_student_free_rein", "Inside a student's sandbox, Claude's changes and commands run without a click",
+              "bool", "Nothing is clicked there. Anything that leaves the sandbox, like the patch, still waits for a "
+              "mentor to release it. Off means a mentor clicks through each change and command."),
+        Field("code_mentor_free_rein", "Inside a mentor's sandbox, changes and commands run without a click", "bool",
+              "Only applies when the sandbox is on. Off keeps the click for each change and command."),
+        Field("code_sandbox_commands", "Programs Claude may run inside a sandbox", "lines",
+              "One per line, added to the commands above, so Claude can install packages (pip, npm) and use git and "
+              "Java inside a sandbox. Each program still runs only inside the sandbox."),
+        Field("code_student_max_open", "Code sessions a student can have open at once", "int",
+              "Open means waiting for a mentor, preparing, running or waiting for a reply.", 1, 5),
+        Field("code_student_daily_sessions", "Code requests a student can make in 24 hours", "int",
+              "New sessions and follow-up requests both count. A request that a mentor declines still counts.", 1, 50),
+        Field("code_student_max_turns", "Claude replies in one run, for students", "int",
+              "A run stops after this many replies, so a confused session can't spend without limit. Send a "
+              "follow-up to carry on.", 5, 200),
+        Field("code_student_command_timeout", "Stop a student's command after this many seconds", "int",
+              "Applies to commands in a student's sandbox.", 30, 3600),
     ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),
@@ -163,12 +246,55 @@ def load_into(settings: Settings, db: Database) -> None:
             log.warning("Ignoring a saved setting that couldn't be read: %s", row["key"])
 
 
+class _FormView:
+    """The submitted form with some dropdown choices swapped for the values typed under Other."""
+
+    def __init__(self, form: Mapping[str, Any], overrides: dict[str, str]):
+        self._form = form
+        self._overrides = overrides
+
+    def get(self, name: str, default: Any = None) -> Any:
+        return self._overrides[name] if name in self._overrides else self._form.get(name, default)
+
+    def getlist(self, name: str) -> list[Any]:
+        return [self._overrides[name]] if name in self._overrides else self._form.getlist(name)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._overrides or name in self._form
+
+
+def model_choices_form(form: Mapping[str, Any], section: str) -> Mapping[str, Any]:
+    """Model dropdowns post the chosen model, or OTHER_MODEL plus the typed id in `<name>_other`. Returns the form
+    with the typed id in place of OTHER_MODEL, so validate() checks it exactly as a typed box."""
+    overrides = {}
+    for f in SECTIONS[section][1]:
+        if f.kind == "model" and form.get(f.name) == OTHER_MODEL:
+            overrides[f.name] = str(form.get(f"{f.name}_other", "") or "")
+    return _FormView(form, overrides) if overrides else form
+
+
 def form_text(form: Mapping[str, Any], name: str) -> str:
     """A form value as text. A field with several values (checkboxes) comes back one per line."""
     getlist = getattr(form, "getlist", None)
     if getlist is not None:
         return "\n".join(str(v) for v in getlist(name))
     return str(form.get(name, "") or "")
+
+
+def check_path(raw: str) -> bool:
+    """An absolute Windows or POSIX path with no control characters or quotes that could break a script."""
+    if len(raw) > 260 or any(ord(ch) < 32 or ch in "\"`$;'" for ch in raw):
+        return False
+    return PureWindowsPath(raw).is_absolute() or PurePosixPath(raw).is_absolute()
+
+
+def _private_ipv4(raw: str) -> bool:
+    """A private IPv4 address, such as the sandbox switch's. Never 0.0.0.0, which would listen on every network."""
+    try:
+        address = ipaddress.IPv4Address(raw)
+    except ValueError:
+        return False
+    return address.is_private and not address.is_unspecified
 
 
 def check_providers(raw: str) -> tuple[tuple[str, ...], str]:
@@ -266,9 +392,33 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 values[f.name] = model
         elif f.kind == "providers":
             continue  # checked above
-        elif f.kind == "effort":
-            if raw not in EFFORTS:
-                errors[f.name] = "Pick low, medium, or high."
+        elif f.kind in ("path", "name"):
+            if f.optional and not raw:
+                values[f.name] = ""
+            elif (f.kind == "path" and not check_path(raw)) or (f.kind == "name" and not SWITCH_RE.fullmatch(raw)):
+                errors[f.name] = f.error
+            else:
+                values[f.name] = raw
+        elif f.kind == "address":
+            if not _private_ipv4(raw):
+                errors[f.name] = f.error
+            else:
+                values[f.name] = raw
+        elif f.kind == "hosts":
+            try:
+                values[f.name] = ", ".join(parse_hosts(raw))
+            except ValueError as exc:
+                errors[f.name] = str(exc)
+        elif f.kind == "ports":
+            try:
+                values[f.name] = ", ".join(str(port) for port in parse_ports(raw))
+            except ValueError as exc:
+                errors[f.name] = str(exc)
+        elif f.kind == "choice":
+            allowed = [value for value, _ in f.choices]
+            if raw not in allowed:
+                joined = ", ".join(allowed[:-1]) + (", or " if len(allowed) > 2 else " or ") + allowed[-1]
+                errors[f.name] = f"Pick {joined}."
             else:
                 values[f.name] = raw
         elif f.kind == "lines":
@@ -291,6 +441,13 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 errors[f.name] = "You can't remove yourself. Ask another admin to do it."
             else:
                 values[f.name] = frozenset(items)
+    if section == "code" and values.get("code_student_access"):
+        # Students' sessions need a sandbox. Checked on the form's own sandbox value, so both can be saved together.
+        kind = str(values.get("code_sandbox", settings.code_sandbox if settings is not None else "off"))
+        if kind.strip().lower() not in student_sandboxes():
+            errors["code_student_access"] = ("Turn on Hyper-V sandboxes first (Run Code commands in a sandbox), "
+                                             "then let students start Code sessions.")
+            del values["code_student_access"]
     if "ai_providers" in values and settings is not None:
         # A provider can't be turned off while a model setting still uses it
         in_form = {f.name for f in fields}

@@ -19,7 +19,7 @@ from subzero_ai.db import MIGRATIONS, Database
 from subzero_ai.pi_client import PiClient, child_env, provider_keys
 from subzero_ai.web import model_label
 
-from .helpers import ADMIN, MENTOR, STUDENT, Harness
+from .helpers import ADMIN, MENTOR, STUDENT, Harness, pass_model_check
 
 FAKE = str(Path(__file__).with_name("fake_pi_gateway.py"))
 HTML = {"Accept": "text/html"}
@@ -309,15 +309,18 @@ class SetupKeyStepTest(unittest.TestCase):
 
 
 class MentorSwitchTest(unittest.TestCase):
-    def test_only_default_and_hard_models_are_offered(self):
-        h = Harness(model_default="claude-sonnet-5-5", model_hard="anthropic/claude-opus-5-5")
+    def test_mentors_pick_from_checked_models_only(self):
+        h = Harness(model_default="claude-sonnet-5-5", model_hard="anthropic/claude-opus-5-5",
+                    anthropic_api_key="sk-ant-test-key-0123456789")
         try:
             ava, kim = h.login(STUDENT), h.login(MENTOR)
+            pass_model_check(h, "anthropic/claude-sonnet-5-5")
+            pass_model_check(h, "anthropic/claude-opus-5-5")
             cid = int(ava.new_chat("Hello robot").json()["url"].rsplit("/", 1)[1])
             page = kim.get(f"/c/{cid}", headers=HTML).text
             self.assertIn('value="anthropic/claude-sonnet-5-5"', page)
             self.assertIn('value="anthropic/claude-opus-5-5"', page)
-            self.assertNotIn("haiku", page)
+            self.assertNotIn("haiku", page)  # not checked, so not offered
             self.assertEqual(kim.post(f"/c/{cid}/model", {"model": "anthropic/claude-haiku-5-5"}).status_code, 400)
             self.assertEqual(kim.post(f"/c/{cid}/model", {"model": "claude-opus-5-5"}).status_code, 200)
             self.assertEqual(h.services.store.conversation(cid)["model"], "anthropic/claude-opus-5-5")

@@ -8,7 +8,10 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
+from subzero_ai import checks
 from subzero_ai.checks import FAIL, OK, WARN, print_report, run_checks
 from subzero_ai.config import load_settings
 from subzero_ai.slack_api import FakeSlack, SlackError
@@ -96,6 +99,77 @@ class ChecksTest(unittest.TestCase):
         bad = [r for r in results if r.title == "Slack bot token didn't work"][0]
         self.assertIn("groups:read", bad.detail)
         self.assertIn("reinstall", bad.detail)
+
+    def sandbox_rows(self, results):
+        return [r for r in results if "sandbox network" in r.title.lower()]
+
+    def test_no_sandbox_row_unless_hyperv_is_on(self):
+        results = asyncio.run(run_checks(self.settings(), slack=FakeSlack(), claude=GoodClaude(),
+                                         sandbox_runner=lambda script: "[]"))
+        self.assertEqual(self.sandbox_rows(results), [])
+
+    def test_a_locked_down_sandbox_network_is_ok(self):
+        settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx")
+        seen = []
+
+        def runner(script):
+            seen.append(script)
+            return "[]"
+
+        results = asyncio.run(run_checks(settings, slack=FakeSlack(), claude=GoodClaude(), sandbox_runner=runner))
+        [row] = self.sandbox_rows(results)
+        self.assertEqual((row.status, row.title), (OK, "The sandbox network is locked down"))
+        self.assertIn("szsandbox-internal", row.detail)
+        self.assertIn("Get-VMSwitch -Name 'szsandbox-internal'", seen[0])
+
+    def test_a_problem_in_the_sandbox_network_is_a_failure_with_the_fix(self):
+        settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx", sandbox_proxy_port=8080)
+        seen = []
+
+        def runner(script):
+            seen.append(script)
+            return '["forwarding-on","host-gateway"]'
+
+        results = asyncio.run(run_checks(settings, slack=FakeSlack(), claude=GoodClaude(), sandbox_runner=runner))
+        [row] = self.sandbox_rows(results)
+        self.assertEqual(row.status, FAIL)
+        self.assertIn("IP forwarding is on", row.detail)
+        self.assertIn("default gateway", row.detail)
+        self.assertIn("sandbox-network.ps1 -Action Install", row.detail)
+        self.assertIn("'8080'", seen[0])
+
+    def test_an_allow_default_for_the_public_profile_is_a_failure_with_the_fix(self):
+        settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx")
+
+        def runner(script):
+            self.assertIn("Get-NetFirewallProfile -Profile Public", script)
+            return '["default-inbound-allow","block-rule-missing:szsandbox-block-proto-41"]'
+
+        results = asyncio.run(run_checks(settings, slack=FakeSlack(), claude=GoodClaude(), sandbox_runner=runner))
+        [row] = self.sandbox_rows(results)
+        self.assertEqual(row.status, FAIL)
+        self.assertIn("Public profile", row.detail)
+        self.assertIn("szsandbox-block-proto-41 is missing", row.detail)
+        self.assertIn("sandbox-network.ps1 -Action Install", row.detail)
+
+    def test_a_failing_host_command_is_a_failure_not_a_crash(self):
+        settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx")
+
+        def runner(script):
+            raise OSError("powershell.exe is missing")
+
+        results = asyncio.run(run_checks(settings, slack=FakeSlack(), claude=GoodClaude(), sandbox_runner=runner))
+        [row] = self.sandbox_rows(results)
+        self.assertEqual(row.status, FAIL)
+        self.assertIn("powershell.exe is missing", row.detail)
+
+    def test_on_a_non_windows_host_the_network_cannot_be_checked(self):
+        settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx")
+        with mock.patch.object(checks, "os", SimpleNamespace(name="posix")):
+            results = asyncio.run(run_checks(settings, slack=FakeSlack(), claude=GoodClaude()))
+        [row] = self.sandbox_rows(results)
+        self.assertEqual(row.status, WARN)
+        self.assertIn("can't be checked on this computer", row.title)
 
     def test_test_mode(self):
         settings = self.settings(fake_claude=True, dev_login=True, slack_bot_token="", public_url="http://localhost:8787")

@@ -667,6 +667,15 @@
     if (event.target.matches?.("[data-autosubmit]")) event.target.form?.requestSubmit();
   });
 
+  // A model dropdown's "Other (type a model id)" choice shows the box for typing an id.
+  document.addEventListener("change", (event) => {
+    const pick = event.target.matches?.("[data-model-pick]") ? event.target : null;
+    const box = pick && document.querySelector(`[data-model-other="${pick.dataset.modelPick}"]`);
+    if (!box) return;
+    box.hidden = pick.value !== "__other__";
+    if (!box.hidden) box.querySelector("input")?.focus();
+  });
+
   function afterAction(element) {
     if (document.querySelector("[data-queue]")) {
       refreshQueue();
