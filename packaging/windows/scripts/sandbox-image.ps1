@@ -292,6 +292,8 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
             if ($LASTEXITCODE -ne 0) { throw "icacls couldn't limit access to the base disk (exit code $LASTEXITCODE)." }
             # The app's service only reads the disk (Get-VHD); a missing service account is not an error here
             icacls $Parent /grant "${ServiceAccount}:(R)" 2>&1 | Out-Null
+            # Hyper-V reads the base for every sandbox as the VM's own identity. The service can't add that entry itself
+            icacls $Parent /grant "*S-1-5-83-0:(R)" 2>&1 | Out-Null
         } catch {
             Remove-PartialParent $Parent
             throw

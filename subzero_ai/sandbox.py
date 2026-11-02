@@ -78,6 +78,7 @@ PRIVATE_KEY_END = "-----END OPENSSH PRIVATE KEY-----"
 CLIENT_KEY_COMMENT = "szsandbox-client"
 HOST_KEY_FILE = "ssh_host_ed25519_key"  # the host key pair's file name inside a sandbox's staging folder
 SEED_LABEL = "CIDATA"  # the NoCloud seed's volume label, which cloud-init looks for
+SEED_DIR = "seed"  # the staging subfolder that becomes the seed image's root
 SEED_FILES = ("meta-data", "network-config", "user-data")  # the files on the seed disk, in this order
 SEED_SIZE_MB = 64
 PRIVATE_VLAN_PRIMARY = 100  # the private VLAN pair every sandbox adapter and the host's adapter use
@@ -475,11 +476,12 @@ def ps_quote(value: str) -> str:
     return "'" + "".join(PS_QUOTES.get(ch, ch) for ch in text) + "'"
 
 
-def child_disk_path(base: str | Path, name: str) -> Path:
-    """The child disk for a sandbox: next to the base disk, named after the sandbox. Never the base disk itself."""
+def child_disk_path(base: str | Path, name: str, folder: str | Path | None = None) -> Path:
+    """The child disk for a sandbox, named after the sandbox: in `folder` when one is given (the app's own folder, which
+    the service can create files in), else next to the base disk. Never the base disk itself."""
     base = Path(base)
     check_name(name)
-    child = base.with_name(f"{name}.vhdx")
+    child = Path(folder) / f"{name}.vhdx" if folder else base.with_name(f"{name}.vhdx")
     if child == base or child.suffix.lower() != ".vhdx" or not child.name.startswith(PREFIX):
         raise SandboxError("The sandbox disk would have replaced the base disk, so it wasn't made.")
     return child
@@ -498,11 +500,12 @@ def new_vhd_script(child: Path, base: str | Path, disk_gb: int) -> str:
 def new_vm_script(name: str, child: Path, switch: str, memory_mb: int, cpus: int, vm_dir: Path) -> str:
     """A generation 2 VM with fixed memory and CPUs, one network adapter on the internal switch, and the child disk."""
     vm = ps_quote(check_name(name))
-    # TODO: Set-VMFirmware -EnableSecureBoot depends on the base image's OS; set once the image is known.
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
         f"New-VM -Name {vm} -Generation 2 -MemoryStartupBytes {int(memory_mb)}MB -VHDPath {ps_quote(str(child))}"
         f" -SwitchName {ps_quote(switch)} -Path {ps_quote(str(vm_dir))} | Out-Null",
+        # Ubuntu's boot loader is signed by Microsoft's third-party CA, not by the default Windows template
+        f"Set-VMFirmware -VMName {vm} -EnableSecureBoot On -SecureBootTemplate MicrosoftUEFICertificateAuthority",
         f"Set-VMMemory -VMName {vm} -DynamicMemoryEnabled $false",
         f"Set-VMProcessor -VMName {vm} -Count {int(cpus)}",
         f"Set-VM -Name {vm} -CheckpointType Disabled",
@@ -529,16 +532,18 @@ def isolation_script(name: str, slot: int) -> str:
     vm = ps_quote(check_name(name))
     host = ps_quote(f"{HOST_ADDRESS}/32")
     subnet = ps_quote(GUEST_SUBNET)
+    def both(action: str, remote: str, weight: int) -> list[str]:
+        # The cmdlet takes Inbound or Outbound only (there is no Both), so every rule is added once per direction
+        return [f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action {action} -Direction {direction} "
+                f"-RemoteIPAddress {remote} -Weight {weight}" for direction in ("Inbound", "Outbound")]
+
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
         f"Set-VMNetworkAdapter -VMName {vm} -StaticMacAddress {ps_quote(mac_for_slot(slot))} "
         "-DhcpGuard On -RouterGuard On",
-        f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action Allow -Direction Both -RemoteIPAddress {host} "
-        "-Weight 200",
-        f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action Deny -Direction Both -RemoteIPAddress {subnet} "
-        "-Weight 100",
-        f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action Deny -Direction Both "
-        f"-RemoteIPAddress {ps_quote(IPV6_ANY)} -Weight 150",
+        *both("Allow", host, 200),
+        *both("Deny", subnet, 100),
+        *both("Deny", ps_quote(IPV6_ANY), 150),
         f"Set-VMNetworkAdapterVlan -VMName {vm} -Isolated -PrimaryVlanId {PRIVATE_VLAN_PRIMARY} "
         f"-SecondaryVlanId {PRIVATE_VLAN_SECONDARY}",
     ])
@@ -570,7 +575,7 @@ def list_vms_script() -> str:
     return "Get-VM | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
 
 
-def destroy_script(name: str, child: Path, seed: Path) -> str:
+def destroy_script(name: str, child: Path, seed: Path, vm_folder: Path | None = None) -> str:
     """Turn the VM off, remove it, and delete its child disk and its seed disk (if one was left). Safe to run twice.
     The base disk is never named."""
     vm = ps_quote(check_name(name))
@@ -586,6 +591,9 @@ def destroy_script(name: str, child: Path, seed: Path) -> str:
         *wipe_file_lines(seed_disk),  # the seed may hold a copy of the host's private key; the VM no longer uses it
         f"foreach ($disk in {disks}) {{ if (Test-Path -LiteralPath $disk) {{ "
         "Remove-Item -LiteralPath $disk -Force } }",
+        *([f"$folder = {ps_quote(check_path(vm_folder))}",  # Hyper-V leaves the VM's own (empty) folders behind
+           "if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $folder -Recurse -Force "
+           "-ErrorAction SilentlyContinue }"] if vm_folder else []),
     ])
 
 
@@ -633,44 +641,69 @@ def check_path(value: str | Path) -> str:
     return text
 
 
-def seed_disk_path(base: str | Path, name: str) -> Path:
-    """The NoCloud seed disk for a sandbox: next to the base disk and the child disk, never the base disk itself."""
+def seed_disk_path(base: str | Path, name: str, folder: str | Path | None = None) -> Path:
+    """The NoCloud seed for a sandbox: an ISO image in `folder` (else next to the base disk), never the base disk."""
     base = Path(base)
     check_name(name)
-    seed = base.with_name(f"{name}-seed.vhdx")
-    if seed == base or seed.suffix.lower() != ".vhdx" or not seed.name.startswith(PREFIX):
+    seed = Path(folder) / f"{name}-seed.iso" if folder else base.with_name(f"{name}-seed.iso")
+    if seed == base or seed.suffix.lower() != ".iso" or not seed.name.startswith(PREFIX):
         raise SandboxError("The seed disk would have replaced the base disk, so it wasn't made.")
     return seed
 
 
+# Windows' own IMAPI2 image writer, called from PowerShell. It needs no extra privilege (mounting a disk image does)
+ISO_WRITER_SOURCE = """
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+public static class SzIsoWriter {
+    public static void Write(object comStream, string path) {
+        IStream stream = (IStream)comStream;
+        STATSTG stat;
+        stream.Stat(out stat, 1);
+        long left = stat.cbSize;
+        byte[] buffer = new byte[65536];
+        IntPtr read = Marshal.AllocHGlobal(4);
+        try {
+            using (FileStream file = new FileStream(path, FileMode.CreateNew, FileAccess.Write)) {
+                while (left > 0) {
+                    int want = (int)Math.Min((long)buffer.Length, left);
+                    stream.Read(buffer, want, read);
+                    int got = Marshal.ReadInt32(read);
+                    if (got <= 0) { break; }
+                    file.Write(buffer, 0, got);
+                    left -= got;
+                }
+            }
+        } finally { Marshal.FreeHGlobal(read); }
+    }
+}
+"""
+
+
 def seed_disk_script(seed: Path, staging: Path) -> str:
-    """Build the seed disk with built-in tools only: a 64 MB dynamic disk, one MBR partition formatted FAT32 with the
-    label CIDATA, and the three seed files copied from the staging folder onto it. The image is dismounted at the end,
-    even when a step fails. A seed that already exists is never overwritten."""
+    """Build the seed as an ISO image with Windows' IMAPI2 (no mounting, so no extra privilege): the label cidata and
+    the three seed files from the staging folder at its root. A seed that already exists is never overwritten."""
     disk = ps_quote(check_path(seed))
     lines = [
         "$ErrorActionPreference = 'Stop'",
         f"if (Test-Path -LiteralPath {disk}) {{ throw 'The seed disk is already there.' }}",
-        f"New-VHD -Path {disk} -SizeBytes {SEED_SIZE_MB}MB -Dynamic -BlockSizeBytes 1MB | Out-Null",
-        f"$image = Mount-VHD -Path {disk} -Passthru | Get-Disk",
-        "try {",
-        "  Initialize-Disk -Number $image.Number -PartitionStyle MBR",
-        "  $part = New-Partition -DiskNumber $image.Number -UseMaximumSize -AssignDriveLetter",
-        f"  Format-Volume -Partition $part -FileSystem FAT32 -NewFileSystemLabel {ps_quote(SEED_LABEL)} "
-        "-Confirm:$false | Out-Null",
-        "  $letter = (Get-Partition -DiskNumber $image.Number -PartitionNumber $part.PartitionNumber).DriveLetter",
-        "  if (-not $letter) { throw 'Windows gave the seed disk no drive letter.' }",
+        "Add-Type -TypeDefinition @'" + ISO_WRITER_SOURCE + "'@",
+        "$image = New-Object -ComObject IMAPI2FS.MsftFileSystemImage",
+        "$image.FileSystemsToCreate = 3",  # ISO 9660 and Joliet, so the file names keep their case and hyphens
+        f"$image.VolumeName = {ps_quote(SEED_LABEL.lower())}",
     ]
-    for file in SEED_FILES:
-        source = ps_quote(check_path(Path(staging) / file))
-        lines.append(f"  Copy-Item -LiteralPath {source} -Destination (\"{{0}}:\\" + file + "\" -f $letter)")
-    lines += ["} finally {", f"  Dismount-VHD -Path {disk}", "}"]
+    # Only the seed folder goes onto the image (the host key's own file sits beside it, never in it)
+    lines.append(f"$image.Root.AddTree({ps_quote(check_path(Path(staging) / SEED_DIR))}, $false)")
+    lines += ["$result = $image.CreateResultImage()",
+              f"[SzIsoWriter]::Write($result.ImageStream, {disk})"]
     return "\n".join(lines)
 
 
 def attach_seed_script(name: str, seed: Path) -> str:
     return "\n".join(["$ErrorActionPreference = 'Stop'",
-                      f"Add-VMHardDiskDrive -VMName {ps_quote(check_name(name))} -Path {ps_quote(check_path(seed))}"])
+                      f"Add-VMDvdDrive -VMName {ps_quote(check_name(name))} -Path {ps_quote(check_path(seed))}"])
 
 
 def wipe_file_lines(disk: str) -> list[str]:
@@ -703,7 +736,7 @@ def release_seed_script(name: str, seed: Path) -> str:
     disk = ps_quote(check_path(seed))
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
-        f"Get-VMHardDiskDrive -VMName {vm} | Where-Object {{ $_.Path -eq {disk} }} | Remove-VMHardDiskDrive",
+        f"Get-VMDvdDrive -VMName {vm} | Where-Object {{ $_.Path -eq {disk} }} | Remove-VMDvdDrive",
         *wipe_file_lines(disk),
         f"if (Test-Path -LiteralPath {disk}) {{ Remove-Item -LiteralPath {disk} -Force }}",
     ])
@@ -1067,7 +1100,7 @@ def guest_path(rel: str) -> str:
 
 def guest_run_command(argv: list[str], cwd: str, env: dict[str, str], timeout: int) -> str:
     """The command the guest's shell runs: from the folder, with a clean environment and a time limit."""
-    full_env = {"PATH": GUEST_PATH, **env}
+    full_env = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, **env}
     assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in sorted(full_env.items()))
     return (f"cd {shlex.quote(guest_path(cwd))} && env -i {assignments} "
             f"timeout -k 5 {int(timeout)} {shlex.join(argv)}")
@@ -1198,9 +1231,9 @@ def default_run_powershell(script: str, timeout: int = 900) -> str:
     passed encoded, so its line breaks and quotes survive the trip to powershell.exe."""
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     proc = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                           "-EncodedCommand", encoded], capture_output=True, text=True, timeout=timeout)
+                           "-OutputFormat", "Text", "-EncodedCommand", encoded], capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
-        raise SandboxError((proc.stderr or proc.stdout or "PowerShell failed").strip()[-400:])
+        raise SandboxError((proc.stderr or proc.stdout or "PowerShell failed").strip()[-1500:])
     return proc.stdout
 
 
@@ -1233,7 +1266,7 @@ class HyperVSandbox:
     name = "hyperv"
 
     def __init__(self, *, base_image: str, switch: str, memory_mb: int, cpus: int, disk_gb: int,
-                 vm_dir: str = "", ssh_key: str = "", known_dir: str = "", staging_dir: str = "", account: str = "",
+                 vm_dir: str = "", disks_dir: str = "", ssh_key: str = "", known_dir: str = "", staging_dir: str = "", account: str = "",
                  guest_sudo: bool = False, run_powershell: Callable[[str], str] | None = None,
                  run_keygen: Callable[[list[str]], None] | None = None,
                  run_icacls: Callable[[list[str]], None] | None = None,
@@ -1247,7 +1280,10 @@ class HyperVSandbox:
         self.switch = switch
         self.memory_mb, self.cpus, self.disk_gb = memory_mb, cpus, disk_gb
         base_dir = Path(base_image).parent
-        self.vm_dir = Path(vm_dir) if vm_dir else base_dir / "szsandbox-vm-config"
+        # Disks and VM files go in a folder the service makes itself: it has no right to set permissions in the base
+        # image's folder, and New-VM needs to
+        self.disks_dir = Path(disks_dir) if disks_dir else base_dir / "szsandbox-disks"
+        self.vm_dir = Path(vm_dir) if vm_dir else self.disks_dir / "config"
         self.known_dir = Path(known_dir) if known_dir else base_dir / "szsandbox-known-hosts"
         self.staging_dir = Path(staging_dir) if staging_dir else base_dir / "szsandbox-staging"
         self.ssh_key = ssh_key or str(base_dir / "szsandbox-keys" / "id_ed25519")
@@ -1285,7 +1321,7 @@ class HyperVSandbox:
         return self.staging_dir / check_name(name)
 
     def _seed(self, name: str) -> Path:
-        return seed_disk_path(self.base_image, check_name(name))
+        return seed_disk_path(self.base_image, check_name(name), self.disks_dir)
 
     def _ssh(self, name: str, remote: str, *, stdin: bytes | None = None, timeout: int = 60,
              on_output: Callable[[str], None] | None = None, limit: int | None = None) -> tuple[int, bytes, bytes]:
@@ -1304,7 +1340,7 @@ class HyperVSandbox:
         return guest_address(slot)
 
     def _child(self, name: str) -> Path:
-        return child_disk_path(self.base_image, check_name(name))
+        return child_disk_path(self.base_image, check_name(name), self.disks_dir)
 
     def _run_keygen(self, path: Path, comment: str) -> None:
         """Make one key pair at path (path.pub is the public half) and lock the private file to the app's account."""
@@ -1345,9 +1381,10 @@ class HyperVSandbox:
         self._run_keygen(host_key, name)
         host_public = Path(str(host_key) + ".pub").read_text(encoding="ascii", errors="replace")
         host_private = host_key.read_bytes().decode("ascii", errors="replace")
-        write_lf(staging / "meta-data", meta_data(name))
-        write_lf(staging / "network-config", network_config(slot))
-        write_lf(staging / "user-data", user_data(client_public, host_public, host_private,
+        seed = staging / SEED_DIR
+        write_lf(seed / "meta-data", meta_data(name))
+        write_lf(seed / "network-config", network_config(slot))
+        write_lf(seed / "user-data", user_data(client_public, host_public, host_private,
                                                   guest_sudo=self.guest_sudo))
         write_lf(Path(self._known_hosts(name)), known_hosts_line(host_public, guest_address(slot)) + "\n")
 
@@ -1381,7 +1418,7 @@ class HyperVSandbox:
         a file that can't be overwritten is still deleted, and one that can't be deleted is left for _remove_staging,
         which reports it."""
         staging = self._staging(name)
-        for path in (staging / HOST_KEY_FILE, staging / "user-data"):
+        for path in (staging / HOST_KEY_FILE, staging / SEED_DIR / "user-data"):
             try:
                 shred_file(path)
             except (SandboxError, OSError):
@@ -1401,7 +1438,7 @@ class HyperVSandbox:
 
     def _destroy_name(self, name: str) -> None:
         try:
-            self._ps(destroy_script(name, self._child(name), self._seed(name)))
+            self._ps(destroy_script(name, self._child(name), self._seed(name), self.vm_dir / check_name(name)))
         finally:
             try:
                 self._wipe_staged_keys(name)  # the staged files hold a private key: wiped even if the VM didn't go
@@ -1439,6 +1476,8 @@ class HyperVSandbox:
     def _make(self, name: str, slot: int) -> SandboxHandle:
         try:
             child, seed = self._child(name), self._seed(name)
+            self.disks_dir.mkdir(parents=True, exist_ok=True)  # made by the app itself, so the app owns it
+            self.vm_dir.mkdir(parents=True, exist_ok=True)
             self._stage_seed(name, slot)
             self._ps(new_vhd_script(child, self.base_image, self.disk_gb))
             self._ps(new_vm_script(name, child, self.switch, self.memory_mb, self.cpus, self.vm_dir))
@@ -1547,7 +1586,7 @@ def make_backend(settings: Settings, kind: str) -> SandboxBackend:
         keys = settings.data_dir / "sandbox"
         return HyperVSandbox(base_image=settings.sandbox_base_image, switch=settings.sandbox_switch,
                              memory_mb=settings.sandbox_memory_mb, cpus=settings.sandbox_cpus,
-                             disk_gb=settings.sandbox_disk_gb, ssh_key=str(keys / "id_ed25519"),
+                             disk_gb=settings.sandbox_disk_gb, ssh_key=str(keys / "id_ed25519"), disks_dir=str(keys / "disks"),
                              known_dir=str(keys / "known_hosts"), staging_dir=str(keys / "staging"),
                              guest_sudo=settings.sandbox_guest_sudo, proxy_port=settings.sandbox_proxy_port)
     raise SandboxError(f"There's no sandbox kind called {kind}.")
@@ -1594,7 +1633,7 @@ class SandboxStore:
                            "ORDER BY id DESC LIMIT 1", (code_session_id,))
 
     def alive_count(self) -> int:
-        return self.db.one("SELECT COUNT(*) AS n FROM sandbox_sessions WHERE state != 'destroyed'")["n"]
+        return self.db.one("SELECT COUNT(*) AS n FROM sandbox_sessions WHERE state NOT IN ('destroyed', 'failed')")["n"]
 
     def known_names(self) -> set[str]:
         rows = self.db.all("SELECT name FROM sandbox_sessions WHERE state != 'destroyed' AND name != ''")

@@ -150,7 +150,7 @@ class Settings:
     sandbox_max_sessions: int = 3  # sandboxes alive at once; a new one waits for a slot
     sandbox_memory_mb: int = 2048
     sandbox_cpus: int = 2
-    sandbox_disk_gb: int = 10  # the most a sandbox's own disk may grow
+    sandbox_disk_gb: int = 31  # the biggest base disk allowed (the base image is 30 GB; a sandbox's own disk grows as used)
     sandbox_min_free_gb: int = 20  # no new sandbox while the disk holding the base image has less free
     sandbox_base_image: str = ""  # the base disk (a .vhdx) that every sandbox is made from
     # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24
@@ -161,7 +161,7 @@ class Settings:
     sandbox_allowed_hosts: str = ("repo.maven.apache.org, repo1.maven.org, plugins.gradle.org, services.gradle.org, "
                                   "downloads.gradle.org, plugins-artifacts.gradle.org, frcmaven.wpi.edu, "
                                   "maven.ctr-electronics.com, maven.revrobotics.com, github.com, "
-                                  "objects.githubusercontent.com, pypi.org, files.pythonhosted.org, registry.npmjs.org")
+                                  "objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, registry.npmjs.org")
     sandbox_allowed_ports: str = "443"  # ports a tunnel may use
     sandbox_proxy_mb_limit: int = 2048  # the most a sandbox may move through the proxy in its whole life, both ways
     sandbox_proxy_max_per_sandbox: int = 16  # open proxy connections at once for one sandbox

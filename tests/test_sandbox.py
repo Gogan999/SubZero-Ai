@@ -278,8 +278,9 @@ class FakeHost:
     def powershell(self, script: str) -> str:
         self.scripts.append(script)
         self.events.append(("ps", script))
-        for path in re.findall(r"Copy-Item -LiteralPath '([^']+)'", script):
-            self.seed_files[Path(path).name] = Path(path).read_bytes()
+        for folder in re.findall(r"\.Root\.AddTree\('([^']+)', \$false\)", script):
+            for path in Path(folder).iterdir():  # the seed folder's files go onto the image, at its root
+                self.seed_files[path.name] = path.read_bytes()
         if NETWORK_CHECK_MARK in script:
             self.network_checks += 1
             if isinstance(self.network, Exception):
@@ -343,7 +344,7 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertIn("-Differencing", new_vhd)
         self.assertIn(f"-ParentPath {ps_quote(BASE)}", new_vhd)
         child = re.search(r"New-VHD -Path '([^']+)'", new_vhd).group(1)
-        self.assertEqual(Path(child).parent, Path(BASE).parent)
+        self.assertEqual(Path(child).parent, Path(BASE).parent / "szsandbox-disks", "in the sandbox disks folder")
         self.assertTrue(Path(child).name.startswith(PREFIX) and child.endswith(".vhdx"))
         self.assertNotEqual(child, BASE)
         # The base disk is only read (Get-VHD) and used as a parent; no script changes or deletes it
@@ -382,7 +383,7 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertEqual(len(isolated), 1)
         self.assertEqual(len(started), 1)
         self.assertLess(isolated[0], started[0], "the isolation is applied before the VM starts")
-        self.assertLess(host.index("ps", "Add-VMHardDiskDrive"), host.index("ps", "Start-VM -Name"),
+        self.assertLess(host.index("ps", "Add-VMDvdDrive"), host.index("ps", "Start-VM -Name"),
                         "the seed is attached before the VM starts")
 
     def test_isolation_script_text(self):
@@ -391,16 +392,34 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertIn(f"Set-VMNetworkAdapter -VMName {ps_quote(name)} -StaticMacAddress '00155D77000D'", script)
         self.assertIn("-DhcpGuard On -RouterGuard On", script)
         self.assertIn("Add-VMNetworkAdapterExtendedAcl", script)
-        self.assertIn("-Action Allow -Direction Both -RemoteIPAddress '10.77.0.1/32' -Weight 200", script)
+        for action, remote, weight in (("Allow", "10.77.0.1/32", 200), ("Deny", "10.77.0.0/24", 100),
+                                       ("Deny", "::/0", 150)):
+            for direction in ("Inbound", "Outbound"):
+                self.assertIn(f"-Action {action} -Direction {direction} -RemoteIPAddress '{remote}' -Weight {weight}",
+                              script)
         self.assertIn("-Isolated -PrimaryVlanId 100 -SecondaryVlanId 200", script)
-        self.assertIn("-Action Deny -Direction Both -RemoteIPAddress '10.77.0.0/24' -Weight 100", script)
-        self.assertIn("-Action Deny -Direction Both -RemoteIPAddress '::/0' -Weight 150", script)
         self.assertLess(script.index("-Action Allow"), script.index("-Action Deny"), "the host is allowed first")
         self.assertLess(script.index("-Weight 200"), script.index("'::/0'"), "the IPv6 deny is below the host allow")
-        self.assertNotIn("-Action Allow -Direction Both -RemoteIPAddress '10.77.0.0/24'", script)
+        self.assertNotIn("-Action Allow -Direction Inbound -RemoteIPAddress '10.77.0.0/24'", script)
+        self.assertNotIn("-Action Allow -Direction Outbound -RemoteIPAddress '10.77.0.0/24'", script)
         self.assertNotIn("Remove-", script)
         with self.assertRaises(SandboxError):
             isolation_script("Production DB", 3)
+
+    def test_each_acl_rule_is_split_into_inbound_and_outbound_never_both(self):
+        script = isolation_script("szsandbox-7-s003-abcdef", 3)
+        self.assertNotIn("Both", script, "the cmdlet has no Both direction")
+        self.assertEqual(script.count("Add-VMNetworkAdapterExtendedAcl"), 6, "three rules, each added twice")
+        for direction in ("Inbound", "Outbound"):
+            self.assertEqual(script.count(f"-Direction {direction} "), 3, direction)
+
+    def test_new_vm_sets_the_secure_boot_template_for_ubuntu(self):
+        name = "szsandbox-7-s000-abcdef"
+        script = sandbox.new_vm_script(name, Path("/srv/sandbox/szsandbox-disks/child.vhdx"), SWITCH, 2048, 2,
+                                       Path("/srv/sandbox/szsandbox-disks/config"))
+        self.assertIn(f"Set-VMFirmware -VMName {ps_quote(name)} -EnableSecureBoot On "
+                      "-SecureBootTemplate MicrosoftUEFICertificateAuthority", script)
+        self.assertNotIn("MicrosoftWindows", script, "not the default Windows template")
 
     def test_static_macs_are_unique_and_follow_the_address(self):
         macs = {mac_for_slot(slot) for slot in range(sandbox.MAX_SLOTS)}
@@ -437,9 +456,11 @@ class HyperVCommandTest(unittest.TestCase):
         [script] = host.scripts
         self.assertLess(script.index("Stop-VM"), script.index("Remove-VM"))
         self.assertLess(script.index("Remove-VM"), script.index("Remove-Item"))
-        child = str(child_disk_path(BASE, "szsandbox-7-s000-abcdef"))
+        child = str(child_disk_path(BASE, "szsandbox-7-s000-abcdef", backend.disks_dir))
         self.assertIn(ps_quote(child), script)
-        self.assertIn(ps_quote(str(seed_disk_path(BASE, "szsandbox-7-s000-abcdef"))), script, "the seed goes too")
+        self.assertIn(ps_quote(str(seed_disk_path(BASE, "szsandbox-7-s000-abcdef", backend.disks_dir))), script,
+                      "the seed goes too")
+        self.assertIn(ps_quote(str(backend.vm_dir / "szsandbox-7-s000-abcdef")), script, "the VM's folder goes too")
         self.assertNotIn(ps_quote(BASE), script, "the base disk is never named")
         self.assertIn("if ($vm.State -ne 'Off')", script, "a VM that is already off isn't asked to stop")
 
@@ -471,6 +492,13 @@ class HyperVCommandTest(unittest.TestCase):
         self.assertIn("timeout -k 5 600 ./gradlew build", remote)
         self.assertEqual(remote.count("PATH="), 1, "one PATH only")
         self.assertTrue(result.timed_out, "exit code 124 means the time limit stopped it")
+
+    def test_the_guest_command_sets_home_to_the_sandbox_user(self):
+        remote = sandbox.guest_run_command(["ls"], "work", {}, 30)
+        self.assertIn(" HOME=/home/sandbox ", remote)
+        self.assertEqual(remote.count("HOME="), 1, "one HOME only")
+        self.assertIn("env -i HOME=/home/sandbox PATH=", remote, "the clean environment is still used")
+        self.assertEqual(sandbox.GUEST_HOME, "/home/sandbox")
 
     def test_guest_addresses_stay_on_the_internal_network(self):
         addresses = {guest_address(slot) for slot in range(sandbox.MAX_SLOTS)}
@@ -547,9 +575,9 @@ class HostKeyTest(unittest.TestCase):
     def test_the_seed_is_built_attached_and_the_vm_started_in_that_order(self):
         host = FakeHost()
         hyperv(host).create(7)
-        self.assertLess(host.index("ps", "New-VHD -Path"), host.index("ps", "Add-VMHardDiskDrive"))
-        self.assertLess(host.index("ps", "Mount-VHD"), host.index("ps", "Add-VMHardDiskDrive"))
-        self.assertLess(host.index("ps", "Add-VMHardDiskDrive"), host.index("ps", "Start-VM -Name"))
+        self.assertLess(host.index("ps", "New-VHD -Path"), host.index("ps", "IMAPI2FS"))
+        self.assertLess(host.index("ps", "IMAPI2FS"), host.index("ps", "Add-VMDvdDrive"))
+        self.assertLess(host.index("ps", "Add-VMDvdDrive"), host.index("ps", "Start-VM -Name"))
         self.assertLess(host.index("ps", "-DhcpGuard On"), host.index("ps", "Start-VM -Name"))
 
     def test_the_seed_carries_the_host_key_the_client_key_and_the_static_address(self):
@@ -577,11 +605,11 @@ class HostKeyTest(unittest.TestCase):
         handle = hyperv(host, ready_seconds=60).create(7)
         ready = host.last_index("ssh", "true")
         cloud_init = host.index("ssh", sandbox.CLOUD_INIT_WAIT)
-        release = host.index("ps", "Remove-VMHardDiskDrive")
+        release = host.index("ps", "Remove-VMDvdDrive")
         self.assertLess(host.index("ssh", "true"), ready, "the first checks failed and were retried")
         self.assertLess(ready, cloud_init)
         self.assertLess(cloud_init, release)
-        self.assertIn("Remove-Item", host.sent("Remove-VMHardDiskDrive")[0], "the seed file is deleted too")
+        self.assertIn("Remove-Item", host.sent("Remove-VMDvdDrive")[0], "the seed file is deleted too")
         self.assertFalse((host.root / "staging" / handle.name).exists(), "the staged private key is gone")
         self.assertTrue((host.root / "known" / handle.name).exists(), "known_hosts stays for later connections")
 
@@ -615,8 +643,8 @@ class HostKeyTest(unittest.TestCase):
         known.write_text("x", encoding="ascii")
         backend.destroy(SandboxHandle(name, "hyperv", ""))
         [script] = host.scripts
-        self.assertIn(ps_quote(str(child_disk_path(BASE, name))), script)
-        self.assertIn(ps_quote(str(seed_disk_path(BASE, name))), script)
+        self.assertIn(ps_quote(str(child_disk_path(BASE, name, backend.disks_dir))), script)
+        self.assertIn(ps_quote(str(seed_disk_path(BASE, name, backend.disks_dir))), script)
         self.assertNotIn(ps_quote(BASE), script)
         self.assertFalse(staging.exists())
         self.assertFalse(known.exists())
@@ -636,7 +664,9 @@ class HostKeyTest(unittest.TestCase):
         with self.assertRaises(SandboxError):
             seed_disk_path(BASE, "base")
         self.assertEqual(seed_disk_path(BASE, "szsandbox-1-s000-aaaaaa"),
-                         Path("/srv/sandbox/szsandbox-1-s000-aaaaaa-seed.vhdx"))
+                         Path("/srv/sandbox/szsandbox-1-s000-aaaaaa-seed.iso"))
+        self.assertEqual(seed_disk_path(BASE, "szsandbox-1-s000-aaaaaa", "/srv/disks"),
+                         Path("/srv/disks/szsandbox-1-s000-aaaaaa-seed.iso"))
 
 
 class SeedDiskTest(unittest.TestCase):
@@ -645,21 +675,32 @@ class SeedDiskTest(unittest.TestCase):
     def script(self) -> str:
         return seed_disk_script(seed_disk_path(BASE, self.NAME), Path("/srv/sandbox/staging") / self.NAME)
 
-    def test_the_seed_is_a_small_fat32_disk_labelled_cidata_with_the_three_files(self):
+    def test_the_seed_is_an_iso_labelled_cidata_built_from_the_seed_folder(self):
         script = self.script()
         seed = str(seed_disk_path(BASE, self.NAME))
-        for text in (f"New-VHD -Path {ps_quote(seed)} -SizeBytes 64MB -Dynamic -BlockSizeBytes 1MB", "Mount-VHD",
-                     "Initialize-Disk", "-PartitionStyle MBR", "-UseMaximumSize -AssignDriveLetter",
-                     "-FileSystem FAT32 -NewFileSystemLabel 'CIDATA'", "Dismount-VHD", "} finally {"):
+        self.assertEqual(seed, f"/srv/sandbox/{self.NAME}-seed.iso")
+        for text in ("New-Object -ComObject IMAPI2FS.MsftFileSystemImage", "$image.FileSystemsToCreate = 3",
+                     "$image.VolumeName = 'cidata'", "[SzIsoWriter]::Write($result.ImageStream, "
+                     f"{ps_quote(seed)})", "$result = $image.CreateResultImage()", "Add-Type -TypeDefinition @'"):
             self.assertIn(text, script)
-        for file in ("meta-data", "network-config", "user-data"):
-            self.assertIn(f"Copy-Item -LiteralPath {ps_quote('/srv/sandbox/staging/' + self.NAME + '/' + file)}",
-                          script)
-        self.assertIn('-f $letter)', script)
-        self.assertLess(script.index("Copy-Item"), script.index("Dismount-VHD"), "copied before it is dismounted")
+        # The seed folder (not the staging folder) goes onto the image, so the host key file never does
+        self.assertIn(f"$image.Root.AddTree({ps_quote('/srv/sandbox/staging/' + self.NAME + '/seed')}, $false)", script)
+        self.assertLess(script.index("AddTree("), script.index("CreateResultImage"), "added before the image is made")
+        self.assertLess(script.index("CreateResultImage"), script.index("[SzIsoWriter]::Write"))
         self.assertIn("already there", script, "an existing seed is never written over")
         self.assertNotIn(BASE, script)
-        self.assertTrue(script.isascii(), "Windows PowerShell 5.1 reads this as ASCII")
+        for gone in ("New-VHD", "Mount-VHD", "Initialize-Disk", "FAT32", "Copy-Item", "Format-Volume"):
+            self.assertNotIn(gone, script)
+
+    def test_the_seed_script_is_ascii_only(self):
+        for seed, staging in ((seed_disk_path(BASE, self.NAME), "/srv/sandbox/staging"),
+                              (seed_disk_path("C:\\SubZeroAI\\sandbox\\base.vhdx", self.NAME, "C:\\disks"),
+                               "C:\\SubZeroAI\\staging")):
+            script = seed_disk_script(seed, Path(staging) / self.NAME)
+            bad = [ch for ch in script if ord(ch) > 127]
+            self.assertEqual(bad, [], "Windows PowerShell 5.1 reads a script as ASCII unless it is told otherwise")
+            self.assertTrue(script.isascii())
+        self.assertTrue(sandbox.ISO_WRITER_SOURCE.isascii())
 
     def test_the_seed_script_is_never_given_a_path_that_climbs_out(self):
         with self.assertRaises(SandboxError):
@@ -733,8 +774,8 @@ class SeedDiskTest(unittest.TestCase):
 
 
 class SeedFileHost(FakeHost):
-    """A FakeHost that also keeps the files the real steps leave on disk. The seed disk is a file made as a copy of the
-    staged files (as the seed script copies them), and it is deleted when it is released or the VM is destroyed. Every
+    """A FakeHost that also keeps the files the real steps leave on disk. The seed is an ISO file made from the staged
+    seed folder (as the IMAPI2 script writes it), and it is deleted when it is released or the VM is destroyed. Every
     PowerShell call, SSH call and key or icacls command is a numbered step, so one can be made to fail (fail_at)."""
 
     def __init__(self, fail_at: int | None = None, **kwargs):
@@ -761,16 +802,17 @@ class SeedFileHost(FakeHost):
 
     def powershell(self, script: str) -> str:
         self._step()
-        made = re.search(r"New-VHD -Path '([^']+)' -SizeBytes", script)
+        made = re.search(r"\[SzIsoWriter\]::Write\(\$result\.ImageStream, '([^']+)'\)", script)
         if made:
             seed = Path(made.group(1))
-            staged = self.root / "staging" / seed.name[: -len("-seed.vhdx")]
+            seed.parent.mkdir(parents=True, exist_ok=True)  # the disks folder (the real script does not make it)
+            staged = self.root / "staging" / seed.name[: -len("-seed.iso")] / sandbox.SEED_DIR
             seed.write_bytes(b"".join((staged / name).read_bytes() for name in sandbox.SEED_FILES))
-        if "Remove-VMHardDiskDrive" in script:
+        if "Remove-VMDvdDrive" in script:
             for path in re.findall(r"\$_\.Path -eq '([^']+)'", script):
                 Path(path).unlink(missing_ok=True)
         if "Remove-VM -Name" in script:
-            for path in re.findall(r"'([^']+\.vhdx)'", script):
+            for path in re.findall(r"'([^']+\.(?:vhdx|iso))'", script):
                 Path(path).unlink(missing_ok=True)
         return super().powershell(script)
 
@@ -834,7 +876,7 @@ class SeedLeftOnDiskTest(unittest.TestCase):
         with mock.patch.object(sandbox, "shred_file", side_effect=spy):
             self.make(host).create(7)
         self.assertEqual([name for _, name in wiped], [sandbox.HOST_KEY_FILE, "user-data"])
-        detached = host.index("ps", "Remove-VMHardDiskDrive")
+        detached = host.index("ps", "Remove-VMDvdDrive")
         self.assertTrue(all(position > detached for position, _ in wiped), "only after the seed is detached")
 
     def test_destroy_overwrites_the_staged_key_before_it_deletes_it(self):
@@ -859,7 +901,7 @@ class SeedLeftOnDiskTest(unittest.TestCase):
     def test_the_seed_disk_is_overwritten_with_zeros_before_it_is_deleted(self):
         name = "szsandbox-7-s000-abcdef"
         script = sandbox.release_seed_script(name, seed_disk_path(BASE, name))
-        self.assertLess(script.index("Remove-VMHardDiskDrive"), script.index("[System.IO.File]::OpenWrite("))
+        self.assertLess(script.index("Remove-VMDvdDrive"), script.index("[System.IO.File]::OpenWrite("))
         self.assertLess(script.index("[System.IO.File]::OpenWrite("), script.index("Remove-Item -LiteralPath"))
         self.assertIn("New-Object byte[] 1048576", script)
         self.assertIn("$stream.Dispose()", script)
@@ -1258,7 +1300,7 @@ class SandboxSettingsTest(unittest.TestCase):
         fresh = Settings()
         self.assertEqual(fresh.code_sandbox, "off")
         self.assertEqual((fresh.sandbox_ttl_hours, fresh.sandbox_max_sessions), (48, 3))
-        self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (2048, 2, 10))
+        self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (2048, 2, 31))
         self.assertEqual((fresh.sandbox_min_free_gb, fresh.sandbox_switch), (20, "szsandbox-internal"))
         self.assertEqual(fresh.sandbox_proxy_port, 3128)
         self.assertFalse(fresh.sandbox_guest_sudo, "no sudo in the sandbox unless an admin turns it on")
@@ -1460,6 +1502,15 @@ class ReaperTest(unittest.TestCase):
             self.manager.create_for_session(self.make_session(), actor_id=self.owner)
         self.assertIn("All 2 sandboxes are in use", str(caught.exception))
         self.assertEqual(len(self.records()), 2, "the refused sandbox is not recorded")
+
+    def test_a_failed_record_does_not_count_as_alive(self):
+        store = self.manager.store
+        store.insert(self.make_session(), "fake", state="failed", created_at="2026-01-01T00:00:00+00:00",
+                     expires_at="2026-01-03T00:00:00+00:00")
+        self.assertEqual(store.alive_count(), 0, "a failed sandbox takes no slot")
+        store.insert(self.make_session(), "fake", state="running", created_at="2026-01-01T00:00:00+00:00",
+                     expires_at="2026-01-03T00:00:00+00:00")
+        self.assertEqual(store.alive_count(), 1, "only the running one counts")
 
     def test_a_sandbox_is_refused_when_the_disk_is_low(self):
         self.services.settings.sandbox_min_free_gb = 20

@@ -1273,7 +1273,9 @@ def build_system_prompt(*, student: bool, sandboxed: bool, free_rein: bool, comm
                  "reaches package and code sites on an allow-list (Maven, Gradle, PyPI, npm and GitHub, for "
                  "example). Every other website is out of reach, so don't plan on downloading from anywhere else.")
         install = ("You can install packages with pip, npm or Gradle when the task needs them. They download through "
-                   "the proxy, so only the allow-listed sites work.")
+                   "the proxy, so only the allow-listed sites work. The sandbox may not have Java installed: if a Gradle "
+                   "build needs it, download a Temurin JDK 17 .tar.gz from github.com/adoptium (its releases page) "
+                   "with curl, unpack it with tar in your home folder, and set JAVA_HOME and PATH for the build.")
     else:
         place = "You're in a copy of the team's repository on the team's computer."
         install = ("The computer may be Windows, where the Gradle wrapper is gradlew.bat (asking for gradlew works "

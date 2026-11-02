@@ -142,7 +142,8 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("sandbox_cpus", "Processors for each sandbox", "int",
               "Applies to sandboxes made after the change.", 1, 8),
         Field("sandbox_disk_gb", "Disk space each sandbox can use, in GB", "int",
-              "The base disk must be this small or smaller.", 5, 100),
+              "The base disk must be this small or smaller (the standard base disk is 30 GB). A sandbox's own disk grows "
+              "only as it is used, and can't be capped below the base disk's size.", 5, 100),
         Field("sandbox_min_free_gb", "Keep this much disk free, in GB", "int",
               "No new sandbox is made while the disk holding the base image has less free space than this.", 1, 500),
         Field("sandbox_base_image", "Base disk for sandboxes", "path",
