@@ -7,6 +7,7 @@ Every change goes in the audit log with the old and new value.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
@@ -18,6 +19,7 @@ from typing import Any
 from .ai_backend import resolve_backend
 from .config import MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
 from .db import Database, utcnow
+from .egress_proxy import parse_hosts, parse_ports
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
 from .model_check import requirement_problem
 
@@ -152,7 +154,22 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               error="Use letters, numbers, spaces, dots, dashes and underscores, up to 63 characters."),
         Field("sandbox_proxy_port", "Host port sandboxes may reach", "int",
               "The one port on this PC that a sandbox may reach over the internal switch, for the egress proxy. "
-              "The sandbox network setup script and the check both use it.", 1, 65535),
+              "The sandbox network setup script and the check both use it. Applies after a restart.", 1, 65535),
+        Field("sandbox_host_address", "This PC's address on the sandbox switch", "address",
+              "The proxy listens only on this address. It is 10.77.0.1 unless the sandbox network was set up "
+              "differently. Applies after a restart.",
+              error="Use the PC's private IPv4 address on the sandbox switch, like 10.77.0.1."),
+        Field("sandbox_allowed_hosts", "Websites a sandbox may reach", "hosts",
+              "Names separated by commas, like pypi.org or *.example.com (any name under example.com). Sandboxes "
+              "reach only these, and only over secure connections. Leave empty to allow none. Applies to the next "
+              "connection.", optional=True),
+        Field("sandbox_allowed_ports", "Ports a sandbox may use through the proxy", "ports",
+              "Usually just 443, the secure web port. Applies to the next connection."),
+        Field("sandbox_proxy_mb_limit", "Data a sandbox may move through the proxy, in MB", "int",
+              "Counted over the sandbox's whole life, in both directions. A sandbox that goes over is cut off.",
+              64, 102400),
+        Field("sandbox_proxy_max_per_sandbox", "Connections one sandbox may hold open at once", "int",
+              "Each download or web request uses one connection.", 1, 64),
         Field("sandbox_guest_sudo", "Let the sandbox's user use sudo (root inside the sandbox)", "bool",
               "Off by default. When on, a student's commands in a sandbox can run as root, but only inside that "
               "disposable virtual computer. It does not reach the mini PC. Applies to sandboxes made after the "
@@ -245,6 +262,15 @@ def check_path(raw: str) -> bool:
     if len(raw) > 260 or any(ord(ch) < 32 or ch in "\"`$;'" for ch in raw):
         return False
     return PureWindowsPath(raw).is_absolute() or PurePosixPath(raw).is_absolute()
+
+
+def _private_ipv4(raw: str) -> bool:
+    """A private IPv4 address, such as the sandbox switch's. Never 0.0.0.0, which would listen on every network."""
+    try:
+        address = ipaddress.IPv4Address(raw)
+    except ValueError:
+        return False
+    return address.is_private and not address.is_unspecified
 
 
 def check_providers(raw: str) -> tuple[tuple[str, ...], str]:
@@ -349,6 +375,21 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 errors[f.name] = f.error
             else:
                 values[f.name] = raw
+        elif f.kind == "address":
+            if not _private_ipv4(raw):
+                errors[f.name] = f.error
+            else:
+                values[f.name] = raw
+        elif f.kind == "hosts":
+            try:
+                values[f.name] = ", ".join(parse_hosts(raw))
+            except ValueError as exc:
+                errors[f.name] = str(exc)
+        elif f.kind == "ports":
+            try:
+                values[f.name] = ", ".join(str(port) for port in parse_ports(raw))
+            except ValueError as exc:
+                errors[f.name] = str(exc)
         elif f.kind == "choice":
             allowed = [value for value, _ in f.choices]
             if raw not in allowed:

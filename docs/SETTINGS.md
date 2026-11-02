@@ -74,8 +74,15 @@ See `docs/CODE_SANDBOX_PLAN.md`.
 | Keep this much disk free before a new sandbox is made, in GB | `SANDBOX_MIN_FREE_GB` |
 | Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
 | Internal network switch (the host's vNIC is 10.77.0.1/24) | `SANDBOX_SWITCH` (default `szsandbox-internal`) |
-| Host port sandboxes may reach, for the egress proxy (default 3128) | `SANDBOX_PROXY_PORT` |
+| Host port sandboxes may reach, for the egress proxy (default 3128). Restart after changing | `SANDBOX_PROXY_PORT` |
+| This PC's address on the sandbox switch, where the proxy listens (default 10.77.0.1, a private IPv4 address). Restart after changing | `SANDBOX_HOST_ADDRESS` |
+| Websites a sandbox may reach, separated by commas (`*.example.com` covers names under it; empty allows none) | `SANDBOX_ALLOWED_HOSTS` |
+| Ports a sandbox may use through the proxy (default 443) | `SANDBOX_ALLOWED_PORTS` |
+| Data a sandbox may move through the proxy over its whole life, in MB (default 2048, both directions) | `SANDBOX_PROXY_MB_LIMIT` |
+| Connections one sandbox may hold open through the proxy at once (default 16) | `SANDBOX_PROXY_MAX_PER_SANDBOX` |
 | Let the sandbox's user use sudo, root inside the sandbox only (off by default) | `SANDBOX_GUEST_SUDO` |
+
+**Internet access for sandboxes.** A sandbox can't reach the internet directly. Its commands reach it only through the egress proxy on the mini PC (`subzero_ai/egress_proxy.py`), which runs when `CODE_SANDBOX` is `hyperv`. The proxy opens only secure connections (port 443 by default) to the names in `SANDBOX_ALLOWED_HOSTS`. It refuses IP addresses, names that point at this PC or a private network, and every request that isn't a secure connection. Each sandbox has its own login, which is cut off when the sandbox is deleted, and the login is never written to the log, the audit log or a command's output. Refused websites are written to the audit log (`sandbox_proxy_blocked`), at most once a minute for each sandbox and name. Changing the websites, ports or limits applies to the next connection. If the proxy can't start (for example, the host address isn't on this PC), no sandbox is made, and the Settings overview says why.
 
 **One-time administrator step.** Before the first Hyper-V sandbox, an administrator runs the sandbox network setup
 script once, in an administrator PowerShell on the mini PC, from the SubZero AI folder:
@@ -212,7 +219,12 @@ Use the newest dated release folder under https://cloud-images.ubuntu.com/noble/
 disk, because the Ubuntu disk image is 30 GB while it is converted. It downloads the image, checks its SHA-256 against
 that release's `SHA256SUMS`, converts it to a read-only dynamic disk at
 `C:\ProgramData\SubZeroAI\sandbox\images\sandbox-base.vhdx`, and changes its boot menu so cloud-init reads the sandbox's
-seed (`ci.ds=NoCloud`). It prints the path and the SHA-256. Set `SANDBOX_BASE_IMAGE` to that path. Build never overwrites
+seed (`ci.ds=NoCloud`). The new boot menu keeps the image's own `search.fs_uuid` line, which points GRUB at the boot
+partition. The root is the largest Linux partition on the disk, and its PARTUUID is read from Windows (on a GPT disk the
+PARTUUID is the partition's GUID). The kernel and the initrd are not named: GRUB takes the last `vmlinuz-*` and
+`initrd.img-*` on the boot partition when the sandbox starts. That is the last name in alphabetical order, so it is the
+newest kernel only while the version numbers have the same length; check the boot menu after each new release. Build
+prints the path and the SHA-256. Set `SANDBOX_BASE_IMAGE` to that path. Build never overwrites
 an existing base disk; if one must be replaced, run `-Action Remove` first, only when no sandbox uses it.
 
 `-Action Check` changes nothing and reports whether the disk is present, read-only and dynamic. `-Action Remove`

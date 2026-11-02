@@ -5,10 +5,12 @@ no PowerShell, no SSH and no Hyper-V are ever started."""
 from __future__ import annotations
 
 import atexit
+import base64
 import io
 import os
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -21,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import urlsplit
 
 from subzero_ai import code_runner, saved_settings, sandbox
 from subzero_ai.code_runner import SANDBOX_ENV
@@ -46,7 +49,6 @@ from subzero_ai.sandbox import (
     child_disk_path,
     block_rule_specs,
     describe_network_problem,
-    attach_seed_script,
     check_path,
     check_vm_vlan,
     guest_address,
@@ -58,15 +60,12 @@ from subzero_ai.sandbox import (
     known_hosts_line,
     lf_text,
     mac_for_slot,
-    make_backend,
-    backend_fingerprint,
     meta_data,
     network_config,
     pack_tree,
     parse_host_network_check,
     ps_quote,
     reap_sandboxes,
-    release_seed_script,
     seed_disk_path,
     seed_disk_script,
     shred_file,
@@ -91,6 +90,13 @@ KEYS_ROOT = Path(tempfile.mkdtemp(prefix="sandbox-keys-test-"))
 atexit.register(shutil.rmtree, KEYS_ROOT, True)
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEKEYFORTESTSONLY"
 PRIVATE_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEKEYFORTESTSONLY\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+def free_port() -> int:
+    """A TCP port on 127.0.0.1 that nothing is listening on right now."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 # --------------------------------------------------------------------------- the fake sandbox
@@ -696,13 +702,13 @@ class SeedDiskTest(unittest.TestCase):
     def test_sudo_is_off_by_default_and_gives_the_rule_only_when_on(self):
         off = user_data(f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY, guest_sudo=False)
         on = user_data(f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY, guest_sudo=True)
-        self.assertIn("    sudo: false\n", off)
+        self.assertNotIn("sudo", off)
         self.assertNotIn("NOPASSWD", off)
         self.assertIn("    sudo: ALL=(ALL) NOPASSWD:ALL\n", on)
 
     def test_user_data_refuses_a_bad_client_key_host_key_or_private_key(self):
         cases = [
-            (f"ssh-rsa AAAA c", f"{HOST_KEY} h", PRIVATE_KEY),
+            ("ssh-rsa AAAA c", f"{HOST_KEY} h", PRIVATE_KEY),
             (f"{HOST_KEY} c", "ssh-rsa AAAA h", PRIVATE_KEY),
             (f"{HOST_KEY} c", f"{HOST_KEY} h", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n"),
             (f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY.replace("FAKEKEY", "\u00e9KEY")),
@@ -784,7 +790,7 @@ class GuestSudoSettingTest(unittest.TestCase):
         host = FakeHost()
         hyperv(host).create(7)
         user = host.seed_files["user-data"].decode("ascii")
-        self.assertIn("sudo: false", user)
+        self.assertNotIn("sudo", user)
         self.assertNotIn("NOPASSWD", user)
 
     def test_the_backend_reads_the_setting_and_is_rebuilt_when_it_changes(self):
@@ -1375,6 +1381,23 @@ class SandboxCodeSessionTest(unittest.TestCase):
         for action in ("sandbox_created", "sandbox_destroyed", "code_step_approved"):
             self.assertIn(action, self.actions())
 
+    def test_a_command_that_prints_its_proxy_login_shows_it_hidden(self):
+        sid = self.begin()
+        [write] = self.pending(sid)
+        self.act(write["id"], "approve")
+        box = self.live(sid)
+        gradlew = self.root / box["name"] / "work" / "gradlew"
+        gradlew.write_text('#!/bin/sh\necho "proxy is $HTTPS_PROXY"\necho "java is $JAVA_TOOL_OPTIONS"\n')
+        handle = self.manager.handle_of(box)
+        token = urlsplit(self.manager.command_env(handle)["HTTPS_PROXY"]).password
+        [run] = self.pending(sid)
+        self.act(run["id"], "approve")
+        ran = self.code.db.one("SELECT * FROM code_steps WHERE id = ?", (run["id"],))
+        self.assertIn("proxy is http://", ran["output"])
+        self.assertIn("[hidden]", ran["output"])
+        self.assertNotIn(token, ran["output"])
+        self.assertNotIn(token, self.kim.get(f"/code/{sid}/changes.patch").text)
+
     def test_a_command_that_changes_other_files_is_reported_not_put_in_the_patch(self):
         sid = self.begin()
         [write] = self.pending(sid)
@@ -1649,8 +1672,9 @@ class HyperVNetworkGuardTest(unittest.TestCase):
 
 class SandboxNetworkManagerTest(unittest.TestCase):
     def setUp(self):
+        # The app starts the egress proxy for Hyper-V sandboxes; here it listens on this computer, on a free port
         self.h = Harness(code_sandbox="hyperv", sandbox_base_image=BASE, sandbox_min_free_gb=0,
-                         sandbox_max_sessions=5)
+                         sandbox_max_sessions=5, sandbox_host_address="127.0.0.1", sandbox_proxy_port=free_port())
         self.services = self.h.services
         self.db = self.services.db
         self.manager = self.services.sandboxes
@@ -1683,6 +1707,148 @@ class SandboxNetworkManagerTest(unittest.TestCase):
         self.assertEqual(handle.backend, "hyperv")
         self.assertEqual(host.network_checks, 1)
         self.assertTrue(host.sent("Start-VM"))
+        self.assertIn("HTTPS_PROXY", self.manager.command_env(handle), "the sandbox's commands get the proxy login")
+
+
+class SandboxProxyWiringTest(unittest.TestCase):
+    """Each sandbox gets a proxy login when it is made, and it is revoked when the sandbox is deleted or reaped. The
+    commands' environment carries the login and the proxy settings, and the sandbox refuses to start without a
+    running proxy. The fake sandbox is used here; the Hyper-V checks above cover the VM side."""
+
+    def setUp(self):
+        self.h = Harness(code_sandbox="fake", sandbox_min_free_gb=0, sandbox_max_sessions=5)
+        self.services = self.h.services
+        self.db = self.services.db
+        self.manager = self.services.sandboxes
+        self.owner = self.h.login(MENTOR).user["id"]
+
+    def tearDown(self):
+        self.h.close()
+
+    def make_session(self) -> int:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.db.transaction() as conn:
+            return conn.execute("INSERT INTO code_sessions (title, task, status, model, repo, created_by, created_at, "
+                                "updated_at) VALUES ('t', 't', 'running', 'anthropic/x', 'team/robot', ?, ?, ?)",
+                                (self.owner, now, now)).lastrowid
+
+    def make_sandbox(self):
+        return self.manager.create_for_session(self.make_session(), actor_id=self.owner)
+
+    @staticmethod
+    def token_of(env: dict) -> str:
+        return urlsplit(env["HTTPS_PROXY"]).password
+
+    def session_of(self, name: str) -> int:
+        row = self.db.one("SELECT code_session_id FROM sandbox_sessions WHERE name = ?", (name,))
+        return int(row["code_session_id"])
+
+    def test_a_token_is_issued_when_the_sandbox_is_made_and_expires_with_it(self):
+        handle = self.make_sandbox()
+        env = self.manager.command_env(handle)
+        url = urlsplit(env["HTTPS_PROXY"])
+        self.assertEqual(url.scheme, "http")
+        self.assertEqual(url.username, handle.name)
+        self.assertEqual((url.hostname, url.port), ("10.77.0.1", 3128))
+        self.assertTrue(self.manager.tokens.verify(handle.name, self.token_of(env)))
+        expires = self.manager.tokens._entries[handle.name].expires
+        self.assertEqual(expires, datetime.fromisoformat(handle.expires_at))
+
+    def test_the_token_is_revoked_when_the_sandbox_is_destroyed(self):
+        handle = self.make_sandbox()
+        token = self.token_of(self.manager.command_env(handle))
+        self.manager.destroy_for_session(self.session_of(handle.name), reason="test")
+        self.assertFalse(self.manager.tokens.verify(handle.name, token))
+        with self.assertRaises(SandboxError):
+            self.manager.command_env(handle)  # a destroyed sandbox gets no new login either
+
+    def test_the_token_is_revoked_when_the_sandbox_is_reaped(self):
+        handle = self.make_sandbox()
+        token = self.token_of(self.manager.command_env(handle))
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
+        self.db.execute("UPDATE sandbox_sessions SET expires_at = ? WHERE name = ?", (past, handle.name))
+        report = reap_sandboxes(self.services)
+        self.assertEqual(report["expired"], 1)
+        self.assertFalse(self.manager.tokens.verify(handle.name, token))
+
+    def test_the_proxy_is_told_to_cut_off_the_sandbox_when_it_is_destroyed(self):
+        handle = self.make_sandbox()
+        proxy = mock.Mock()
+        self.manager.egress = proxy
+        self.manager.destroy_for_session(self.session_of(handle.name), reason="test")
+        proxy.close_sandbox.assert_called_once_with(handle.name)
+
+    def test_the_command_environment_has_the_proxy_settings_and_the_login(self):
+        handle = self.make_sandbox()
+        env = self.manager.command_env(handle)
+        token = self.token_of(env)
+        self.assertEqual(env["NO_PROXY"], "")
+        self.assertEqual(env["no_proxy"], "")
+        self.assertEqual(env["https_proxy"], env["HTTPS_PROXY"])
+        java = env["JAVA_TOOL_OPTIONS"]
+        for option in ("-Dhttps.proxyHost=10.77.0.1", "-Dhttps.proxyPort=3128", f"-Dhttps.proxyUser={handle.name}",
+                       f"-Dhttps.proxyPassword={token}", "-Djdk.http.auth.tunneling.disabledSchemes="):
+            self.assertIn(option, java)
+        self.assertTrue(env["GRADLE_OPTS"].startswith("-Dorg.gradle.daemon=false "))
+        self.assertIn(f"-Dhttps.proxyPassword={token}", env["GRADLE_OPTS"])
+        self.assertEqual(set(env), {"HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "JAVA_TOOL_OPTIONS",
+                                    "GRADLE_OPTS"})
+
+    def test_a_restarted_app_gives_a_running_sandbox_a_new_login(self):
+        handle = self.make_sandbox()
+        old = self.token_of(self.manager.command_env(handle))
+        with self.manager._token_lock:
+            self.manager._secrets.clear()  # what a restart leaves behind
+        new = self.token_of(self.manager.command_env(handle))
+        self.assertNotEqual(old, new)
+        self.assertTrue(self.manager.tokens.verify(handle.name, new))
+        self.assertFalse(self.manager.tokens.verify(handle.name, old))
+
+    def test_a_token_is_redacted_from_output_in_both_forms(self):
+        handle = self.make_sandbox()
+        token = self.token_of(self.manager.command_env(handle))
+        basic = base64.b64encode(f"{handle.name}:{token}".encode()).decode()
+        text = f"proxy http://{handle.name}:{token}@10.77.0.1:3128 and Proxy-Authorization: Basic {basic} ok"
+        redacted = self.manager.redact(text)
+        self.assertNotIn(token, redacted)
+        self.assertNotIn(basic, redacted)
+        self.assertEqual(redacted.count("[hidden]"), 2)
+        self.assertEqual(self.manager.redact("nothing to see"), "nothing to see")
+
+    def test_a_token_stays_redacted_after_its_sandbox_is_deleted(self):
+        handle = self.make_sandbox()
+        token = self.token_of(self.manager.command_env(handle))
+        self.manager.destroy_for_session(self.session_of(handle.name), reason="test")
+        self.assertNotIn(token, self.manager.redact(f"late output {token}"))
+
+    def test_a_sandbox_is_refused_while_the_proxy_is_not_running(self):
+        self.manager.egress = SimpleNamespace(running=False, error="The sandbox proxy couldn't start on 10.0.0.9:3128.",
+                                              address=("10.0.0.9", 3128))
+        self.services.settings.code_sandbox = "hyperv"
+        self.services.settings.sandbox_base_image = BASE
+        try:
+            with self.assertRaises(SandboxRefused) as caught:
+                self.manager.check_capacity()
+        finally:
+            self.services.settings.code_sandbox = "fake"
+        self.assertIn("internet proxy isn't running", str(caught.exception))
+        self.assertIn("couldn't start", str(caught.exception))
+        self.assertEqual(self.db.all("SELECT * FROM sandbox_sessions"), [])
+
+    def test_the_settings_check_reports_the_proxy(self):
+        from subzero_ai import checks
+
+        rows: list = []
+
+        def add(status, title, detail=""):
+            rows.append((status, title, detail))
+
+        checks._check_egress(SimpleNamespace(running=True, host="10.77.0.1", port=3128, error=""), add)
+        checks._check_egress(SimpleNamespace(running=False, host="10.77.0.1", port=3128,
+                                             error="The sandbox proxy couldn't start on 10.77.0.1:3128."), add)
+        self.assertEqual([row[0] for row in rows], ["OK", "FAIL"])
+        self.assertIn("10.77.0.1:3128", rows[0][2])
+        self.assertIn("couldn't start", rows[1][2])
 
 
 # --------------------------------------------------------------------------- the administrator's setup script
@@ -1831,3 +1997,33 @@ class GuestIpv6OffTest(unittest.TestCase):
         self.assertIn("net.ipv6.conf.all.disable_ipv6=1", text)
         self.assertIn("/etc/sysctl.d/99-sandbox-no-ipv6.conf", text)
         self.assertIn("      net.ipv6.conf.default.disable_ipv6 = 1\n", text)
+
+
+class ServiceAccountSidTest(unittest.TestCase):
+    def test_whoami_output_becomes_an_icacls_sid(self):
+        out = '"nt service\\subzeroai","S-1-5-80-1190272612-2407866725-3431068723-3645942219-985261283"\r\n'
+        self.assertEqual(sandbox.parse_whoami_sid(out),
+                         "*S-1-5-80-1190272612-2407866725-3431068723-3645942219-985261283")
+        self.assertEqual(sandbox.parse_whoami_sid("garbage"), "")
+        argv = sandbox.icacls_argv(Path("C:/x/key"), sandbox.parse_whoami_sid(out))
+        self.assertTrue(argv[-1].startswith("*S-1-5-80-") and argv[-1].endswith(":F"))
+
+    def test_the_sid_is_used_when_no_account_is_given(self):
+        host = FakeHost()
+        locked: list[list[str]] = []
+        backend = hyperv(host, account="", run_icacls=locked.append, run_whoami=lambda: "*S-1-5-80-1")
+        backend._run_keygen(host.root / "keys" / "k", "c")
+        self.assertEqual(locked[-1][-1], "*S-1-5-80-1:F")
+        self.assertEqual(backend.account, "*S-1-5-80-1")
+
+    def test_no_account_and_no_sid_refuses_instead_of_guessing(self):
+        host = FakeHost()
+        backend = hyperv(host, account="", run_whoami=lambda: "")
+        with self.assertRaises(SandboxRefused):
+            backend._run_keygen(host.root / "keys" / "k", "c")
+
+
+class GuestAzureAgentOffTest(unittest.TestCase):
+    def test_user_data_masks_the_azure_agent(self):
+        text = user_data(f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY, guest_sudo=False)
+        self.assertIn("systemctl mask walinuxagent.service", text)

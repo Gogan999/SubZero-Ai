@@ -330,3 +330,13 @@ class PowerShellParsePitfallTest(unittest.TestCase):
                 if pattern.search(line):
                     bad.append(f"{path.name}:{number}: {line.strip()}")
         self.assertEqual(bad, [], "write ${name}: instead of $name: inside strings")
+
+
+class BaseDiskAccessTest(unittest.TestCase):
+    def test_build_limits_who_can_change_the_base_disk(self):
+        text = (Path(__file__).resolve().parent.parent / "packaging" / "windows" / "scripts"
+                / "sandbox-image.ps1").read_text(encoding="ascii")
+        self.assertIn("/inheritance:r /grant:r", text)
+        self.assertIn("*S-1-5-18:F", text)
+        self.assertIn("*S-1-5-32-544:F", text)
+        self.assertIn("${ServiceAccount}:(R)", text)

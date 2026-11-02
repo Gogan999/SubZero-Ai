@@ -601,7 +601,7 @@ async def _run_checks(s: Services, actor_id: int, actor_name: str) -> None:
     """The background job behind Run checks. Saves the results for the Settings page; always clears the mark."""
     from .checks import run_checks
     try:
-        results = await run_checks(s.settings, slack=s.slack, claude=s.claude)
+        results = await run_checks(s.settings, slack=s.slack, claude=s.claude, egress=s.egress)
         s.db.set_kv("settings_checks", json.dumps({
             "at": utcnow(), "by": actor_name,
             "results": [{"status": r.status, "title": r.title, "detail": r.detail} for r in results]}))

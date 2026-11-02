@@ -44,9 +44,8 @@ from .connectors import ConnectorError, GitHub
 from .db import Database, utcnow
 from .live import Tasks
 from .sandbox import (
-    COPY_SKIP, GUEST_HOME, GUEST_PATH, MAX_OUTPUT_CHARS, MAX_SESSION_BYTES, ExitResult, OutputTail, SandboxError,
-    SandboxHandle,
-    SandboxManager, changed_in_archive, kill_process_tree, pack_tree, read_output,
+    COPY_SKIP, GUEST_GRADLE_OPTS, GUEST_HOME, GUEST_PATH, MAX_OUTPUT_CHARS, MAX_SESSION_BYTES, ExitResult, OutputTail,
+    SandboxError, SandboxHandle, SandboxManager, changed_in_archive, kill_process_tree, pack_tree, read_output,
 )
 from .store import Viewer
 
@@ -70,7 +69,7 @@ REAP_SECONDS = 5  # after a command exits, how long its output may stay open (a 
 SKIP_DIRS = {".git", ".gradle", "build", "bin", "node_modules", "__pycache__", ".idea", ".vscode"}
 FINISHED = ("done", "stopped", "failed")  # a session in one of these states has no more commands to run
 # What a command in a sandbox gets: a fixed, Linux-style environment (the host's Windows variables don't apply)
-SANDBOX_ENV = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, "LANG": "C.UTF-8", "GRADLE_OPTS": "-Dorg.gradle.daemon=false"}
+SANDBOX_ENV = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, "LANG": "C.UTF-8", "GRADLE_OPTS": GUEST_GRADLE_OPTS}
 # Only what a build needs from the app's environment. API keys, tokens and the rest stay out.
 SAFE_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME",
             "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
@@ -765,7 +764,7 @@ class CodeRunner:
         try:
             return self._run_tool(workspace, tool, args, session_id)
         except SandboxError as exc:
-            raise ToolProblem(str(exc)) from exc
+            raise ToolProblem(self.sandboxes.redact(str(exc)) if self.sandboxes is not None else str(exc)) from exc
 
     def _run_tool(self, workspace: Workspace, tool: str, args: dict, session_id: int | None) -> str:
         sandboxed = self.sandboxed and session_id is not None
@@ -829,10 +828,12 @@ class CodeRunner:
         workspace.check_room()
         handle = self._sandbox_for(session_id, workspace)
         backend = self.sandboxes.backend(handle.backend)
+        env = {**SANDBOX_ENV, **self.sandboxes.command_env(handle)}  # includes the proxy login: never shown as is
         with command_slot():
-            result: ExitResult = backend.run(handle, [f"./{name}", *rest], cwd="work", env=SANDBOX_ENV,
+            result: ExitResult = backend.run(handle, [f"./{name}", *rest], cwd="work", env=env,
                                              timeout=self.settings.code_command_timeout)
-        return command_report(result.output, result.exit_code, stopped=result.stopped, timed_out=result.timed_out,
+        output = self.sandboxes.redact(result.output)
+        return command_report(output, result.exit_code, stopped=result.stopped, timed_out=result.timed_out,
                               timeout=self.settings.code_command_timeout)
 
     def _drop_sandbox(self, session_id: int, why: str) -> None:

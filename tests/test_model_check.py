@@ -8,7 +8,6 @@ import contextlib
 import io
 import json
 import shutil
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path

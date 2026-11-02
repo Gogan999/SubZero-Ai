@@ -226,6 +226,12 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
             Set-EspBootMenu $Parent
             Write-Step "Making the base disk read-only"
             Set-ItemProperty -LiteralPath $Parent -Name IsReadOnly -Value $true
+            Write-Step "Limiting who can change the base disk"
+            # Only SYSTEM and Administrators may change it. Hyper-V adds each VM's own read permission when it uses it
+            icacls $Parent /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "icacls couldn't limit access to the base disk (exit code $LASTEXITCODE)." }
+            # The app's service only reads the disk (Get-VHD); a missing service account is not an error here
+            icacls $Parent /grant "${ServiceAccount}:(R)" 2>&1 | Out-Null
         } catch {
             Remove-PartialParent $Parent
             throw

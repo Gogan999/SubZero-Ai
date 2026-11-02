@@ -38,14 +38,16 @@ import subprocess
 import threading
 import time
 import zipfile
+from collections import deque
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from .config import Settings
 from .db import Database, utcnow
+from .egress_proxy import EgressProxy, TokenStore
 
 log = logging.getLogger("subzero.sandbox")
 
@@ -60,6 +62,9 @@ GUEST_ADDRESS = "10.77.0.{}"
 GUEST_FIRST_SLOT_HOST = 10  # 10.77.0.10 is the first guest address; .1 is the host's
 HOST_ADDRESS = "10.77.0.1"  # the host's vNIC on the internal switch
 GUEST_SUBNET = "10.77.0.0/24"
+GUEST_GRADLE_OPTS = "-Dorg.gradle.daemon=false"  # a sandbox's Gradle runs without its daemon
+REDACTED = "[hidden]"  # what a proxy token becomes in output that goes back to Claude or a mentor
+RECENT_TOKENS = 64  # tokens kept (in memory) so output of a command still running at deletion is redacted
 IPV6_ANY = "::/0"  # every IPv6 address: the sandboxes get no IPv6 path at all
 MAX_SESSION_BYTES = 800 * 1024 * 1024  # one session's two copies together, build output included; also the archive cap
 SSH = "ssh"  # the ssh program on the host (a test can point it at a fake)
@@ -98,6 +103,7 @@ class SandboxHandle:
     name: str
     backend: str
     created_at: str
+    expires_at: str = ""  # when the sandbox is due for deletion; its proxy token expires then too
 
 
 @dataclass(frozen=True)
@@ -435,6 +441,18 @@ class FakeSandbox:
         return sorted(p.name for p in self.root.iterdir() if p.is_dir() and p.name.startswith(PREFIX))
 
 
+def proxy_env(name: str, token: str, host: str, port: int) -> dict[str, str]:
+    """The environment that lets a command in a sandbox reach the internet through the egress proxy
+    (egress_proxy.py). The token is in it: never log, audit or show the result. Java and Gradle don't read
+    HTTPS_PROXY, so their proxy settings are passed as JVM options. The empty Basic-scheme override lets Java send the
+    login for the HTTPS tunnel (the JDK refuses Basic for tunnels by default)."""
+    url = f"http://{name}:{token}@{host}:{port}"
+    java = (f"-Dhttps.proxyHost={host} -Dhttps.proxyPort={port} -Dhttps.proxyUser={name} "
+            f"-Dhttps.proxyPassword={token} -Djdk.http.auth.tunneling.disabledSchemes=")
+    return {"HTTPS_PROXY": url, "https_proxy": url, "NO_PROXY": "", "no_proxy": "",
+            "JAVA_TOOL_OPTIONS": java, "GRADLE_OPTS": f"{GUEST_GRADLE_OPTS} {java}"}
+
+
 # --------------------------------------------------------------------------- Hyper-V: pure command builders
 def ps_quote(value: str) -> str:
     """A value as a PowerShell single-quoted string. Control characters are refused outright."""
@@ -710,13 +728,15 @@ def user_data(client_public: str, host_public: str, host_private: str, *, guest_
         "users:",
         f"  - name: {GUEST_USER}",
         "    lock_passwd: true",
-        "    sudo: " + ("ALL=(ALL) NOPASSWD:ALL" if guest_sudo else "false"),
+        *(["    sudo: ALL=(ALL) NOPASSWD:ALL"] if guest_sudo else []),  # no sudo line: the user gets no sudo rights
         "    ssh_authorized_keys:",
         f"      - {public_key_text(client_public)}",
         "ssh_pwauth: false",
         # IPv6 off in the guest, as early as cloud-init allows and again from sysctl.d on every later boot
         "bootcmd:",
         "  - [sh, -c, \"sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1\"]",
+        # The Azure agent waits for Azure data that never comes in a sandbox, which slowed the last boot stage by ~30 s
+        "  - [sh, -c, \"systemctl mask walinuxagent.service walinuxagent-network-setup.service || true\"]",
         "write_files:",
         "  - path: /etc/sysctl.d/99-sandbox-no-ipv6.conf",
         "    content: |",
@@ -741,6 +761,23 @@ def known_hosts_line(host_public: str, address: str) -> str:
 def keygen_argv(path: Path, comment: str) -> list[str]:
     """ssh-keygen for one ed25519 pair with no passphrase, written quietly to path and path.pub."""
     return [SSH_KEYGEN, "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", check_path(path)]
+
+
+def parse_whoami_sid(output: str) -> str:
+    """The SID from `whoami /user /fo csv /nh` output (`"domain\\user","S-1-5-..."`) as the `*S-1-5-...` form icacls
+    takes, or '' when the output has no SID. A SID is used because %USERNAME% is the computer account (MINIPC$) for a
+    virtual service account such as NT SERVICE\\SubZeroAI."""
+    match = re.search(r'"(S-1-[0-9-]+)"', output or "")
+    return f"*{match.group(1)}" if match else ""
+
+
+def default_whoami_sid() -> str:
+    """The SID of the account this process runs as, from whoami, or '' if it can't be read."""
+    try:
+        proc = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return parse_whoami_sid(proc.stdout) if proc.returncode == 0 else ""
 
 
 def icacls_argv(path: Path, account: str) -> list[str]:
@@ -1158,6 +1195,7 @@ class HyperVSandbox:
                  guest_sudo: bool = False, run_powershell: Callable[[str], str] | None = None,
                  run_keygen: Callable[[list[str]], None] | None = None,
                  run_icacls: Callable[[list[str]], None] | None = None,
+                 run_whoami: Callable[[], str] | None = None,
                  run_ssh: Callable[..., tuple[int, bytes, bytes]] | None = None,
                  ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep,
                  archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128):
@@ -1171,7 +1209,8 @@ class HyperVSandbox:
         self.known_dir = Path(known_dir) if known_dir else base_dir / "szsandbox-known-hosts"
         self.staging_dir = Path(staging_dir) if staging_dir else base_dir / "szsandbox-staging"
         self.ssh_key = ssh_key or str(base_dir / "szsandbox-keys" / "id_ed25519")
-        self.account = account or os.environ.get("USERNAME", "")
+        self.account = account  # '' means: look up this process's own SID when the first key is locked
+        self.run_whoami = run_whoami or default_whoami_sid
         self.guest_sudo = bool(guest_sudo)
         self.run_powershell = run_powershell or default_run_powershell
         self.run_keygen = run_keygen or default_run_keygen
@@ -1236,6 +1275,8 @@ class HyperVSandbox:
             raise
         except Exception as exc:
             raise SandboxError(f"Couldn't make the sandbox's SSH keys: {exc}") from exc
+        if not self.account:
+            self.account = self.run_whoami()
         if not self.account:
             raise SandboxRefused("The app's Windows account isn't known, so the sandbox key files can't be locked.")
         try:
@@ -1479,6 +1520,10 @@ class SandboxStore:
     def get(self, row_id: int):
         return self.db.one("SELECT * FROM sandbox_sessions WHERE id = ?", (row_id,))
 
+    def is_running(self, name: str) -> bool:
+        return self.db.one("SELECT 1 AS found FROM sandbox_sessions WHERE name = ? AND state = 'running' LIMIT 1",
+                           (name,)) is not None
+
     def live_for_session(self, code_session_id: int):
         """The session's sandbox that is running and can take commands, if it has one."""
         return self.db.one("SELECT * FROM sandbox_sessions WHERE code_session_id = ? AND state = 'running' "
@@ -1511,15 +1556,23 @@ class SandboxManager:
     'creating' (which counts toward the limit), and the VM is made after the lock is released."""
 
     def __init__(self, settings: Settings, db: Database,
-                 backend_factory: Callable[[str], SandboxBackend] | None = None):
+                 backend_factory: Callable[[str], SandboxBackend] | None = None, *,
+                 tokens: TokenStore | None = None, egress: EgressProxy | None = None):
         self.settings = settings
         self.db = db
         self.store = SandboxStore(db)
         self.backend_factory = backend_factory or (lambda kind: make_backend(settings, kind))
         self.lock = threading.RLock()
+        self.tokens = tokens or TokenStore()  # the proxy checks these; the proxy itself shares this store
+        self.egress = egress  # the proxy, started by the app for Hyper-V sandboxes (None in tests that don't need it)
         self._backends: dict[str, tuple[tuple, SandboxBackend]] = {}
         self._session_locks: dict[int, threading.RLock] = {}
         self._state_lock = threading.Lock()  # guards _backends and _session_locks only
+        # Proxy tokens, in memory only. _secrets holds each running sandbox's token; _recent keeps the last few, so
+        # output from a command still running when its sandbox was deleted is redacted too.
+        self._token_lock = threading.Lock()
+        self._secrets: dict[str, str] = {}
+        self._recent: deque[tuple[str, str]] = deque(maxlen=RECENT_TOKENS)
 
     @property
     def enabled(self) -> bool:
@@ -1551,7 +1604,65 @@ class SandboxManager:
         return kinds
 
     def handle_of(self, row) -> SandboxHandle:
-        return SandboxHandle(row["name"], row["backend"], row["created_at"])
+        return SandboxHandle(row["name"], row["backend"], row["created_at"], row["expires_at"])
+
+    def proxy_ready(self) -> bool:
+        return self.egress is not None and self.egress.running
+
+    def proxy_problem(self) -> str:
+        """Why sandboxes can't be made because the egress proxy isn't running, in plain words."""
+        reason = self.egress.error if self.egress is not None and self.egress.error else "It hasn't started"
+        return (f"The sandbox's internet proxy isn't running, so no sandbox can be made. {reason.rstrip('.')}. "
+                "Restart SubZero AI after changing sandbox settings, then try again.")
+
+    # ---- proxy tokens (see egress_proxy.py)
+    def _issue_locked(self, handle: SandboxHandle) -> str:
+        """A new token for a sandbox, kept in memory for its commands. Caller holds _token_lock."""
+        if not handle.expires_at:
+            raise SandboxError("That sandbox has no time limit recorded.")
+        token = self.tokens.issue(handle.name, datetime.fromisoformat(handle.expires_at))
+        self._secrets[handle.name] = token
+        self._recent.append((handle.name, token))
+        return token
+
+    def _token_for(self, handle: SandboxHandle) -> str:
+        """The sandbox's token. One that was lost (the app restarted) is issued again, but only while the sandbox is
+        still running."""
+        with self._token_lock:
+            token = self._secrets.get(handle.name)
+            if token is not None:
+                return token
+            if not self.store.is_running(handle.name):
+                raise SandboxError("That sandbox is no longer running.")
+            return self._issue_locked(handle)
+
+    def _revoke(self, name: str) -> None:
+        """Refuse the sandbox at the proxy from now on, and cut off its open connections."""
+        self.tokens.revoke(name)
+        with self._token_lock:
+            self._secrets.pop(name, None)
+        if self.egress is not None:
+            self.egress.close_sandbox(name)
+
+    def command_env(self, handle: SandboxHandle) -> dict[str, str]:
+        """The extra environment for a command in this sandbox: its proxy login and the proxy settings. It is passed
+        only with the command, never written to the guest's disk."""
+        token = self._token_for(handle)
+        host, port = self.egress.address if self.egress is not None else (self.settings.sandbox_host_address,
+                                                                          self.settings.sandbox_proxy_port)
+        return proxy_env(handle.name, token, host, port)
+
+    def redact(self, text: str) -> str:
+        """Replace every proxy token this app issued recently (in the plain or the Basic-login form) with [hidden]."""
+        with self._token_lock:
+            recent = list(self._recent)
+        for name, token in recent:
+            if token in text:
+                text = text.replace(token, REDACTED)
+            basic = base64.b64encode(f"{name}:{token}".encode()).decode()
+            if basic in text:
+                text = text.replace(basic, REDACTED)
+        return text
 
     def live_for_session(self, code_session_id: int):
         return self.store.live_for_session(code_session_id)
@@ -1566,6 +1677,8 @@ class SandboxManager:
         """Refuse a new sandbox when the limit is reached, the disk is low, or the base image isn't set."""
         if self.settings.code_sandbox == "hyperv" and not self.settings.sandbox_base_image:
             raise SandboxRefused("Set the sandbox base image in Settings before Code can use sandboxes.")
+        if self.settings.code_sandbox == "hyperv" and not self.proxy_ready():  # fail closed: no proxy, no sandbox
+            raise SandboxRefused(self.proxy_problem())
         limit = self.settings.sandbox_max_sessions
         if self.store.alive_count() >= limit:
             raise SandboxRefused(f"All {limit} sandboxes are in use right now. Ask a mentor to finish or stop a Code "
@@ -1589,7 +1702,8 @@ class SandboxManager:
                                        created_at=now.isoformat(timespec="seconds"),
                                        expires_at=expires.isoformat(timespec="seconds"))
         try:
-            handle = self.backend(kind).create(code_session_id)
+            made = self.backend(kind).create(code_session_id)
+            handle = replace(made, expires_at=expires.isoformat(timespec="seconds"))
         except SandboxError as exc:
             self.store.update(row_id, state="failed", note=str(exc)[:300])
             raise
@@ -1598,6 +1712,9 @@ class SandboxManager:
             raise SandboxError(f"The sandbox couldn't be made: {exc}") from exc
         with self.lock:
             recorded = self.store.start(row_id, handle.name)
+            if recorded:
+                with self._token_lock:
+                    self._issue_locked(handle)  # the sandbox's commands get this token from now on
         if not recorded:  # the reaper closed this record while the VM was being made: don't keep the VM
             try:
                 self.backend(kind).destroy(handle)
@@ -1608,7 +1725,7 @@ class SandboxManager:
         self.db.audit("sandbox_created", actor_id=actor_id, target_type="sandbox", target_id=row_id,
                       details={"name": handle.name, "backend": kind, "code_session": code_session_id,
                                "expires_at": expires.isoformat(timespec="seconds")})
-        return SandboxHandle(handle.name, kind, handle.created_at)
+        return handle
 
     def destroy_record(self, row, *, reason: str, actor_id: int | None = None,
                        before: Callable[[SandboxHandle], None] | None = None) -> None:
@@ -1625,6 +1742,7 @@ class SandboxManager:
                     log.warning("Couldn't save a sandbox's files before deleting it", exc_info=True)
             try:
                 if row["name"]:
+                    self._revoke(row["name"])  # refused at the proxy even if the delete below fails
                     self.backend(row["backend"]).destroy(handle)
             except Exception as exc:
                 message = str(exc) or type(exc).__name__

@@ -299,8 +299,28 @@ Do it in order, and stop after each milestone for Logan to look:
   `sandbox_sessions` migration, audit entries, a fake sandbox for tests so the suite stays offline. Still
   mentor-only first so the isolation can be proven before students get it; per-step approval is removed inside the
   sandbox here (Logan's decision).
-- **M5 Egress proxy and secrets (about 2 days).** Allowlist proxy with per-session tokens, host firewall rule,
-  revocation at expiry, checker in the Settings overview.
+- **M5 Egress proxy and secrets (about 2 days). Built 2026-11-02, not yet run on the mini PC.** What is in place:
+  - `subzero_ai/egress_proxy.py`: an asyncio HTTP CONNECT-only proxy on `sandbox_host_address`:`sandbox_proxy_port`
+    (default 10.77.0.1:3128). Only `CONNECT name:443` to a name on `sandbox_allowed_hosts` (exact or `*.` suffix) is
+    allowed. Everything else gets 405 or 403 in plain words. IP literals are refused. Every resolved address must be
+    public: loopback, private, link-local, multicast, unspecified, CGNAT, the 10.77.0.0/24 subnet and this computer's
+    own are refused. The connection goes to the address that was checked, so there is no second lookup (DNS
+    rebinding). Limits: connect 15 s, idle 120 s, request head 8 KB, connections per sandbox (default 16) and in total
+    (64), bytes per sandbox over its life (`sandbox_proxy_mb_limit`, default 2048) and per tunnel (512 MB). Refused
+    destinations are audited (`sandbox_proxy_blocked`) at most once a minute per sandbox and name.
+  - Tokens: `TokenStore` keeps a SHA-256 hash of each sandbox's `secrets.token_urlsafe(32)` token, in memory only,
+    expiring with the sandbox. `SandboxManager` issues one when a sandbox is made, revokes it (and closes its open
+    tunnels) when the sandbox is deleted or reaped, and issues a new one for a running sandbox after an app restart.
+  - Guest commands get `HTTPS_PROXY` (with the login), `NO_PROXY` empty, `JAVA_TOOL_OPTIONS` and `GRADLE_OPTS` with the
+    `https.proxy*` settings, and the JDK's Basic-for-tunnels override. The env is passed per command only. The token
+    is redacted from command output (`SandboxManager.redact`), and never written to the audit log or the log.
+  - The proxy starts with the app for `CODE_SANDBOX=hyperv`. If it can't bind, sandboxes are refused with the reason, and
+    the Settings overview has a row for it. The allow-list and limits apply to the next connection. The address and
+    port need a restart.
+  - Left to do: run `sandbox-network.ps1` Install and Check on the mini PC, then a real guest: Gradle and pip through the
+    proxy (confirm the JDK's Basic login for the tunnel works with the override), a refused name, and a token revoked at
+    destroy. Also decide whether the proxy login should stay in the `ssh` command line on the host (it is visible to
+    local processes running as admin, though not to the sandbox). It is not in the audit log, the log or the output.
 - **M6 Wider tools and student access (about 3 days).** Add shell, git, toolchains, read-only repo connector; student
   start with mentor approval of the request; free-rein commands for students; session list and "ends in 41
   hours" notice; patch export before deletion.

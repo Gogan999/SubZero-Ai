@@ -55,6 +55,7 @@ from .auth import LoginError, SlackLogin, profile_from_claims
 from .ai_backend import Capabilities, capabilities_for, make_client, resolve_backend
 from .claude import ClaudeClient
 from .code_runner import CodeRunner
+from .egress_proxy import EgressProxy, TokenStore
 from .sandbox import SandboxManager, reap_sandboxes
 from .config import Settings, load_settings, normalize_model_id
 from .connectors import ConnectorError, Drive, GitHub
@@ -64,7 +65,7 @@ from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
 # MODEL_LABELS and model_label stay importable from here (tests and older code use them)
-from .model_choices import MODEL_LABELS, model_block, model_label, option_label, selectable_models
+from .model_choices import model_block, model_label, option_label, selectable_models
 from .projects import MAX_PROJECT_FILES, ProjectError, Projects
 from .shares import SHARE_DAYS, ShareError, Shares, state as share_state
 from .render import (
@@ -190,6 +191,7 @@ class Services:
     # Model safety checks in progress: model id -> when it started (the background task itself is in `tasks`)
     model_checks_running: dict[str, str] = field(default_factory=dict)
     dms: SlackDMs | None = None  # messaging the bot in Slack (None without Slack)
+    egress: EgressProxy | None = None  # the sandboxes' internet proxy (egress_proxy.py), started for Hyper-V sandboxes
     # config.env settings saved on the Settings page that apply after a restart: name -> saved value ("" for secrets)
     pending_restart: dict[str, str] = field(default_factory=dict)
     checks_running: str = ""  # when the Settings page's Run checks job started ("" when none is running)
@@ -218,7 +220,9 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     if claude is None:
         claude = make_client(settings)
     broker, tasks = Broker(), Tasks()
-    sandboxes = SandboxManager(settings, db)
+    tokens = TokenStore()  # per-sandbox proxy logins: the proxy checks them, the sandboxes manager issues them
+    egress = EgressProxy.from_settings(settings, tokens=tokens, db=db)
+    sandboxes = SandboxManager(settings, db, tokens=tokens, egress=egress)
     attachments = Attachments(db, settings.data_dir / "files")
     projects = Projects(db, settings.data_dir / "files")
     github = GitHub(settings)
@@ -238,6 +242,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
                    CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks,
                               sandboxes=sandboxes), sandboxes=sandboxes)
     svc.nightly.reap = lambda: reap_sandboxes(svc)
+    svc.egress = egress
     runner.capabilities_of = svc.capabilities
     if slack is not None:
         dms = SlackDMs(settings=settings, store=store, approvals=approvals, directory=directory, slack=slack,
@@ -1616,6 +1621,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         s.db.execute("UPDATE code_sessions SET status = 'failed', error = 'The server restarted while Claude was "
                      "working. Send a follow-up to carry on.' WHERE status IN ('preparing', 'running')")
         await ensure_team_id(s)
+        if settings.code_sandbox == "hyperv" and s.egress is not None:
+            await s.egress.start()  # a failure is kept as a plain message: sandboxes then refuse to start
         try:
             await asyncio.to_thread(reap_sandboxes, s)  # sandboxes left by the last run, before any session starts
         except Exception:
@@ -1648,6 +1655,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
             await asyncio.gather(*loops, return_exceptions=True)
             await s.tasks.cancel_all()
             s.bridge_login.cancel()  # a Claude subscription sign-in nobody finished
+            if s.egress is not None:
+                await s.egress.stop()  # closes any sandbox connection still open
             closer = getattr(s.claude, "aclose", None)
             if closer is not None:
                 try:

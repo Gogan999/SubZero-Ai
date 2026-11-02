@@ -29,7 +29,7 @@ class Check:
 
 
 async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner=None,
-                     sandbox_runner=None) -> list[Check]:
+                     sandbox_runner=None, egress=None) -> list[Check]:
     results: list[Check] = []
 
     def add(status: str, title: str, detail: str = "") -> None:
@@ -84,6 +84,8 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
     _check_safety_results(settings, add)
     if settings.code_sandbox == "hyperv":
         await _check_sandbox_network(settings, add, sandbox_runner)
+        if egress is not None:  # the running proxy is only known inside the app, so the CLI check leaves this out
+            _check_egress(egress, add)
 
     # ------------------------------------------------------------------- Slack
     if slack is None and settings.slack_bot_token:
@@ -190,6 +192,16 @@ async def _check_sandbox_network(settings: Settings, add, runner=None) -> None:
     else:
         add(OK, "The sandbox network is locked down",
             f"Sandboxes can reach only this PC, on the switch {settings.sandbox_switch}.")
+
+
+def _check_egress(egress, add) -> None:
+    """The sandboxes' internet proxy (egress_proxy.py): whether it is listening, and what it allows."""
+    if egress.running:
+        add(OK, "The sandbox internet proxy is running",
+            f"Sandboxes reach the internet only through {egress.host}:{egress.port}, and only to the allowed websites.")
+    else:
+        add(FAIL, "The sandbox internet proxy isn't running, so Code sandboxes won't start",
+            egress.error or "Restart SubZero AI. If it still doesn't start, check the sandbox address and port.")
 
 
 async def _check_models(settings: Settings, client, add, *, pi: bool, node_runner=None) -> None:

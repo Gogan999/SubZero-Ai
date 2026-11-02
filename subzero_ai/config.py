@@ -155,7 +155,16 @@ class Settings:
     sandbox_base_image: str = ""  # the base disk (a .vhdx) that every sandbox is made from
     # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24
     sandbox_switch: str = "szsandbox-internal"
-    sandbox_proxy_port: int = 3128  # the one host TCP port a sandbox may reach (the egress proxy, not built yet)
+    sandbox_proxy_port: int = 3128  # the one host TCP port a sandbox may reach: the egress proxy (egress_proxy.py)
+    sandbox_host_address: str = "10.77.0.1"  # the host's address on the sandbox switch; the proxy listens here only
+    # names a sandbox may open a secure (443) connection to, through the proxy. `*.x` matches names under x.
+    sandbox_allowed_hosts: str = ("repo.maven.apache.org, repo1.maven.org, plugins.gradle.org, services.gradle.org, "
+                                  "downloads.gradle.org, plugins-artifacts.gradle.org, frcmaven.wpi.edu, "
+                                  "maven.ctr-electronics.com, maven.revrobotics.com, github.com, "
+                                  "objects.githubusercontent.com, pypi.org, files.pythonhosted.org, registry.npmjs.org")
+    sandbox_allowed_ports: str = "443"  # ports a tunnel may use
+    sandbox_proxy_mb_limit: int = 2048  # the most a sandbox may move through the proxy in its whole life, both ways
+    sandbox_proxy_max_per_sandbox: int = 16  # open proxy connections at once for one sandbox
     sandbox_guest_sudo: bool = False  # the sandbox's user may use sudo: root inside that disposable VM only
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)

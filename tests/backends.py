@@ -13,14 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shutil
 import sys
 import tempfile
-import unittest
 from pathlib import Path
 
-import requests
 
 from subzero_ai.claude import ClaudeClient, ClaudeError, FakeClaude
 from subzero_ai.pi_client import PiClient, child_env
