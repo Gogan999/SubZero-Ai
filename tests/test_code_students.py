@@ -375,6 +375,15 @@ class StudentScreenerAndPromptTest(CodeStudentTest):
         self.assertIn("pip", system, "Claude is told it may install packages through the proxy")
         self.assertIn("high school robotics student", system)
 
+    def test_code_sessions_get_the_chat_safety_rules_first(self):
+        sid, _ = self.ask(self.ava)
+        self.approve(sid)
+        system = next(c["system"] for c in self.h.claude.calls if c["kind"] == "tool_turn")
+        from subzero_ai.generation import load_safety_prompt
+        safety = load_safety_prompt(self.h.settings)
+        self.assertTrue(system.startswith(safety))
+        self.assertIn("high school robotics student", system)
+
     def test_the_host_prompt_still_asks_for_clicks(self):
         text = build_system_prompt(student=False, sandboxed=False, free_rein=False, commands=("gradlew",))
         self.assertIn("shown to a mentor, who approves or declines it", text)

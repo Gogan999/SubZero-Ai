@@ -1162,8 +1162,11 @@ class CodeRunner:
                        "The patch only has changes made through approved edits, so check these by hand.")
 
     def system_prompt(self, row) -> str:
-        return build_system_prompt(student=bool(row["owner_is_student"]), sandboxed=self.sandboxed,
+        from .generation import load_safety_prompt  # imported here: generation pulls in much of the app
+        text = build_system_prompt(student=bool(row["owner_is_student"]), sandboxed=self.sandboxed,
                                    free_rein=bool(row["free_rein"]), commands=self.command_programs())
+        # The chat safety rules apply to Code too (they come first, and the Code rules below only narrow them)
+        return f"{load_safety_prompt(self.settings)}\n\n---\n\n{text}"
 
     async def _run(self, session_id: int) -> None:
         if session_id in self._busy:
