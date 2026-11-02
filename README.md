@@ -2,7 +2,7 @@
 
 A claude.ai-style chat for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
-This is version 0.8.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)).
+This is version 0.9.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)). Code sessions can run their commands in a disposable Hyper-V sandbox (see [docs/CODE_SANDBOX_PLAN.md](docs/CODE_SANDBOX_PLAN.md)); students can use Code once a mentor turns that on.
 
 ## What's in this version
 
