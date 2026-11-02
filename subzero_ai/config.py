@@ -151,6 +151,7 @@ class Settings:
     sandbox_memory_mb: int = 2048
     sandbox_cpus: int = 2
     sandbox_disk_gb: int = 31  # the biggest base disk allowed (the base image is 30 GB; a sandbox's own disk grows as used)
+    sandbox_disk_cap_gb: int = 8  # a running sandbox whose own disk grows past this is deleted (0: no limit)
     sandbox_min_free_gb: int = 20  # no new sandbox while the disk holding the base image has less free
     sandbox_base_image: str = ""  # the base disk (a .vhdx) that every sandbox is made from
     # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24

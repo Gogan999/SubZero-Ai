@@ -1507,6 +1507,12 @@ class HyperVSandbox:
     def list_existing(self) -> list[str]:
         return parse_vm_names(self._ps(list_vms_script()))
 
+    def disk_bytes(self, handle: SandboxHandle) -> int | None:
+        """How big the sandbox's own disk file has grown (a differencing disk grows as the guest writes)."""
+        out = self._ps("$ErrorActionPreference = 'Stop'\n"
+                       f"(Get-Item -LiteralPath {ps_quote(check_path(self._child(handle.name)))}).Length").strip()
+        return int(out) if out.isdigit() else None
+
     # ---- running and files
     def run(self, handle, argv, *, cwd, env, timeout, on_output=None) -> ExitResult:
         with self._lock:
@@ -1919,9 +1925,31 @@ def reap_sandboxes(services: Any, now: datetime | None = None) -> dict[str, int]
             for row in manager.store.due(stamp, (moment - STALE_CREATING).isoformat(timespec="seconds")):
                 _reap_row(manager, row, stamp, report)
             _reap_orphans(manager, report)
+            _reap_oversize(manager, report)
     except Exception:
         log.exception("Sandbox cleanup failed")
     return report
+
+
+def _reap_oversize(manager: SandboxManager, report: dict[str, int]) -> None:
+    """Delete a running sandbox whose disk has grown past sandbox_disk_cap_gb, so a few busy sandboxes can't fill the
+    drive the app's database is on."""
+    cap = int(getattr(manager.settings, "sandbox_disk_cap_gb", 0) or 0) * 1024 ** 3
+    if cap <= 0:
+        return
+    for row in manager.store.db.all("SELECT * FROM sandbox_sessions WHERE state = 'running' AND name != ''"):
+        try:
+            size = getattr(manager.backend(row["backend"]), "disk_bytes", lambda handle: None)(manager.handle_of(row))
+            if size is None or size <= cap:
+                continue
+            manager.destroy_record(row, reason="disk limit reached")
+        except Exception:
+            report["failed"] += 1
+            log.warning("Couldn't check or delete sandbox %s for its disk size", row["name"], exc_info=True)
+            continue
+        report["expired"] += 1
+        manager.db.audit("sandbox_reaped", actor_id=None, target_type="sandbox", target_id=row["id"],
+                         details={"name": row["name"], "reason": "disk limit reached"})
 
 
 def _reap_row(manager: SandboxManager, row, stamp: str, report: dict[str, int]) -> None:

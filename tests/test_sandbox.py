@@ -1393,6 +1393,26 @@ class ReaperTest(unittest.TestCase):
     def actions(self) -> list[str]:
         return [row["action"] for row in self.db.all("SELECT action FROM audit_log ORDER BY id")]
 
+    def test_a_running_sandbox_whose_disk_grows_past_the_cap_is_deleted(self):
+        small, big = self.make_session(), self.make_session()
+        self.manager.create_for_session(small, actor_id=self.owner)
+        self.manager.create_for_session(big, actor_id=self.owner)
+        names = {r["code_session_id"]: r["name"] for r in self.records()}
+        backend = self.manager.backend("fake")
+        sizes = {names[small]: 1024 ** 3, names[big]: 9 * 1024 ** 3}
+        backend.disk_bytes = lambda handle: sizes[handle.name]  # the fake has no disk file of its own
+        self.services.settings.sandbox_disk_cap_gb = 8
+        report = reap_sandboxes(self.services)
+        self.assertEqual(report["expired"], 1)
+        states = {r["code_session_id"]: r["state"] for r in self.records()}
+        self.assertEqual(states[small], "running")
+        self.assertEqual(states[big], "destroyed")
+        self.assertIn("disk limit reached", [r["note"] for r in self.records() if r["code_session_id"] == big])
+        self.services.settings.sandbox_disk_cap_gb = 0
+        sizes[names[small]] = 99 * 1024 ** 3
+        reap_sandboxes(self.services)
+        self.assertEqual({r["code_session_id"]: r["state"] for r in self.records()}[small], "running", "0 is no limit")
+
     def test_a_sandbox_is_created_with_a_record_and_an_audit_entry(self):
         sid = self.make_session()
         handle = self.manager.create_for_session(sid, actor_id=self.owner)

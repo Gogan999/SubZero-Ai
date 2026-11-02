@@ -71,6 +71,7 @@ See `docs/CODE_SANDBOX_PLAN.md`.
 | Delete a sandbox this many hours after it was made (1 to 168) | `SANDBOX_TTL_HOURS` |
 | Sandboxes that can run at the same time (1 to 10) | `SANDBOX_MAX_SESSIONS` |
 | Memory per sandbox, processors per sandbox, disk per sandbox | `SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_DISK_GB` |
+| Delete a sandbox that grows past (GB) | `SANDBOX_DISK_CAP_GB` |
 | Keep this much disk free before a new sandbox is made, in GB | `SANDBOX_MIN_FREE_GB` |
 | Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
 | Internal network switch (the host's vNIC is 10.77.0.1/24) | `SANDBOX_SWITCH` (default `szsandbox-internal`) |
