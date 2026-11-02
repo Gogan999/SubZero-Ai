@@ -115,7 +115,34 @@ never kept. The check is read-only. It is not yet tested on the mini PC.
 
 A new session waits for a free sandbox, and a new sandbox is refused while the disk is below the free-space limit.
 A sandbox is deleted when its Code session finishes, after its time limit, and when no record of it is left. Every
-sandbox is written to the audit log (`sandbox_created`, `sandbox_destroyed`, `sandbox_reaped`).
+sandbox is written to the audit log (`sandbox_created`, `sandbox_destroyed`, `sandbox_reaped`, `sandbox_extended`).
+
+**Students' Code sessions (off by default).** With `CODE_STUDENT_ACCESS` on and a Hyper-V sandbox (or the fake one,
+for tests), students can ask for a Code session. Nothing starts until a mentor approves the request. It shows on the
+Code page under Student requests, and a plain line goes to the approvals channel in Slack. Approving makes the
+session's sandbox and starts Claude. Declining stops the request, and the student sees the mentor's note. If the
+sandbox is off or its network check fails, students are told why and nothing is started. Students never get a GitHub
+write token, and they see only their own sessions.
+
+Inside a student's sandbox, Claude's file changes and commands run without a mentor's click (`CODE_STUDENT_FREE_REIN`,
+on by default). Each step still shows on the session page. A student's follow-up waits for a mentor, as the first
+request did. The patch is released to a student only after a mentor clicks **Release to student**. Mentors can stop,
+delete and extend any session's sandbox at any time. Extending adds the time limit again, but a sandbox never lives
+longer than 7 days from when it was made. Each student's request, approval, decline and release is written to the
+audit log (`code_student_requested`, `code_student_approved`, `code_student_declined`,
+`code_student_followup_requested`, `code_student_followup_approved`, `code_student_followup_declined`,
+`code_patch_released`, `code_session_stopped`, `code_session_deleted`).
+
+| Setting | config.env key |
+| --- | --- |
+| Students may ask for Code sessions (needs the Hyper-V or fake sandbox) | `CODE_STUDENT_ACCESS` (default off) |
+| Inside a student's sandbox, changes and commands run without a mentor's click | `CODE_STUDENT_FREE_REIN` (default on) |
+| Inside a mentor's sandbox, changes and commands run without a click (sandbox only) | `CODE_MENTOR_FREE_REIN` (default off) |
+| Programs Claude may run inside a sandbox, on top of `CODE_COMMANDS` | `CODE_SANDBOX_COMMANDS` (default gradlew, python3, pip, npm, node, java, git) |
+| Code sessions a student can have open at once (1 to 5) | `CODE_STUDENT_MAX_OPEN` (default 1) |
+| Code requests a student can make in 24 hours, new sessions and follow-ups (1 to 50) | `CODE_STUDENT_DAILY_SESSIONS` (default 3) |
+| Claude replies in one run, for students (5 to 200) | `CODE_STUDENT_MAX_TURNS` (default 40) |
+| Stop a student's command after this many seconds (30 to 3600) | `CODE_STUDENT_COMMAND_TIMEOUT` (default 600) |
 | Subteams, admins | `SUBTEAMS`, `ADMIN_SLACK_IDS` |
 
 ## AI engine (config.env)
@@ -229,6 +256,12 @@ an existing base disk; if one must be replaced, run `-Action Remove` first, only
 
 `-Action Check` changes nothing and reports whether the disk is present, read-only and dynamic. `-Action Remove`
 deletes only the base disk, and refuses while any VM disk still uses it as its parent. The app never runs this script.
+
+Build also checks the release's `SHA256SUMS.gpg` signature against the Ubuntu cloud image key, when `gpg.exe` is
+installed. Without it, Build says the signature was not checked. The key must be in gpg's keyring first (see
+`docs/CODE_SANDBOX_PLAN.md`, Base image signature check). `-VerifySignature:$false` turns the check off. Build saves
+the disk's SHA-256 in `sandbox-base.vhdx.sha256`, next to the disk. `-Action Check -Deep` hashes the disk (about a
+minute) and compares it with that saved value.
 
 IPv6 inside the guest is not turned off by this step, and the app's cloud-init user-data does not turn it off either.
 The host side is the protection: the sandbox's virtual adapter rules deny all IPv6 (see `isolation_script` in

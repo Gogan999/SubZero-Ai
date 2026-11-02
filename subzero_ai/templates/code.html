@@ -4,16 +4,30 @@
 {% block main %}
 <section class="page narrow">
   <h1>Code</h1>
+  {% if mentor %}
   <p class="lede">Give Claude a task in the team's robot code. It works in a copy of the repository on this computer: it can read and search on its own, but a mentor approves every file change and every command first. Nothing is pushed to GitHub. When it's done, download the changes as a patch.</p>
+  {% else %}
+  <p class="lede">Ask Claude for help with the team's robot code. A mentor reads your request before Claude starts. Then Claude works in its own sandbox, a separate virtual computer that is deleted after a while. You can read every step it takes. A mentor decides whether you can download the changes.</p>
+  {% endif %}
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
-  {% if available and not models %}
+  {% if mentor and not available %}
+  <section class="panel">
+    <h2>Connect the repository first</h2>
+    <p class="field-hint">Code works in the team's GitHub repository. {% if viewer.is_admin %}Add it in <a href="/settings#connectors">Settings, Connectors</a>.{% else %}An admin can add it in Settings, Connectors.{% endif %}</p>
+  </section>
+  {% elif not mentor and problem %}
+  <section class="panel">
+    <h2>Code isn't ready yet</h2>
+    <p class="field-hint">{{ problem }}</p>
+  </section>
+  {% elif not models %}
   <section class="panel">
     <h2>Pick a Claude model first</h2>
-    <p class="field-hint">Code sessions need a Claude model. An admin can pick one in {% if viewer.is_admin %}<a href="/settings">Settings</a>{% else %}Settings{% endif %}.</p>
+    <p class="field-hint">Code sessions need a Claude model. {% if mentor %}An admin can pick one in {% if viewer.is_admin %}<a href="/settings">Settings</a>{% else %}Settings{% endif %}.{% else %}Ask a mentor to have an admin pick one.{% endif %}</p>
   </section>
-  {% elif available %}
+  {% else %}
   <section class="panel" aria-labelledby="new-code-title">
-    <h2 id="new-code-title">New session</h2>
+    <h2 id="new-code-title">{{ 'New session' if mentor else 'Ask for a session' }}</h2>
     <form method="post" action="/code">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="fields">
@@ -21,25 +35,31 @@
           <label for="code-task">What should Claude do?</label>
           <textarea id="code-task" name="task" rows="5" maxlength="8000" required aria-describedby="code-task-hint"
             placeholder="The arm overshoots at high speed. Find where the arm PID is set up and suggest a fix, then run the build."></textarea>
-          <p class="field-hint" id="code-task-hint">Works in <span class="mono">{{ settings.connector_github_repo }}</span>{% if settings.connector_github_branch %} on {{ settings.connector_github_branch }}{% endif %}. Claude can ask to run: {{ commands|join(', ') }}.</p>
+          <p class="field-hint" id="code-task-hint">Works in <span class="mono">{{ settings.connector_github_repo }}</span>{% if settings.connector_github_branch %} on {{ settings.connector_github_branch }}{% endif %}. {% if mentor %}Claude can ask to run: {{ commands|join(', ') }}.{% else %}A mentor reads this before Claude starts.{% endif %}</p>
         </div>
+        {% if mentor %}
         <div class="field">
           <label for="code-model">Model</label>
           <select id="code-model" name="model">
             {% for value, label in models %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
           </select>
         </div>
+        {% endif %}
       </div>
-      <div class="form-actions"><button class="button primary" type="submit">{{ icon('code') }} Start</button></div>
+      <div class="form-actions"><button class="button primary" type="submit">{{ icon('code') }} {{ 'Start' if mentor else 'Send to a mentor' }}</button></div>
     </form>
   </section>
-  {% else %}
-  <section class="panel">
-    <h2>Connect the repository first</h2>
-    <p class="field-hint">Code works in the team's GitHub repository. {% if viewer.is_admin %}Add it in <a href="/settings#connectors">Settings, Connectors</a>.{% else %}An admin can add it in Settings, Connectors.{% endif %}</p>
+  {% endif %}
+  {% if mentor and awaiting %}
+  <section class="panel" id="requests" aria-labelledby="requests-title">
+    <h2 id="requests-title">Student requests</h2>
+    <p class="field-hint">Nothing starts until you approve a request. Approving makes the student's sandbox and starts Claude.</p>
+    <ul class="simple-list">
+      {% for r in awaiting %}<li><a href="/code/{{ r.id }}">{{ r.title }}</a> <span class="field-hint">{{ r.owner }}, {{ r.created }}</span>{% if r.screen_note %} <span class="pill pending">Screener flagged this</span>{% endif %}</li>{% endfor %}
+    </ul>
   </section>
   {% endif %}
-  <h2>Sessions</h2>
+  <h2>{{ 'Sessions' if mentor else 'Your sessions' }}</h2>
   <ol class="chat-rows">
     {% for item in sessions %}
     <li>
@@ -48,12 +68,12 @@
         <span class="chat-meta">
           {{ item.owner }} · <time>{{ item.updated }}</time>
           <span class="pill {{ item.kind }}">{{ item.label }}</span>
-          {% if item.pending %}<span class="pill pending">{{ item.pending }} to approve</span>{% endif %}
+          {% if item.pending and mentor %}<span class="pill pending">{{ item.pending }} to approve</span>{% endif %}
         </span>
       </a>
     </li>
     {% else %}
-    <li class="empty-state">No sessions yet.</li>
+    <li class="empty-state">{{ 'No sessions yet.' if mentor else 'You have not asked for a session yet.' }}</li>
     {% endfor %}
   </ol>
 </section>

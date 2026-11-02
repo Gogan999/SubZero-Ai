@@ -312,6 +312,121 @@ class SandboxImageDocsTest(unittest.TestCase):
         self.assertIn("does not", block)
 
 
+class SignatureAndHashTest(unittest.TestCase):
+    """The signature check of SHA256SUMS (with a pinned key, before the big download, skipped with a note when gpg.exe
+    is missing) and the SHA-256 that Build saves and Check -Deep compares. Text-level only."""
+
+    def test_the_ubuntu_key_is_pinned_and_marked_for_re_verification(self):
+        text = script_text()
+        self.assertIn('$CloudKeyId = "1A5D6C4C7DB87C81"', text)
+        self.assertIn('$CloudKeyFingerprint = "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"', text)
+        self.assertTrue(cloud_key_matches_id())
+        self.assertIn("MUST BE RE-VERIFIED", text)
+        self.assertIn("https://ubuntu.com/tutorials/how-to-verify-ubuntu", text)
+
+    def test_verify_signature_defaults_to_true_and_is_a_bool_not_a_switch(self):
+        text = script_text()
+        self.assertIn("[bool]$VerifySignature = $true", text)
+        self.assertNotIn("[switch]$VerifySignature", text)
+        self.assertNotIn("$Switch", text)
+
+    def test_deep_is_a_switch_that_only_check_uses(self):
+        text = script_text()
+        self.assertIn("[switch]$Deep", text)
+        self.assertIn("Show-ImageCheck $parent ([bool]$Deep)", text)
+        self.assertIn("function Show-ImageCheck([string]$Parent, [bool]$Deep)", text)
+
+    def test_the_signature_is_checked_before_the_image_is_downloaded(self):
+        text = script_text()
+        self.assertLess(text.index("Assert-SumsSignature $sums $sig $gpg.Source"),
+                        text.index('& curl.exe -fsSL -o $tar "$ImageRoot/$ReleaseDate/$ImageName"'))
+
+    def test_a_missing_gpg_skips_the_check_with_a_note_and_does_not_fail(self):
+        build = function_body(script_text(), "Build-SandboxImage")
+        self.assertIn('Get-Command gpg.exe -ErrorAction SilentlyContinue', build)
+        self.assertIn("} elseif (-not $gpg) {", build)
+        self.assertIn("gpg.exe isn't installed, so SHA256SUMS.gpg was NOT checked.", build)
+        self.assertIn("SHA256SUMS.gpg", build)
+        self.assertIn("if (-not $VerifySignature) {", build)
+
+    def test_the_signature_check_uses_only_the_pinned_key_and_never_a_keyserver(self):
+        text = script_text()
+        body = function_body(text, "Assert-SumsSignature")
+        self.assertIn("--list-keys $CloudKeyFingerprint", body)
+        self.assertIn("--status-fd 1 --verify $Signature $Sums", body)
+        self.assertIn("VALIDSIG", body)
+        self.assertIn("if ($LASTEXITCODE -ne 0 -or $good.Count -ne 1)", body)
+        self.assertIn("isn't in gpg's keyring", body, "a missing key is refused, not fetched")
+        self.assertNotIn("--keyserver", text, "the script never fetches a key")
+        self.assertNotIn("recv-keys", text)
+
+    def test_the_build_saves_the_hash_next_to_the_disk_and_check_compares_it_only_with_deep(self):
+        text = script_text()
+        build = function_body(text, "Build-SandboxImage")
+        self.assertIn("Set-Content -LiteralPath (Get-HashPath $Parent) -Value $hash -Encoding ASCII", build)
+        self.assertEqual(function_body(text, "Get-HashPath").count('"$Parent.sha256"'), 1)
+        body = function_body(text, "Show-ImageCheck")
+        self.assertIn("Get-SavedHash $Parent", body)
+        self.assertLess(body.index("if ($Deep) {"), body.index("Get-FileHash"))
+        self.assertEqual(body.count("Get-FileHash"), 1, "only the -Deep branch hashes the disk")
+
+    def test_the_saved_hash_must_be_a_sha256_value_or_it_counts_as_missing(self):
+        body = function_body(script_text(), "Get-SavedHash")
+        self.assertIn("'^[0-9A-Fa-f]{64}$'", body)
+        self.assertIn('return ""', body)
+
+    def test_remove_deletes_the_saved_hash_only_as_part_of_the_base_disk(self):
+        remove = function_body(script_text(), "Remove-SandboxImage")
+        self.assertIn("Remove-Item -LiteralPath (Get-HashPath $Parent) -Force -ErrorAction SilentlyContinue", remove)
+        self.assertLess(remove.index("Remove-Item -LiteralPath $Parent -Force"),
+                        remove.index("Remove-Item -LiteralPath (Get-HashPath $Parent)"))
+
+    def test_the_nocloud_kernel_argument_is_unchanged(self):
+        # Changing it to ds=nocloud is untested, so the script keeps the form that was tested
+        text = script_text()
+        self.assertIn("ci.ds=NoCloud", text)
+        self.assertNotIn("ds=nocloud", text.lower().replace("ci.ds=nocloud", ""))
+
+
+def cloud_key_matches_id() -> bool:
+    """The key ID is the last 16 hex digits of the pinned fingerprint."""
+    text = script_text()
+    fingerprint = re.search(r'\$CloudKeyFingerprint = "([0-9A-F]{40})"', text).group(1)
+    return fingerprint.endswith(re.search(r'\$CloudKeyId = "([0-9A-F]{16})"', text).group(1))
+
+
+class SignatureDocsTest(unittest.TestCase):
+    def plan(self) -> str:
+        return (ROOT / "docs" / "CODE_SANDBOX_PLAN.md").read_text(encoding="utf-8")
+
+    def test_the_key_import_is_documented_with_the_pinned_fingerprint_and_the_re_verify_step(self):
+        plan = self.plan()
+        self.assertIn("### Base image signature check (Build)", plan)
+        self.assertIn("D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81", plan)
+        self.assertIn("gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 0xD2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81",
+                      plan)
+        self.assertIn("https://ubuntu.com/tutorials/how-to-verify-ubuntu", plan)
+
+    def test_the_known_limits_list_names_the_four_limits(self):
+        plan = self.plan()
+        start = plan.index("## Known limits")
+        section = plan[start:plan.index("## 3. Mentor-only model")]
+        self.assertIn("uploads", section.lower())
+        self.assertIn("github.com", section)
+        self.assertIn("pypi.org", section)
+        self.assertIn("No WSL fallback", section)
+        self.assertIn("alphabetically", section)
+        self.assertIn("ci.ds=NoCloud", section)
+        self.assertIn("23.2", section)
+        self.assertIn("re-test", section.lower())
+
+    def test_the_settings_block_mentions_the_signature_and_deep_options(self):
+        block = SETTINGS.read_text(encoding="utf-8")
+        block = block[block.index("## Sandbox base image"):]
+        for text in ("SHA256SUMS.gpg", "-VerifySignature:$false", "sandbox-base.vhdx.sha256", "-Action Check -Deep"):
+            self.assertIn(text, block)
+
+
 if __name__ == "__main__":
     unittest.main()
 

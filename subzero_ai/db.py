@@ -287,6 +287,42 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_sandbox_sessions_state ON sandbox_sessions (state, expires_at);
     CREATE INDEX idx_sandbox_sessions_code ON sandbox_sessions (code_session_id, id);
     """,
+    # Version 15: students' Code sessions. A student's request waits in status awaiting_approval until a mentor
+    # approves it. SQLite can't change a CHECK constraint, so code_sessions is rebuilt (migrate() turns foreign keys
+    # off first, so dropping the old table doesn't cascade into code_steps or sandbox_sessions).
+    """
+    CREATE TABLE code_sessions_new (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('awaiting_approval', 'preparing', 'running', 'waiting', 'done',
+                                               'stopped', 'failed')),
+        model TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        ref TEXT NOT NULL DEFAULT '',
+        transcript TEXT NOT NULL DEFAULT '[]',
+        error TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        created_by INTEGER NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        owner_is_student INTEGER NOT NULL DEFAULT 0,  -- 1 when a student asked for the session
+        start_approved_by INTEGER REFERENCES users(id),
+        start_approved_at TEXT,
+        screen_note TEXT,  -- what the screener said about the student's request, for the mentor
+        free_rein INTEGER NOT NULL DEFAULT 0,  -- 1 when changes and commands run without a click (sandbox only)
+        patch_released INTEGER NOT NULL DEFAULT 0  -- 1 once a mentor releases the patch to a student
+    );
+    INSERT INTO code_sessions_new (id, title, task, status, model, repo, ref, transcript, error, input_tokens,
+                                   output_tokens, created_by, created_at, updated_at)
+        SELECT id, title, task, status, model, repo, ref, transcript, error, input_tokens, output_tokens,
+               created_by, created_at, updated_at FROM code_sessions;
+    DROP TABLE code_sessions;
+    ALTER TABLE code_sessions_new RENAME TO code_sessions;
+    CREATE INDEX idx_code_sessions_owner ON code_sessions (created_by, created_at);
+    CREATE INDEX idx_code_sessions_status ON code_sessions (status, updated_at);
+    """,
 ]
 
 
@@ -332,6 +368,9 @@ class Database:
         conn = self._connect()
         try:
             conn.execute("PRAGMA journal_mode = WAL")
+            # Off while migrating, so a migration may rebuild a table (foreign keys can't be changed inside a
+            # transaction, so this has to happen here). Foreign keys are back on for every later connection.
+            conn.execute("PRAGMA foreign_keys = OFF")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             for index, script in enumerate(MIGRATIONS[version:], start=version + 1):
                 conn.executescript("BEGIN;" + script + f"PRAGMA user_version = {index}; COMMIT;")

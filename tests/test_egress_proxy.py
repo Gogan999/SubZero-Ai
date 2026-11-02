@@ -12,6 +12,7 @@ import logging
 import shutil
 import socket
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,14 +21,17 @@ from subzero_ai import saved_settings
 from subzero_ai.config import load_settings
 from subzero_ai.db import Database
 from subzero_ai.egress_proxy import (
+    MESSAGES,
     EgressProxy,
     TokenStore,
+    _peer_address,
     basic_credentials,
     host_allowed,
     parse_hosts,
     parse_ports,
     refused_address,
 )
+from subzero_ai.sandbox import sandbox_address
 
 PUBLIC = "93.184.216.34"  # a public address: the fake DNS answers with it
 ALLOWED = ("example.com", "*.example.net", "*.pypi.org")
@@ -91,10 +95,11 @@ class ProxyCase(unittest.IsolatedAsyncioTestCase):
         return await asyncio.open_connection("127.0.0.1", self.upstream_port)
 
     async def start_proxy(self, **overrides) -> EgressProxy:
+        # The test client connects from 127.0.0.1, so every sandbox name is told it belongs to 127.0.0.1
         options = dict(tokens=self.tokens, db=self.db, host="127.0.0.1", port=0, allowed_hosts=ALLOWED,
                        allowed_ports=(443,), resolver=self._resolve, connector=self._connect,
                        local_addresses=LOCAL_ADDRESSES, head_seconds=2, resolve_seconds=2, connect_seconds=2,
-                       idle_seconds=5, clock=lambda: self.mono)
+                       idle_seconds=5, clock=lambda: self.mono, address_for=lambda name: "127.0.0.1")
         options.update(overrides)
         self.proxy = EgressProxy(**options)
         self.assertTrue(await self.proxy.start(), self.proxy.error)
@@ -634,6 +639,133 @@ class SettingsValidationTest(unittest.TestCase):
         for key in ("SANDBOX_HOST_ADDRESS", "SANDBOX_ALLOWED_HOSTS", "SANDBOX_ALLOWED_PORTS",
                     "SANDBOX_PROXY_MB_LIMIT", "SANDBOX_PROXY_MAX_PER_SANDBOX"):
             self.assertIn(key, doc)
+
+
+class FakePeerWriter:
+    """Only what _peer_address and _from_sandbox read from a stream writer."""
+
+    def __init__(self, peer):
+        self.peer = peer
+
+    def get_extra_info(self, key):
+        return self.peer if key == "peername" else None
+
+
+class SandboxAddressTest(ProxyCase):
+    """A login belongs to one sandbox, so the connection must come from that sandbox's own address. A connection from
+    any other address is refused with 403 before anything is looked up or connected."""
+
+    async def test_a_connection_from_another_address_is_refused_before_any_lookup(self):
+        await self.start_proxy(address_for=lambda name: "10.77.0.11")
+        token = self.issue()
+        status, _, body = await self.refusal("example.com:443", basic(SANDBOX, token))
+        self.assertEqual(status, 403)
+        self.assertEqual(body.strip(), MESSAGES["sandbox"])
+        self.assertEqual(self.resolved, [], "nothing is looked up")
+        self.assertEqual(self.connects, [], "nothing is connected")
+        self.assertEqual([row["reason"] for row in self.audit_rows()], ["wrong-address"])
+
+    async def test_a_sandbox_with_no_known_address_is_refused(self):
+        await self.start_proxy(address_for=lambda name: None)
+        token = self.issue()
+        status, _, _ = await self.refusal("example.com:443", basic(SANDBOX, token))
+        self.assertEqual(status, 403, "no address for the name fails closed")
+        self.assertEqual(self.connects, [])
+
+    async def test_a_failing_address_lookup_is_refused(self):
+        def broken(name):
+            raise RuntimeError("the lookup broke")
+
+        await self.start_proxy(address_for=broken)
+        token = self.issue()
+        status, _, _ = await self.refusal("example.com:443", basic(SANDBOX, token))
+        self.assertEqual(status, 403)
+
+    async def test_each_sandbox_name_has_its_own_address(self):
+        other = "szsandbox-8-s002-ffffff"
+        await self.start_proxy(address_for=lambda name: {SANDBOX: "127.0.0.1", other: "10.77.0.12"}.get(name))
+        token_a, token_b = self.issue(SANDBOX), self.issue(other)
+        status, _, reader, writer = await self.open_tunnel("example.com:443", basic(SANDBOX, token_a))
+        writer.close()
+        self.assertEqual(status, 200, "its own address is accepted")
+        status, _, _ = await self.refusal("example.com:443", basic(other, token_b))
+        self.assertEqual(status, 403, "a login from the wrong address is refused for that name")
+
+    async def test_the_default_address_is_the_one_the_slot_gives(self):
+        self.assertEqual(sandbox_address(SANDBOX), "10.77.0.11", "slot 1 is 10.77.0.11")
+        self.assertIsNone(sandbox_address("other-vm"))
+        await self.start_proxy(address_for=None)  # the default: the sandbox's slot address, not 127.0.0.1
+        token = self.issue()
+        status, _, _ = await self.refusal("example.com:443", basic(SANDBOX, token))
+        self.assertEqual(status, 403)
+
+    async def test_refusals_from_the_wrong_address_are_audited_once_a_minute(self):
+        await self.start_proxy(address_for=lambda name: "10.77.0.11")
+        token = self.issue()
+        for _ in range(3):
+            await self.refusal("example.com:443", basic(SANDBOX, token))
+        self.assertEqual(len(self.audit_rows()), 1)
+
+    def test_the_peer_address_is_a_plain_ip_and_mapped_ipv6_is_unwrapped(self):
+        self.assertEqual(_peer_address(FakePeerWriter(("10.77.0.11", 5000))), "10.77.0.11")
+        self.assertEqual(_peer_address(FakePeerWriter(("::ffff:10.77.0.11", 5000, 0, 0))), "10.77.0.11")
+        self.assertIsNone(_peer_address(FakePeerWriter(None)))
+        self.assertIsNone(_peer_address(FakePeerWriter(("not-an-address", 1))))
+
+    def test_a_missing_peer_address_fails_closed(self):
+        proxy = EgressProxy(tokens=TokenStore(), db=None, host="127.0.0.1", port=0,
+                            address_for=lambda name: "10.77.0.11")
+        self.assertFalse(proxy._from_sandbox(SANDBOX, FakePeerWriter(None)))
+        self.assertTrue(proxy._from_sandbox(SANDBOX, FakePeerWriter(("10.77.0.11", 1))))
+        self.assertFalse(proxy._from_sandbox(SANDBOX, FakePeerWriter(("10.77.0.12", 1))))
+        self.assertFalse(proxy._from_sandbox(SANDBOX, FakePeerWriter(("0.0.0.0", 1))))
+
+
+class CloseFromAnyThreadTest(ProxyCase):
+    """close_sandbox is called from other threads while tunnels run on the loop. Its usage and audit bookkeeping must
+    neither crash nor log an error, and tunnels must still work afterwards."""
+
+    async def echo_once(self, auth: str) -> bool:
+        try:
+            status, _, reader, writer = await self.open_tunnel("example.com:443", auth)
+            if status != 200:
+                writer.close()
+                return False
+            writer.write(b"ping")
+            await writer.drain()
+            data = await asyncio.wait_for(reader.readexactly(4), 5)
+            writer.close()
+            return data == b"ping"
+        except (OSError, EOFError, asyncio.TimeoutError):
+            return False  # a tunnel cut off by close_sandbox ends like this
+
+    async def test_close_sandbox_from_threads_while_tunnels_run(self):
+        await self.start_proxy()
+        token = self.issue()
+        auth = basic(SANDBOX, token)
+        self.assertTrue(await self.echo_once(auth), "a tunnel works before the hammering")
+        errors: list[BaseException] = []
+
+        def hammer():
+            try:
+                for _ in range(200):
+                    self.proxy.close_sandbox(SANDBOX)
+                    self.proxy.close_sandbox("szsandbox-9-s009-aaaaaa")
+            except BaseException as exc:  # reported to the test, which fails on it
+                errors.append(exc)
+
+        threads = [threading.Thread(target=hammer) for _ in range(4)]
+        with self.assertNoLogs("subzero.egress", level="ERROR"):
+            for thread in threads:
+                thread.start()
+            results = []
+            for _ in range(8):
+                results += await asyncio.gather(*(self.echo_once(auth) for _ in range(6)))
+            for thread in threads:
+                await asyncio.to_thread(thread.join, 30)
+        self.assertEqual(errors, [])
+        self.assertTrue(all(isinstance(r, bool) for r in results))
+        self.assertTrue(await self.echo_once(auth), "tunnels still work after the hammering")
 
 
 if __name__ == "__main__":

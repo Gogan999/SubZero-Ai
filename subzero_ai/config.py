@@ -166,6 +166,16 @@ class Settings:
     sandbox_proxy_mb_limit: int = 2048  # the most a sandbox may move through the proxy in its whole life, both ways
     sandbox_proxy_max_per_sandbox: int = 16  # open proxy connections at once for one sandbox
     sandbox_guest_sudo: bool = False  # the sandbox's user may use sudo: root inside that disposable VM only
+    # Students and Code (M6). A student's session is started only after a mentor approves the request, and needs a
+    # sandbox. Inside a student's sandbox, file changes and commands run without a mentor's click (free rein).
+    code_student_access: bool = False  # students may ask for Code sessions (off until a mentor or admin turns it on)
+    code_student_free_rein: bool = True  # inside a student's sandbox, changes and commands run without a click
+    code_mentor_free_rein: bool = False  # the same for mentors' own sessions, when the sandbox is on
+    code_sandbox_commands: tuple[str, ...] = ("gradlew", "python3", "pip", "npm", "node", "java", "git")  # in a sandbox
+    code_student_max_open: int = 1  # a student's sessions waiting, running or preparing at the same time
+    code_student_daily_sessions: int = 3  # a student's requests (new sessions and follow-ups) in 24 hours
+    code_student_max_turns: int = 40  # Claude replies per run in a student's session
+    code_student_command_timeout: int = 600  # seconds a command in a student's sandbox may run
 
     # Attachments (images and other files are capped at 5 MB each, 5 per message)
     max_text_file_kb: int = 200
@@ -233,6 +243,8 @@ _CONVERTERS = {
 
 # Settings whose config.env key isn't just the upper-cased name
 ENV_NAMES = {"slack_dms_enabled": "SLACK_DMS"}
+# The code_sandbox values that can run student Code sessions (the fake one is for tests only)
+CODE_STUDENT_SANDBOXES = ("hyperv", "fake")
 MODEL_SETTINGS = ("model_default", "model_hard", "model_titles", "model_screener")
 MODEL_ID_SETTINGS = MODEL_SETTINGS + ("model_check_judge",)  # every setting that holds a model id
 

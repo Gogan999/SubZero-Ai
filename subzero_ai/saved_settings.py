@@ -17,7 +17,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .ai_backend import resolve_backend
-from .config import MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
+from .config import CODE_STUDENT_SANDBOXES, MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
 from .db import Database, utcnow
 from .egress_proxy import parse_hosts, parse_ports
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
@@ -174,6 +174,26 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "Off by default. When on, a student's commands in a sandbox can run as root, but only inside that "
               "disposable virtual computer. It does not reach the mini PC. Applies to sandboxes made after the "
               "change."),
+        Field("code_student_access", "Students can start Code sessions", "bool",
+              "Each request waits for a mentor to approve it before Claude starts. Needs Hyper-V sandboxes turned on "
+              "above (the fake sandbox is for testing only). Students see only their own sessions."),
+        Field("code_student_free_rein", "Inside a student's sandbox, Claude's changes and commands run without a click",
+              "bool", "Nothing is clicked there. Anything that leaves the sandbox, like the patch, still waits for a "
+              "mentor to release it. Off means a mentor clicks through each change and command."),
+        Field("code_mentor_free_rein", "Inside a mentor's sandbox, changes and commands run without a click", "bool",
+              "Only applies when the sandbox is on. Off keeps the click for each change and command."),
+        Field("code_sandbox_commands", "Programs Claude may run inside a sandbox", "lines",
+              "One per line, added to the commands above, so Claude can install packages (pip, npm) and use git and "
+              "Java inside a sandbox. Each program still runs only inside the sandbox."),
+        Field("code_student_max_open", "Code sessions a student can have open at once", "int",
+              "Open means waiting for a mentor, preparing, running or waiting for a reply.", 1, 5),
+        Field("code_student_daily_sessions", "Code requests a student can make in 24 hours", "int",
+              "New sessions and follow-up requests both count. A request that a mentor declines still counts.", 1, 50),
+        Field("code_student_max_turns", "Claude replies in one run, for students", "int",
+              "A run stops after this many replies, so a confused session can't spend without limit. Send a "
+              "follow-up to carry on.", 5, 200),
+        Field("code_student_command_timeout", "Stop a student's command after this many seconds", "int",
+              "Applies to commands in a student's sandbox.", 30, 3600),
     ]),
     "people": ("Subteams and admins", [
         Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),
@@ -417,6 +437,13 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 errors[f.name] = "You can't remove yourself. Ask another admin to do it."
             else:
                 values[f.name] = frozenset(items)
+    if section == "code" and values.get("code_student_access"):
+        # Students' sessions need a sandbox. Checked on the form's own sandbox value, so both can be saved together.
+        kind = str(values.get("code_sandbox", settings.code_sandbox if settings is not None else "off"))
+        if kind.strip().lower() not in CODE_STUDENT_SANDBOXES:
+            errors["code_student_access"] = ("Turn on Hyper-V sandboxes first (Run Code commands in a sandbox), "
+                                             "then let students start Code sessions.")
+            del values["code_student_access"]
     if "ai_providers" in values and settings is not None:
         # A provider can't be turned off while a model setting still uses it
         in_form = {f.name for f in fields}

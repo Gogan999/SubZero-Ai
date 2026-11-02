@@ -240,7 +240,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
                    SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), projects,
                    Shares(db), github, Drive(settings),
                    CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks,
-                              sandboxes=sandboxes), sandboxes=sandboxes)
+                              sandboxes=sandboxes, slack=slack), sandboxes=sandboxes)
     svc.nightly.reap = lambda: reap_sandboxes(svc)
     svc.egress = egress
     runner.capabilities_of = svc.capabilities
@@ -1152,8 +1152,9 @@ async def queue_page(request: Request, viewer: Viewer) -> Response:
     window = [{"id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
                "title": m["conversation_title"] or "New chat", "text": short_text(m["content"], 120),
                "time": fmt_time(s.store, m["created_at"])} for m in s.store.window_messages()]
-    code_waiting = [{"id": r["id"], "title": r["title"], "owner": r["owner_name"], "pending": r["pending"]}
-                    for r in s.code.list() if r["status"] == "waiting"]
+    code_waiting = [{"id": r["id"], "title": r["title"], "owner": r["owner_name"], "pending": r["pending"],
+                     "request": r["status"] == "awaiting_approval"}
+                    for r in s.code.list() if r["status"] in ("waiting", "awaiting_approval")]
     return render(request, "queue.html", viewer, items=_queue_items(s), window=window, shares=shares,
                   code_waiting=code_waiting, flash=request.session.pop("flash", None))
 

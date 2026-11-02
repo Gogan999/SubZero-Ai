@@ -89,7 +89,7 @@ GOOD_VLAN = ('[{"OperationMode":"Private","PrivateVlanMode":"Isolated","PrimaryV
 KEYS_ROOT = Path(tempfile.mkdtemp(prefix="sandbox-keys-test-"))
 atexit.register(shutil.rmtree, KEYS_ROOT, True)
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEKEYFORTESTSONLY"
-PRIVATE_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEKEYFORTESTSONLY\n-----END OPENSSH PRIVATE KEY-----\n"
+PRIVATE_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nPRIVATEBODYONLYFORTESTS\n-----END OPENSSH PRIVATE KEY-----\n"
 
 
 def free_port() -> int:
@@ -259,8 +259,10 @@ class FakeHost:
 
     def __init__(self, adapters: str = GOOD_ADAPTERS, vms: str = "[]", ssh_codes: dict[str, int] | None = None,
                  ssh_fail_first: int = 0, network: str | Exception = PASSING_NETWORK, vlan: str = GOOD_VLAN,
-                 keygen_fails: bool = False):
+                 keygen_fails: bool = False, vlan_after_start: str | None = None):
         self.root = Path(tempfile.mkdtemp(prefix="host-", dir=KEYS_ROOT))
+        self.vlan_after_start = vlan_after_start  # what the VLAN read-back says once the VM has started, if different
+        self.started = False
         self.scripts: list[str] = []
         self.remote: list[tuple[str, str]] = []
         self.known_hosts: list[str] = []
@@ -283,7 +285,11 @@ class FakeHost:
             if isinstance(self.network, Exception):
                 raise self.network
             return self.network
+        if "Start-VM -Name" in script:
+            self.started = True
         if "Get-VMNetworkAdapterVlan -VMName" in script:
+            if self.started and self.vlan_after_start is not None:
+                return self.vlan_after_start
             return self.vlan
         if script.startswith("Get-VMNetworkAdapter") or "Get-VMNetworkAdapter -VMName" in script:
             return self.adapters
@@ -711,7 +717,7 @@ class SeedDiskTest(unittest.TestCase):
             ("ssh-rsa AAAA c", f"{HOST_KEY} h", PRIVATE_KEY),
             (f"{HOST_KEY} c", "ssh-rsa AAAA h", PRIVATE_KEY),
             (f"{HOST_KEY} c", f"{HOST_KEY} h", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n"),
-            (f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY.replace("FAKEKEY", "\u00e9KEY")),
+            (f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY.replace("PRIVATEBODY", "\u00e9RIVATEBODY")),
         ]
         for client, host_public, private in cases:
             with self.assertRaises(SandboxError):
@@ -724,6 +730,149 @@ class SeedDiskTest(unittest.TestCase):
                          ["icacls", "/x/key", "/inheritance:r", "/grant:r", "mentor:F"])
         with self.assertRaises(SandboxError):
             icacls_argv(Path("/x/key"), "")
+
+
+class SeedFileHost(FakeHost):
+    """A FakeHost that also keeps the files the real steps leave on disk. The seed disk is a file made as a copy of the
+    staged files (as the seed script copies them), and it is deleted when it is released or the VM is destroyed. Every
+    PowerShell call, SSH call and key or icacls command is a numbered step, so one can be made to fail (fail_at)."""
+
+    def __init__(self, fail_at: int | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.fail_at = fail_at
+        self.steps = 0
+        (self.root / "images").mkdir(exist_ok=True)  # the base disk's folder, where the child and seed disks go
+        keygen, icacls = self.keygen.keygen, self.keygen.icacls
+
+        def counted_keygen(argv):
+            self._step()
+            keygen(argv)
+
+        def counted_icacls(argv):
+            self._step()
+            icacls(argv)
+
+        self.keygen.keygen, self.keygen.icacls = counted_keygen, counted_icacls
+
+    def _step(self) -> None:
+        index, self.steps = self.steps, self.steps + 1
+        if index == self.fail_at:
+            raise SandboxError(f"step {index} failed for the test")
+
+    def powershell(self, script: str) -> str:
+        self._step()
+        made = re.search(r"New-VHD -Path '([^']+)' -SizeBytes", script)
+        if made:
+            seed = Path(made.group(1))
+            staged = self.root / "staging" / seed.name[: -len("-seed.vhdx")]
+            seed.write_bytes(b"".join((staged / name).read_bytes() for name in sandbox.SEED_FILES))
+        if "Remove-VMHardDiskDrive" in script:
+            for path in re.findall(r"\$_\.Path -eq '([^']+)'", script):
+                Path(path).unlink(missing_ok=True)
+        if "Remove-VM -Name" in script:
+            for path in re.findall(r"'([^']+\.vhdx)'", script):
+                Path(path).unlink(missing_ok=True)
+        return super().powershell(script)
+
+    def ssh(self, *args, **kwargs):
+        self._step()
+        return super().ssh(*args, **kwargs)
+
+
+class SeedLeftOnDiskTest(unittest.TestCase):
+    """No copy of the host's private key may be left in the staging folder or on the seed disk, after a create that
+    works and after one that fails at any step."""
+
+    SECRET = b"PRIVATEBODYONLYFORTESTS"  # a line of PRIVATE_KEY only (not in the public key), so a copy shows up
+
+    def make(self, host: SeedFileHost) -> HyperVSandbox:
+        return hyperv(host, base_image=str(host.root / "images" / "sandbox-base.vhdx"))
+
+    def secret_files(self, host: SeedFileHost) -> list[str]:
+        """Every file under the host's fake root, except the app's own client key folder, that holds the secret."""
+        found = []
+        for path in host.root.rglob("*"):
+            relative = path.relative_to(host.root)
+            if path.is_file() and relative.parts[0] != "keys" and self.SECRET in path.read_bytes():
+                found.append(str(relative))
+        return found
+
+    def test_the_fake_seed_really_carries_the_secret_while_the_vm_is_made(self):
+        host = SeedFileHost()
+        self.make(host).create(7)
+        self.assertIn(self.SECRET, host.seed_files["user-data"], "so the checks below have something to find")
+
+    def test_after_a_good_create_no_copy_of_the_host_key_is_left(self):
+        host = SeedFileHost()
+        handle = self.make(host).create(7)
+        self.assertEqual(self.secret_files(host), [])
+        self.assertFalse((host.root / "staging" / handle.name).exists())
+        seed = seed_disk_path(str(host.root / "images" / "sandbox-base.vhdx"), handle.name)
+        self.assertFalse(seed.exists(), "the seed disk is deleted once the guest has read it")
+
+    def test_after_a_failed_create_at_any_step_no_copy_of_the_host_key_is_left(self):
+        probe = SeedFileHost()
+        self.make(probe).create(7)
+        self.assertGreater(probe.steps, 10)
+        for step in range(probe.steps):
+            with self.subTest(step=step):
+                host = SeedFileHost(fail_at=step)
+                with self.assertRaises(SandboxError):
+                    self.make(host).create(7)
+                self.assertEqual(self.secret_files(host), [])
+                self.assertFalse(list((host.root / "staging").glob("*")))
+
+    def test_the_staged_key_and_user_data_are_overwritten_after_the_seed_is_detached(self):
+        host = SeedFileHost()
+        wiped: list[tuple[int, str]] = []
+        real_shred = sandbox.shred_file
+
+        def spy(path):
+            wiped.append((len(host.events), Path(path).name))
+            real_shred(path)
+
+        with mock.patch.object(sandbox, "shred_file", side_effect=spy):
+            self.make(host).create(7)
+        self.assertEqual([name for _, name in wiped], [sandbox.HOST_KEY_FILE, "user-data"])
+        detached = host.index("ps", "Remove-VMHardDiskDrive")
+        self.assertTrue(all(position > detached for position, _ in wiped), "only after the seed is detached")
+
+    def test_destroy_overwrites_the_staged_key_before_it_deletes_it(self):
+        host = SeedFileHost()
+        name = "szsandbox-7-s000-abcdef"
+        staging = host.root / "staging" / name
+        staging.mkdir(parents=True)
+        (staging / sandbox.HOST_KEY_FILE).write_bytes(PRIVATE_KEY.encode("ascii"))
+        wiped: list[str] = []
+        real_shred = sandbox.shred_file
+
+        def spy(path):
+            wiped.append(Path(path).name)
+            real_shred(path)
+
+        with mock.patch.object(sandbox, "shred_file", side_effect=spy):
+            self.make(host).destroy(SandboxHandle(name, "hyperv", ""))
+        self.assertIn(sandbox.HOST_KEY_FILE, wiped)
+        self.assertFalse(staging.exists())
+        self.assertEqual(self.secret_files(host), [])
+
+    def test_the_seed_disk_is_overwritten_with_zeros_before_it_is_deleted(self):
+        name = "szsandbox-7-s000-abcdef"
+        script = sandbox.release_seed_script(name, seed_disk_path(BASE, name))
+        self.assertLess(script.index("Remove-VMHardDiskDrive"), script.index("[System.IO.File]::OpenWrite("))
+        self.assertLess(script.index("[System.IO.File]::OpenWrite("), script.index("Remove-Item -LiteralPath"))
+        self.assertIn("New-Object byte[] 1048576", script)
+        self.assertIn("$stream.Dispose()", script)
+        self.assertTrue(script.isascii())
+
+    def test_destroy_overwrites_the_seed_disk_after_the_vm_is_removed_and_before_the_deletes(self):
+        name = "szsandbox-7-s000-abcdef"
+        script = sandbox.destroy_script(name, child_disk_path(BASE, name), seed_disk_path(BASE, name))
+        self.assertLess(script.index("Remove-VM -Name"), script.index("[System.IO.File]::OpenWrite("))
+        self.assertLess(script.index("[System.IO.File]::OpenWrite("), script.index("foreach ($disk in"))
+        self.assertIn(f"[System.IO.File]::OpenWrite({ps_quote(str(seed_disk_path(BASE, name)))})", script)
+        self.assertNotIn(ps_quote(BASE), script)
+        self.assertTrue(script.isascii())
 
 
 class PrivateVlanTest(unittest.TestCase):
@@ -754,11 +903,25 @@ class PrivateVlanTest(unittest.TestCase):
                 with self.assertRaises(SandboxError):
                     check_vm_vlan(text)
 
-    def test_the_vlan_is_read_back_after_the_start_and_a_wrong_one_destroys_the_vm(self):
+    def test_the_vlan_is_read_back_before_the_start_and_a_wrong_one_destroys_the_vm_unstarted(self):
         host = FakeHost(vlan=self.GOOD.replace('"Isolated"', '"Promiscuous"'))
         with self.assertRaises(SandboxError):
             hyperv(host).create(7)
-        self.assertLess(host.index("ps", "Start-VM -Name"), host.index("ps", "Get-VMNetworkAdapterVlan -VMName"))
+        self.assertEqual(host.sent("Start-VM -Name"), [], "the VM is never started")
+        self.assertLess(host.index("ps", "-DhcpGuard On"), host.index("ps", "Get-VMNetworkAdapterVlan -VMName"))
+        self.assertEqual(host.remote, [], "the guest is never contacted")
+        self.assertTrue(host.sent("Remove-VM -Name"), "the VM is removed")
+
+    def test_the_vlan_is_checked_again_after_the_start_and_a_wrong_one_destroys_the_vm(self):
+        host = FakeHost(vlan_after_start=self.GOOD.replace('"Isolated"', '"Promiscuous"'))
+        with self.assertRaises(SandboxError):
+            hyperv(host).create(7)
+        checks = [i for i, (kind, body) in enumerate(host.events)
+                  if kind == "ps" and "Get-VMNetworkAdapterVlan -VMName" in body]
+        start = host.index("ps", "Start-VM -Name")
+        self.assertEqual(len(checks), 2, "one read-back before the start, one after it")
+        self.assertLess(checks[0], start)
+        self.assertLess(start, checks[1])
         self.assertEqual(host.remote, [], "the guest is never contacted")
         self.assertTrue(host.sent("Remove-VM -Name"), "the VM is removed")
 
@@ -1049,7 +1212,7 @@ class MigrationTest(unittest.TestCase):
         db = Database(self.tmp / "new.db")
         with db.connect() as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS))
-            self.assertEqual(len(MIGRATIONS), 14)
+            self.assertEqual(len(MIGRATIONS), 15)
             columns = [row["name"] for row in conn.execute("PRAGMA table_info(sandbox_sessions)")]
             self.assertEqual(columns, ["id", "code_session_id", "backend", "name", "state", "created_at", "expires_at",
                                        "destroyed_at", "note"])
@@ -1073,7 +1236,7 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(db.get_kv("keep"), "me")
         self.assertIsNotNone(db.one("SELECT name FROM sqlite_master WHERE name = 'sandbox_sessions'"))
         with db.connect() as conn:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 14)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 15)
 
 
 # --------------------------------------------------------------------------- settings
@@ -1852,6 +2015,59 @@ class SandboxProxyWiringTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- the administrator's setup script
+class SessionLockTableTest(unittest.TestCase):
+    """The table of per-session locks forgets a session's lock once its sandbox is destroyed, and keeps a lock that is
+    still in use until it is released."""
+
+    def setUp(self):
+        self.h = Harness(code_sandbox="fake", sandbox_min_free_gb=0, sandbox_max_sessions=50)
+        self.db = self.h.services.db
+        self.manager = self.h.services.sandboxes
+        self.owner = self.h.login(MENTOR).user["id"]
+
+    def tearDown(self):
+        self.h.close()
+
+    def make_sandbox_session(self) -> int:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.db.transaction() as conn:
+            session = conn.execute("INSERT INTO code_sessions (title, task, status, model, repo, created_by, "
+                                   "created_at, updated_at) VALUES ('t', 't', 'running', 'anthropic/x', 'team/robot', "
+                                   "?, ?, ?)", (self.owner, now, now)).lastrowid
+        self.manager.create_for_session(session, actor_id=self.owner)
+        return session
+
+    def test_a_destroyed_sandboxs_session_lock_is_dropped(self):
+        session = self.make_sandbox_session()
+        with self.manager.session_lock(session):
+            pass
+        self.assertIn(session, self.manager._session_locks)
+        self.manager.destroy_for_session(session, reason="test")
+        self.assertNotIn(session, self.manager._session_locks)
+
+    def test_a_lock_in_use_is_kept_until_it_is_released(self):
+        session = self.make_sandbox_session()
+        with self.manager.session_lock(session):
+            self.manager.destroy_for_session(session, reason="test")
+            self.assertIn(session, self.manager._session_locks, "still held, so it stays")
+        self.manager._forget_session_lock(session)
+        self.assertNotIn(session, self.manager._session_locks)
+
+    def test_many_finished_sessions_leave_no_entries(self):
+        for _ in range(30):
+            session = self.make_sandbox_session()
+            with self.manager.session_lock(session):
+                pass
+            self.manager.destroy_for_session(session, reason="test")
+        self.assertEqual(self.manager._session_locks, {})
+
+    def test_the_lock_is_reentrant_for_one_session_and_counts_its_users(self):
+        with self.manager.session_lock(41):
+            with self.manager.session_lock(41):
+                self.assertEqual(self.manager._session_locks[41][1], 2)
+        self.assertEqual(self.manager._session_locks[41][1], 0)
+
+
 class SandboxNetworkScriptTest(unittest.TestCase):
     SCRIPT = Path(__file__).resolve().parent.parent / "packaging" / "windows" / "scripts" / "sandbox-network.ps1"
 

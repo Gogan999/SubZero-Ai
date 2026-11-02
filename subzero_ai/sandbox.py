@@ -39,7 +39,8 @@ import threading
 import time
 import zipfile
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,6 +58,7 @@ OFF_VALUES = ("", "off")  # code_sandbox values that keep Code commands on this 
 MAX_OUTPUT_CHARS = 20_000  # the end of a command's output that goes back to Claude
 REAP_SECONDS = 5  # after a command exits, how long its output may stay open (a background child process)
 STALE_CREATING = timedelta(minutes=30)  # a sandbox still "being made" after this long was left by a crash
+EXTEND_LIMIT = timedelta(days=7)  # a sandbox can be extended by mentors, but never lives longer than this
 MAX_SLOTS = 200  # sandboxes get a numbered slot; the slot picks the guest's static address
 GUEST_ADDRESS = "10.77.0.{}"
 GUEST_FIRST_SLOT_HOST = 10  # 10.77.0.10 is the first guest address; .1 is the host's
@@ -165,6 +167,17 @@ def guest_address(slot: int) -> str:
     if not 0 <= slot < MAX_SLOTS:
         raise SandboxError("That sandbox slot doesn't exist.")
     return GUEST_ADDRESS.format(GUEST_FIRST_SLOT_HOST + slot)
+
+
+def sandbox_address(name: str) -> str | None:
+    """The address that belongs to a sandbox name: its slot's static address, which the VM's MAC and network config
+    are set from. None for anything that isn't a sandbox name with a slot (the egress proxy refuses those)."""
+    try:
+        check_name(name)
+    except SandboxError:
+        return None
+    slot = slot_of(name)
+    return guest_address(slot) if slot is not None and 0 <= slot < MAX_SLOTS else None
 
 
 def safe_rel(rel: str) -> str:
@@ -511,7 +524,8 @@ def isolation_script(name: str, slot: int) -> str:
     (docs/CODE_SANDBOX_PLAN.md). Last, the adapter goes into the private VLAN pair (100 primary, 200 secondary, isolated
     mode). ACLs don't stop non-IP frames, so the VLAN is what keeps one sandbox's frames away from another's. The
     host's adapter is promiscuous on the same pair (sandbox-network.ps1 Install). Measured on the mini PC, see
-    docs/CODE_SANDBOX_PLAN.md (M3b). The VLAN mode is read back after the VM starts (check_vm_vlan)."""
+    docs/CODE_SANDBOX_PLAN.md (M3b). The VLAN mode is read back before the VM starts and again after it starts
+    (check_vm_vlan, in HyperVSandbox._make)."""
     vm = ps_quote(check_name(name))
     host = ps_quote(f"{HOST_ADDRESS}/32")
     subnet = ps_quote(GUEST_SUBNET)
@@ -560,7 +574,8 @@ def destroy_script(name: str, child: Path, seed: Path) -> str:
     """Turn the VM off, remove it, and delete its child disk and its seed disk (if one was left). Safe to run twice.
     The base disk is never named."""
     vm = ps_quote(check_name(name))
-    disks = f"@({ps_quote(check_path(child))}, {ps_quote(check_path(seed))})"
+    seed_disk = ps_quote(check_path(seed))
+    disks = f"@({ps_quote(check_path(child))}, {seed_disk})"
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
         f"$vm = Get-VM -Name {vm} -ErrorAction SilentlyContinue",
@@ -568,6 +583,7 @@ def destroy_script(name: str, child: Path, seed: Path) -> str:
         "  if ($vm.State -ne 'Off') { Stop-VM -Name " + vm + " -TurnOff -Force }",
         f"  Remove-VM -Name {vm} -Force",
         "}",
+        *wipe_file_lines(seed_disk),  # the seed may hold a copy of the host's private key; the VM no longer uses it
         f"foreach ($disk in {disks}) {{ if (Test-Path -LiteralPath $disk) {{ "
         "Remove-Item -LiteralPath $disk -Force } }",
     ])
@@ -657,13 +673,38 @@ def attach_seed_script(name: str, seed: Path) -> str:
                       f"Add-VMHardDiskDrive -VMName {ps_quote(check_name(name))} -Path {ps_quote(check_path(seed))}"])
 
 
+def wipe_file_lines(disk: str) -> list[str]:
+    """PowerShell lines that overwrite a file with zeros, best effort (a file that is locked or can't be opened is
+    left to the delete that follows), and do nothing when it is missing. `disk` is the quoted path."""
+    return [
+        f"if (Test-Path -LiteralPath {disk}) {{",
+        "  try {",
+        f"    $stream = [System.IO.File]::OpenWrite({disk})",
+        "    try {",
+        "      $zeros = New-Object byte[] 1048576",
+        "      $left = $stream.Length",
+        "      $stream.Position = 0",
+        "      while ($left -gt 0) {",
+        "        $n = [int][Math]::Min([long]$zeros.Length, $left)",
+        "        $stream.Write($zeros, 0, $n)",
+        "        $left -= $n",
+        "      }",
+        "      $stream.Flush()",
+        "    } finally { $stream.Dispose() }",
+        "  } catch { }",
+        "}",
+    ]
+
+
 def release_seed_script(name: str, seed: Path) -> str:
-    """Detach the seed disk from the VM and delete it. Safe to run twice."""
+    """Detach the seed disk from the VM, overwrite the seed file with zeros (best effort: it holds a copy of the host's
+    private key, in its user-data), then delete it. Safe to run twice."""
     vm = ps_quote(check_name(name))
     disk = ps_quote(check_path(seed))
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
         f"Get-VMHardDiskDrive -VMName {vm} | Where-Object {{ $_.Path -eq {disk} }} | Remove-VMHardDiskDrive",
+        *wipe_file_lines(disk),
         f"if (Test-Path -LiteralPath {disk}) {{ Remove-Item -LiteralPath {disk} -Force }}",
     ])
 
@@ -1180,7 +1221,8 @@ class HyperVSandbox:
     Its public half is written to the sandbox's own known_hosts file. Its private half goes to the guest on a NoCloud
     seed disk, with the app's client public key for the guest user. The seed is attached before the VM starts. Once SSH
     answers (with strict host key checking, so the pinned key must be the one in use), cloud-init is allowed to finish
-    reading the seed, then the seed is detached and deleted and the host's copy of the private key is shredded.
+    reading the seed, then the seed is detached and deleted, and the host's copies of the private key (the staged host
+    key and the seed's user-data) are overwritten with zeros and deleted.
     Destroy deletes whatever is left: the VM, its disks, the seed, the staged files and the known_hosts file.
 
     The runners are injected: run_powershell(script) -> output text; run_keygen(argv) makes a key pair (ssh-keygen);
@@ -1325,12 +1367,29 @@ class HyperVSandbox:
             self.sleep(3)
 
     def _release_seed(self, name: str) -> None:
-        """Once the guest is up: detach the seed disk and delete it, then shred the host's private key and delete the
-        staged files. The known_hosts file stays, since every later connection checks it."""
-        self._ps(release_seed_script(name, self._seed(name)))
-        key = self._staging(name) / HOST_KEY_FILE
-        shred_file(key)
+        """Once the guest is up: detach the seed disk and delete it, then wipe the host's copies of the private key (the
+        staged host key and the seed's user-data) and delete the staged files. The known_hosts file stays, since every
+        later connection checks it."""
+        try:
+            self._ps(release_seed_script(name, self._seed(name)))
+        finally:
+            self._wipe_staged_keys(name)  # the copies go even if the seed disk couldn't be deleted
         self._remove_staging(name)
+
+    def _wipe_staged_keys(self, name: str) -> None:
+        """Overwrite with zeros, then delete, each staged file that holds a copy of the host's private key. Best effort:
+        a file that can't be overwritten is still deleted, and one that can't be deleted is left for _remove_staging,
+        which reports it."""
+        staging = self._staging(name)
+        for path in (staging / HOST_KEY_FILE, staging / "user-data"):
+            try:
+                shred_file(path)
+            except (SandboxError, OSError):
+                log.warning("Couldn't overwrite a staged sandbox file before deleting it", exc_info=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    log.warning("Couldn't delete a staged sandbox file yet", exc_info=True)
 
     def _remove_staging(self, name: str) -> None:
         folder = self._staging(name)
@@ -1345,7 +1404,8 @@ class HyperVSandbox:
             self._ps(destroy_script(name, self._child(name), self._seed(name)))
         finally:
             try:
-                self._remove_staging(name)  # the staged files hold a private key: removed even if the VM didn't go
+                self._wipe_staged_keys(name)  # the staged files hold a private key: wiped even if the VM didn't go
+                self._remove_staging(name)
             finally:
                 Path(self._known_hosts(name)).unlink(missing_ok=True)
 
@@ -1384,10 +1444,11 @@ class HyperVSandbox:
             self._ps(new_vm_script(name, child, self.switch, self.memory_mb, self.cpus, self.vm_dir))
             self._ps(isolation_script(name, slot))
             check_adapters(self._ps(adapters_script(name)), self.switch)
+            check_vm_vlan(self._ps(vm_vlan_script(name)))  # before the start: a wrong VLAN destroys the VM unstarted
             self._ps(seed_disk_script(seed, self._staging(name)))
             self._ps(attach_seed_script(name, seed))
             self._ps(start_script(name))
-            check_vm_vlan(self._ps(vm_vlan_script(name)))  # after the start, as the read-back is of the running VM
+            check_vm_vlan(self._ps(vm_vlan_script(name)))  # and again after the start, the read-back of the running VM
             self._wait_ready(name)
             self._ssh(name, CLOUD_INIT_WAIT, timeout=180)
             self._release_seed(name)
@@ -1566,7 +1627,7 @@ class SandboxManager:
         self.tokens = tokens or TokenStore()  # the proxy checks these; the proxy itself shares this store
         self.egress = egress  # the proxy, started by the app for Hyper-V sandboxes (None in tests that don't need it)
         self._backends: dict[str, tuple[tuple, SandboxBackend]] = {}
-        self._session_locks: dict[int, threading.RLock] = {}
+        self._session_locks: dict[int, list] = {}  # code session -> [RLock, threads inside or waiting]
         self._state_lock = threading.Lock()  # guards _backends and _session_locks only
         # Proxy tokens, in memory only. _secrets holds each running sandbox's token; _recent keeps the last few, so
         # output from a command still running when its sandbox was deleted is redacted too.
@@ -1591,11 +1652,28 @@ class SandboxManager:
                 self._backends[kind] = cached
             return cached[1]
 
-    def session_lock(self, code_session_id: int) -> threading.RLock:
+    @contextmanager
+    def session_lock(self, code_session_id: int) -> Iterator[None]:
         """Serializes the sandbox work of one Code session (making its sandbox and copying the repository in), so two
-        commands can't each make one. Other sessions are not held up by it."""
+        commands can't each make one. Other sessions are not held up by it. The entry counts the threads inside or
+        waiting, so _forget_session_lock never drops a lock that is in use."""
         with self._state_lock:
-            return self._session_locks.setdefault(code_session_id, threading.RLock())
+            entry = self._session_locks.setdefault(code_session_id, [threading.RLock(), 0])
+            entry[1] += 1
+        try:
+            with entry[0]:
+                yield
+        finally:
+            with self._state_lock:
+                entry[1] -= 1
+
+    def _forget_session_lock(self, code_session_id: int) -> None:
+        """Drop a Code session's lock entry once its sandbox is gone, so the table doesn't grow with every session.
+        A lock still in use is kept, and a later session_lock call makes a new one."""
+        with self._state_lock:
+            entry = self._session_locks.get(code_session_id)
+            if entry is not None and entry[1] == 0:
+                del self._session_locks[code_session_id]
 
     def kinds_in_use(self) -> set[str]:
         kinds = self.store.kinds_in_use()
@@ -1749,8 +1827,30 @@ class SandboxManager:
                 self.store.update(row["id"], state="failed", note=message[:300])
                 raise SandboxError(f"The sandbox couldn't be deleted: {message}") from exc
             self.store.update(row["id"], state="destroyed", destroyed_at=utcnow(), note=reason[:300])
+            self._forget_session_lock(row["code_session_id"])
             self.db.audit("sandbox_destroyed", actor_id=actor_id, target_type="sandbox", target_id=row["id"],
                           details={"name": row["name"], "backend": row["backend"], "reason": reason})
+
+    def extend_for_session(self, code_session_id: int, *, actor_id: int | None) -> str:
+        """Give the session's running sandbox another sandbox_ttl_hours, up to EXTEND_LIMIT after it was made. Its
+        proxy token expires at the same time. Returns the new expiry (ISO text)."""
+        with self.lock:
+            row = self.live_for_session(code_session_id)
+            if row is None:
+                raise SandboxError("There's no sandbox to extend.")
+            now = datetime.now(timezone.utc)
+            expires = datetime.fromisoformat(row["expires_at"])
+            cap = datetime.fromisoformat(row["created_at"]) + EXTEND_LIMIT
+            new = min(max(expires, now) + timedelta(hours=self.settings.sandbox_ttl_hours), cap)
+            if new <= expires:
+                raise SandboxError("This sandbox has reached its longest time, so it can't be extended. Its files "
+                                   "are deleted when it ends.")
+            stamp = new.isoformat(timespec="seconds")
+            self.store.update(row["id"], expires_at=stamp)
+            self.tokens.extend(row["name"], new)
+            self.db.audit("sandbox_extended", actor_id=actor_id, target_type="sandbox", target_id=row["id"],
+                          details={"name": row["name"], "expires_at": stamp})
+            return stamp
 
     def destroy_for_session(self, code_session_id: int, *, reason: str,
                             before: Callable[[SandboxHandle], None] | None = None) -> bool:

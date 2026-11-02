@@ -173,6 +173,24 @@ measuring. Another option if demand grows: run sessions on a second small machin
   Guest output is streamed into a bounded tail and archives are capped, so a guest cannot fill the host's memory or
   disk.
 
+### Base image signature check (Build)
+
+Build checks the release's `SHA256SUMS` against the Ubuntu cloud image signing key (`SHA256SUMS.gpg`) before it
+downloads the 30 GB image. It needs `gpg.exe` (Gpg4win). Without it, Build says the check was skipped, and the SHA-256
+check of the image still runs. The key ID is `1A5D6C4C7DB87C81`, and the fingerprint is pinned in
+`sandbox-image.ps1` as `D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81`. **Re-check that fingerprint against
+https://ubuntu.com/tutorials/how-to-verify-ubuntu before the first import, and again whenever the script changes.**
+
+An administrator imports the key once, as the admin account that runs Build:
+
+```
+gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 0xD2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81
+gpg --fingerprint 1A5D6C4C7DB87C81
+```
+
+The fingerprint that the second command prints must match the pinned one. The script itself never calls a keyserver;
+it refuses to continue when the key is missing from the keyring. Use `-VerifySignature:$false` only for a test.
+
 ### M3b results (measured on the mini PC)
 
 - **ACLs do not stop non-IP frames** between two sandbox adapters on the same switch, so the private VLAN (100 with
@@ -236,6 +254,21 @@ must make every one of those harmless:
 - **Blast radius:** one session per distro or VM; a session is deleted on abuse detection, not just at 48 hours.
 - **Visibility:** every command is still logged and audited (`db.audit`), and mentors can watch live, stop or delete a
   session. Free rein means no click-to-approve, not no oversight.
+
+## Known limits
+
+- **Uploads as well as downloads.** The egress proxy allows the sites on the allow-list (github.com and pypi.org by
+  default) in both directions. The allow-list limits where data can go, not which way it goes: a command in a sandbox
+  can still send data to a listed site, for example by uploading it with a request.
+- **No WSL fallback.** The WSL sandbox in section 2 is not built. Only Hyper-V sandboxes exist, so a computer without
+  Hyper-V gets no sandboxes.
+- **GRUB loop picks the last kernel alphabetically.** The boot menu's loops keep the last `/vmlinuz-*` and
+  `/initrd.img-*` match in alphabetical order, which is the newest kernel only while the version numbers have the same
+  length. Check the boot menu after each new base image.
+- **`ci.ds=NoCloud` is untested in its other form.** Build writes `ci.ds=NoCloud`, the form the image was tested with.
+  cloud-init 23.2 and later warn about this form of the kernel argument. The lowercase `ds=nocloud` form has not been
+  tested, so it is not used. Re-test the seed (a sandbox must start, read its seed and reach SSH) with each new Ubuntu
+  release before accepting its boot menu.
 
 ## 3. Mentor-only model and provider dropdown when creating a chat
 
@@ -321,9 +354,46 @@ Do it in order, and stop after each milestone for Logan to look:
     proxy (confirm the JDK's Basic login for the tunnel works with the override), a refused name, and a token revoked at
     destroy. Also decide whether the proxy login should stay in the `ssh` command line on the host (it is visible to
     local processes running as admin, though not to the sandbox). It is not in the audit log, the log or the output.
-- **M6 Wider tools and student access (about 3 days).** Add shell, git, toolchains, read-only repo connector; student
-  start with mentor approval of the request; free-rein commands for students; session list and "ends in 41
-  hours" notice; patch export before deletion.
+- **M6 Wider tools and student access (about 3 days). Built 2026-11-02, offline (tests use the fake sandbox and the
+  scripted Claude); not run on the mini PC.** What is in place:
+  - Settings (Code section, `docs/SETTINGS.md`): `code_student_access` (off), `code_student_free_rein` (on),
+    `code_mentor_free_rein` (off), `code_sandbox_commands`, `code_student_max_open` (1), `code_student_daily_sessions`
+    (3), `code_student_max_turns` (40) and `code_student_command_timeout` (600). Students need `code_sandbox` set to
+    hyperv (or fake, for tests); the Settings page refuses to switch students on otherwise.
+  - Migration 15: `code_sessions` gets `owner_is_student`, `start_approved_by`, `start_approved_at`, `screen_note`,
+    `free_rein` and `patch_released`, and the status `awaiting_approval`. The table is rebuilt because SQLite can't change
+    a CHECK constraint, so `migrate()` now turns foreign keys off while migrating. Index `idx_code_sessions_owner`.
+  - Flow: a student's request creates a session in `awaiting_approval`, with no sandbox and no copy of the repository.
+    A mentor sees it under Student requests on the Code page and in the Review queue, and a plain line goes to the
+    approvals channel (no buttons, so approval still happens on the site). Approve makes the sandbox and starts
+    Claude. Decline stops it, and the note is shown to the student.
+  - Free rein: inside a student's sandbox, file changes and commands run without a click. Mentors' sandboxed sessions
+    keep the clicks unless `code_mentor_free_rein` is on. If the sandbox is turned off during a session that needs it,
+    the session stops rather than running on the mini PC.
+  - Only a mentor can release the patch (`Release to student`). Until then the student sees that a mentor is looking,
+    and the download is refused. Students get no zip and no write token. The GitHub read-only download is the only
+    connector, as before.
+  - Students see only their own sessions (other sessions answer 404). Step output is cut to 6,000 characters for them.
+  - Mentors can stop, delete (which deletes the sandbox and the copies), and extend the sandbox's time limit. Extending
+    adds `sandbox_ttl_hours` again, up to 7 days from when the sandbox was made. The proxy token's expiry moves with it.
+  - Students see how long their workspace lasts ("This workspace is deleted in N hours").
+  - Claude's instructions say which setting applies: in a sandbox, it is told it is in a disposable Linux computer, that
+    it may install packages through the proxy's allow-list, and that other sites are out of reach.
+  - Audit: every transition listed in `docs/SETTINGS.md`.
+
+  Judgement calls for Logan to check:
+  - A student's follow-up in a session also waits for a mentor (one pending note, sent to Claude only when approved).
+    This is how "nothing a student asks of Claude starts without approval" was read.
+  - The screener (`Screener.check`) runs on a student's request and follow-up. A flag is a note for the mentor and never
+    starts or skips anything. Code's system prompt does not include the `safety.md` layer that chats use. Not added yet.
+  - `code_sandbox_commands` is a new setting. Without it Claude could not run `pip` or `npm` inside a sandbox, which
+    the "install packages through the proxy" rule needs. The build-file rule still applies in sandboxes.
+  - The daily limit counts requests (new sessions and follow-ups) from the audit log, so a declined request counts.
+  - Extension cap: 7 days from creation (D5 is still open: who may extend past 48 hours).
+
+  Still open: a real student run on the mini PC (the guest's `python3` and `pip` come from the base image, which is
+  still a TODO in `sandbox.py`); the screener's verdict on a real model; a patch zip for students (only the patch is
+  offered).
 
 ## Risks
 
@@ -352,4 +422,5 @@ Do it in order, and stop after each milestone for Logan to look:
 - **D3.** Is it fine to run the service, or a small sandbox helper, under a dedicated local user if M3 shows we need it?
 - **D4.** Which tools first for students: read-only repo browsing and a shell, or also package installs and web access?
 - **D5.** Should a student's Code session need a mentor to approve the starting request (recommended), and who may
-  extend a session past 48 hours?
+  extend a session past 48 hours? Built 2026-11-02: approval is required (for the start and for follow-ups); mentors
+  may extend up to 7 days from creation. Logan to confirm the extension cap.

@@ -70,6 +70,7 @@ MESSAGES = {
     "ip": "Use a website name, not an IP address. That isn't allowed.",
     "name": "That address isn't allowed.",
     "list": "That website isn't on the team's allowed list.",
+    "sandbox": "This connection didn't come from its sandbox, so it was refused.",
     "private": "That address points at this computer or a private network, which sandboxes can't reach.",
     "allowance": "This sandbox has used up its internet allowance. Ask a mentor to start a new Code session.",
     "busy_sandbox": "This sandbox has too many connections open at once. Wait for some to finish, then try again.",
@@ -154,6 +155,27 @@ def _normal_address(text: str) -> str | None:
         return None
 
 
+def _peer_address(writer: asyncio.StreamWriter) -> str | None:
+    """The address a connection came from, as a plain IP (an IPv4-mapped IPv6 address is unwrapped), or None."""
+    peer = writer.get_extra_info("peername")
+    if not peer:
+        return None
+    try:
+        ip = ipaddress.ip_address(str(peer[0]).split("%", 1)[0])
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return str(ip)
+
+
+def _default_address_for(name: str) -> str | None:
+    """The address a sandbox name belongs to (sandbox.py: its slot's static address on the internal switch)."""
+    from .sandbox import sandbox_address  # imported here: sandbox.py imports this module
+
+    return sandbox_address(name)
+
+
 def this_computer_addresses(extra: Iterable[str] = ()) -> frozenset[str]:
     """This computer's own addresses, so a name that resolves to one of them is refused."""
     found: set[str] = set()
@@ -198,6 +220,15 @@ class TokenStore:
     def revoke(self, name: str) -> None:
         with self._lock:
             self._entries.pop(name, None)
+
+    def extend(self, name: str, expires_at: datetime) -> bool:
+        """Move a sandbox's token expiry later, keeping the same token. False if the sandbox has no token."""
+        with self._lock:
+            entry = self._entries.get(name)
+            if entry is None:
+                return False
+            self._entries[name] = _Entry(entry.digest, expires_at)
+            return True
 
     def active(self, name: str) -> bool:
         with self._lock:
@@ -290,7 +321,8 @@ class EgressProxy:
                  local_addresses: Iterable[str] | None = None, head_seconds: float = HEAD_SECONDS,
                  resolve_seconds: float = RESOLVE_SECONDS, connect_seconds: float = CONNECT_SECONDS,
                  idle_seconds: float = IDLE_SECONDS, clock: Callable[[], float] = time.monotonic,
-                 config_error: str = "", settings: Settings | None = None):
+                 config_error: str = "", settings: Settings | None = None,
+                 address_for: Callable[[str], str | None] | None = None):
         self.tokens = tokens
         self.db = db
         self.host = host
@@ -319,10 +351,16 @@ class EgressProxy:
         self._server: asyncio.Server | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._local: frozenset[str] = frozenset()
+        # The address a sandbox name belongs to. A connection must come from exactly that address; None (no address
+        # for the name) refuses it, so the proxy fails closed.
+        self._address_for = address_for or _default_address_for
         self._handlers: set[asyncio.Task[Any]] = set()
         self._tunnels: dict[str, set[_Tunnel]] = {}
         self._active: dict[str, int] = {}  # open tunnels per sandbox
         self._total = 0
+        # _usage and _blocked_at are read on the loop thread and also cut off from close_sandbox (any thread), so
+        # every access to either dict holds _state_lock. It is never held across an await.
+        self._state_lock = threading.Lock()
         self._usage: dict[str, _Usage] = {}
         self._blocked_at: dict[tuple[str, str], float] = {}
 
@@ -406,18 +444,22 @@ class EgressProxy:
         thread; it does not wait for the tunnels to close."""
         loop = self._loop
         if loop is None or not self.running:
-            self._usage.pop(name, None)
+            self._forget_usage(name)
             return
         try:
             loop.call_soon_threadsafe(self._drop, name)
         except RuntimeError:  # the loop has closed, so nothing is open
+            self._forget_usage(name)
+
+    def _forget_usage(self, name: str) -> None:
+        with self._state_lock:
             self._usage.pop(name, None)
 
     def _drop(self, name: str) -> None:
         for tunnel in list(self._tunnels.get(name, ())):
             tunnel.reason = tunnel.reason or "revoked"
             tunnel.abort()
-        self._usage.pop(name, None)
+        self._forget_usage(name)
 
     # ---- one client
     async def _on_connect(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -477,6 +519,9 @@ class EgressProxy:
             await self._reply(writer, 400, MESSAGES["bad"])
             return
         host, port = parsed
+        if not self._from_sandbox(name, writer):
+            await self._refuse(writer, name, host, "wrong-address", 403, MESSAGES["sandbox"])
+            return
         rules, ports, byte_limit, per_sandbox_limit = self._policy()
         if port not in ports:
             listed = ", ".join(str(p) for p in ports) or "none"
@@ -491,7 +536,9 @@ class EgressProxy:
         if not host_allowed(host, rules):
             await self._refuse(writer, name, host, "not-allowed", 403, MESSAGES["list"])
             return
-        if self._usage.get(name, _Usage()).bytes >= byte_limit:
+        with self._state_lock:
+            used = self._usage.get(name, _Usage()).bytes
+        if used >= byte_limit:
             await self._reply(writer, 403, MESSAGES["allowance"])
             return
         reason = self._acquire(name, per_sandbox_limit)
@@ -532,7 +579,8 @@ class EgressProxy:
             up_writer.transport.abort()
             await self._reply_login(writer)
             return
-        usage = self._usage.setdefault(name, _Usage())
+        with self._state_lock:
+            usage = self._usage.setdefault(name, _Usage())
         tunnel = _Tunnel(name, host, writer, up_writer)
         self._tunnels.setdefault(name, set()).add(tunnel)
         try:
@@ -618,17 +666,30 @@ class EgressProxy:
         self._audit_blocked(name, host, reason)
         await self._reply(writer, status, text)
 
+    def _from_sandbox(self, name: str, writer: asyncio.StreamWriter) -> bool:
+        """True only when the connection comes from the address that belongs to this sandbox name. Fails closed: no
+        address for the name, a name that isn't an address, or no peer address is a refusal."""
+        actual = _peer_address(writer)
+        try:
+            expected = self._address_for(name)
+        except Exception:
+            log.warning("Couldn't work out the address of sandbox %s", name, exc_info=True)
+            return False
+        wanted = _normal_address(expected) if expected else None
+        return actual is not None and wanted is not None and actual == wanted
+
     def _audit_blocked(self, name: str, host: str, reason: str) -> None:
         """One audit row per sandbox and host each minute, so a loop of refused requests can't flood the log."""
         clean = _clean_for_log(host)
         key = (name, clean)
         now = self.clock()
-        last = self._blocked_at.get(key)
-        if last is not None and now - last < BLOCK_AUDIT_SECONDS:
-            return
-        if len(self._blocked_at) > 1000:
-            self._blocked_at.clear()
-        self._blocked_at[key] = now
+        with self._state_lock:
+            last = self._blocked_at.get(key)
+            if last is not None and now - last < BLOCK_AUDIT_SECONDS:
+                return
+            if len(self._blocked_at) > 1000:
+                self._blocked_at.clear()
+            self._blocked_at[key] = now
         log.info("Sandbox %s: refused a connection to %s (%s)", name, clean, reason)
         if self.db is None:
             return

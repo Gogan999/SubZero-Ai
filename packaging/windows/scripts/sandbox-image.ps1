@@ -4,13 +4,17 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\sandbox-image.ps1 -Action Build -ReleaseDate 20261015
 #   powershell -ExecutionPolicy Bypass -File scripts\sandbox-image.ps1 -Action Check
 #   powershell -ExecutionPolicy Bypass -File scripts\sandbox-image.ps1 -Action Remove
-# Build: downloads the Ubuntu 24.04 (noble) Azure cloud image for one dated release, checks its SHA-256 against that
-# release's SHA256SUMS, converts it to a dynamic VHDX, makes it read-only, and sets its boot menu so cloud-init reads
+# Build: downloads the Ubuntu 24.04 (noble) Azure cloud image for one dated release, checks the release's SHA256SUMS
+# against the Ubuntu cloud image key (SHA256SUMS.gpg, when gpg.exe is installed), checks the image's SHA-256 against
+# SHA256SUMS, converts it to a dynamic VHDX, makes it read-only, and sets its boot menu so cloud-init reads
 # the sandbox's seed (ci.ds=NoCloud). It needs 45 GB free: the raw disk image is 30 GB while it is converted. Build
 # refuses to overwrite an existing base disk, and removes a partial one if anything fails before it is read-only.
-# Check: changes nothing. Remove: deletes only the base disk, and only when no VM disk uses it as its parent.
-# Only the file named by -ParentName, inside -Folder, is ever written or deleted. The folder must be inside
-# the SubZero AI data folder's sandbox folder, which Build creates.
+# Build saves the finished disk's SHA-256 in sandbox-base.vhdx.sha256, next to it.
+# Check: changes nothing. With -Deep it also hashes the base disk (about a minute) and compares the hash with that
+# saved file. Remove: deletes only the base disk and its saved SHA-256 file, and only when no VM disk uses it as its
+# parent.
+# Only the file named by -ParentName, inside -Folder, and its .sha256 file are ever written or deleted. The folder must
+# be inside the SubZero AI data folder's sandbox folder, which Build creates.
 # The release date must be a dated folder (such as 20261015), never "current", so the image never changes under the app.
 
 param(
@@ -18,7 +22,11 @@ param(
     [string]$Action = "Check",
     [string]$ReleaseDate = "",
     [string]$Folder = "C:\ProgramData\SubZeroAI\sandbox\images",
-    [string]$ParentName = "sandbox-base.vhdx"
+    [string]$ParentName = "sandbox-base.vhdx",
+    # On by default. A PowerShell switch can't default to true, so this is a bool: -VerifySignature:$false turns it off.
+    [bool]$VerifySignature = $true,
+    # With -Action Check: also hash the base disk (about a minute) and compare it with the SHA-256 that Build saved.
+    [switch]$Deep
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -31,6 +39,11 @@ $EspType = "{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}"  # the GPT type of the EFI s
 $LinuxFsType = "{0fc63daf-8483-4772-8e79-3d69d8477de4}"  # the GPT type of a Linux filesystem partition (the root)
 $NeedFreeGB = 45
 $SandboxRoot = Join-Path $DataDir "sandbox"
+# The Ubuntu Cloud Image Builder key that signs each release's SHA256SUMS (as SHA256SUMS.gpg). The key ID and the full
+# fingerprint are both pinned, so any other key is refused. THIS MUST BE RE-VERIFIED against
+# https://ubuntu.com/tutorials/how-to-verify-ubuntu before first use. Do that before trusting the signature check.
+$CloudKeyId = "1A5D6C4C7DB87C81"
+$CloudKeyFingerprint = "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"
 
 # Refuses '..' and any folder outside the sandbox folder, so only the sandbox's own files are ever written.
 function Get-SafeFolder([string]$Path) {
@@ -72,6 +85,37 @@ function Get-ExpectedHash([string]$SumsFile, [string]$FileName) {
         }
     }
     throw "The checksum list has no line for $FileName, so the download can't be checked."
+}
+
+# The file Build saves the base disk's SHA-256 in, next to the disk. Check -Deep compares against it.
+function Get-HashPath([string]$Parent) {
+    return "$Parent.sha256"
+}
+
+# The SHA-256 that Build saved for the base disk, in upper case, or "" when there is no usable saved value.
+function Get-SavedHash([string]$Parent) {
+    $path = Get-HashPath $Parent
+    if (-not (Test-Path -LiteralPath $path)) { return "" }
+    $text = [System.IO.File]::ReadAllText($path).Trim()
+    if ($text -notmatch '^[0-9A-Fa-f]{64}$') { return "" }
+    return $text.ToUpper()
+}
+
+# Checks SHA256SUMS against its detached signature, using only the pinned key. The key must already be in gpg's
+# keyring: an administrator imports it once (docs/CODE_SANDBOX_PLAN.md says how). Nothing here calls a keyserver.
+function Assert-SumsSignature([string]$Sums, [string]$Signature, [string]$Gpg) {
+    $listing = @(& $Gpg --batch --with-colons --list-keys $CloudKeyFingerprint 2>$null)
+    if (@($listing | Where-Object { $_ -like "fpr:*:${CloudKeyFingerprint}:*" }).Count -eq 0) {
+        throw ("The Ubuntu cloud image key ($CloudKeyId) isn't in gpg's keyring, so the checksum list can't be " +
+            "checked. Import the key once, as docs/CODE_SANDBOX_PLAN.md describes. The download was not used.")
+    }
+    $status = @(& $Gpg --batch --status-fd 1 --verify $Signature $Sums 2>$null)
+    $good = @($status | Where-Object { $_ -match "^\[GNUPG:\] VALIDSIG .*${CloudKeyFingerprint}" })
+    if ($LASTEXITCODE -ne 0 -or $good.Count -ne 1) {
+        throw ("The checksum list's signature isn't a good signature from the Ubuntu cloud image key, so the " +
+            "download was not used. Run Build again.")
+    }
+    Write-Ok "The checksum list is signed by the Ubuntu cloud image key ($CloudKeyId)."
 }
 
 # The search line from the image's EFI grub.cfg. It points GRUB at the boot partition (ext4, which Windows can't read),
@@ -193,12 +237,28 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     $tar = Join-Path $work $ImageName
     $sums = Join-Path $work "SHA256SUMS"
+    $sig = Join-Path $work "SHA256SUMS.gpg"
     $vhd = Join-Path $work $ImageVhdName
     try {
         Write-Step "Downloading the Ubuntu $ReleaseDate cloud image (this takes a while)"
         & curl.exe -fsSL -o $sums "$ImageRoot/$ReleaseDate/SHA256SUMS"
         if ($LASTEXITCODE -ne 0) {
             throw "Couldn't download the checksum list for release $ReleaseDate. Check the date: it must be a dated folder under $ImageRoot/."
+        }
+        # The signature is checked before the big download. Without gpg.exe the check is skipped, with a note.
+        Write-Step "Checking the checksum list's signature"
+        $gpg = Get-Command gpg.exe -ErrorAction SilentlyContinue
+        if (-not $VerifySignature) {
+            Write-Problem "The signature check is turned off by -VerifySignature, so SHA256SUMS was not checked."
+        } elseif (-not $gpg) {
+            Write-Problem ("gpg.exe isn't installed, so SHA256SUMS.gpg was NOT checked. " +
+                "Install Gpg4win to check the signature.")
+        } else {
+            & curl.exe -fsSL -o $sig "$ImageRoot/$ReleaseDate/SHA256SUMS.gpg"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Couldn't download the checksum list's signature for release $ReleaseDate."
+            }
+            Assert-SumsSignature $sums $sig $gpg.Source
         }
         & curl.exe -fsSL -o $tar "$ImageRoot/$ReleaseDate/$ImageName"
         if ($LASTEXITCODE -ne 0) { throw "Couldn't download the image (curl exit code $LASTEXITCODE)." }
@@ -242,12 +302,13 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
 
     Write-Step "Computing the SHA-256 of the base disk (about a minute)"
     $hash = (Get-FileHash -LiteralPath $Parent -Algorithm SHA256).Hash
+    Set-Content -LiteralPath (Get-HashPath $Parent) -Value $hash -Encoding ASCII
     Write-Ok "Built the base disk: $Parent"
-    Write-Note "SHA-256: $hash"
+    Write-Note "SHA-256: $hash (saved in $(Get-HashPath $Parent) for Check -Deep)"
     Write-Note "Set SANDBOX_BASE_IMAGE=$Parent in config.env, or set Base disk for sandboxes in Settings to that path."
 }
 
-function Show-ImageCheck([string]$Parent) {
+function Show-ImageCheck([string]$Parent, [bool]$Deep) {
     Write-Step "Checking the base disk"
     if (-not (Test-Path -LiteralPath $Parent)) {
         Write-Problem "There is no base disk at $Parent. An administrator can run this script with -Action Build."
@@ -268,6 +329,21 @@ function Show-ImageCheck([string]$Parent) {
         $problems++
     }
     if ($problems -eq 0) { Write-Ok "The base disk is read-only and dynamic." }
+    if ($Deep) {
+        Write-Step "Computing the base disk's SHA-256 and comparing it with the one Build saved (about a minute)"
+        $saved = Get-SavedHash $Parent
+        if (-not $saved) {
+            Write-Problem ("There is no saved SHA-256 for the base disk ($(Get-HashPath $Parent)). " +
+                "Run Build again to save one.")
+            $problems++
+        } elseif ((Get-FileHash -LiteralPath $Parent -Algorithm SHA256).Hash -ne $saved) {
+            Write-Problem ("The base disk's SHA-256 doesn't match the value Build saved, so the disk may have " +
+                "changed. Run Build again.")
+            $problems++
+        } else {
+            Write-Ok "The base disk's SHA-256 matches the value Build saved."
+        }
+    }
     return $problems
 }
 
@@ -297,6 +373,8 @@ function Remove-SandboxImage([string]$Parent) {
         throw "Kept ${Parent}: $($users.Count) VM disk(s) still use it as their base. Delete those sandboxes first, then run Remove again."
     }
     Remove-Item -LiteralPath $Parent -Force
+    # The saved SHA-256 goes with the disk
+    Remove-Item -LiteralPath (Get-HashPath $Parent) -Force -ErrorAction SilentlyContinue
     Write-Ok "Removed $Parent."
 }
 
@@ -313,7 +391,7 @@ try {
         }
         Build-SandboxImage $dir $parent
     }
-    elseif ($Action -eq "Check") { if ((Show-ImageCheck $parent) -gt 0) { $code = 1 } }
+    elseif ($Action -eq "Check") { if ((Show-ImageCheck $parent ([bool]$Deep)) -gt 0) { $code = 1 } }
     elseif ($Action -eq "Remove") { Remove-SandboxImage $parent }
     else { throw "Unknown action $Action." }
 } catch {
