@@ -101,21 +101,74 @@ class SandboxImageScriptTest(unittest.TestCase):
         self.assertIn('$EspType = "{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}"', text)
         self.assertIn("$_.GptType -eq $EspType", text)
         self.assertIn("ci.ds=NoCloud", text)
-        self.assertIn("root=PARTUUID=$($Values.PartUuid) ro console=tty1 console=ttyS0 ci.ds=NoCloud", text)
         self.assertIn("set timeout=0", text)
+        self.assertIn('"set default=0"', text)
         self.assertIn("menuentry 'sandbox' {", text)
-        self.assertIn("linux /$($Values.Kernel)", text)
-        self.assertIn("initrd /$($Values.Initrd)", text)
+        self.assertIn("linux `$sandbox_kernel root=PARTUUID=$PartUuid ro console=tty1 console=ttyS0 "
+                      "ci.ds=NoCloud", text)
+        self.assertIn("'  initrd $sandbox_initrd'", text)
 
-    def test_the_boot_menu_values_are_read_and_a_missing_one_stops_the_step(self):
+    def test_grub_picks_the_kernel_and_initrd_at_boot_with_its_own_loops(self):
+        body = function_body(script_text(), "New-BootMenu")
+        self.assertIn("'for k in /vmlinuz-*; do set sandbox_kernel=$k; done'", body)
+        self.assertIn("'for i in /initrd.img-*; do set sandbox_initrd=$i; done'", body)
+        # The variables are cleared first, so an empty glob leaves nothing from an earlier run in them
+        self.assertIn('"set sandbox_kernel="', body)
+        self.assertIn('"set sandbox_initrd="', body)
+        # The search line comes first, so the root is set before the glob runs
+        self.assertLess(body.index("$SearchLine,"), body.index("for k in /vmlinuz-*"))
+        self.assertLess(body.index("for k in /vmlinuz-*"), body.index("menuentry 'sandbox'"))
+        # Single quotes keep PowerShell from expanding GRUB's $variables; no double-quoted line holds one
+        self.assertNotIn('"$sandbox', body)
+        self.assertNotIn('"  linux $sandbox', body)
+
+    def test_no_kernel_version_or_flavour_is_written_into_the_script(self):
         text = script_text()
-        read = function_body(text, "Read-GrubValues")
+        # The kernel is whatever the boot partition holds at boot; the script never names a version
+        self.assertIsNone(re.search(r"vmlinuz-\d", text))
+        self.assertIsNone(re.search(r"initrd\.img-\d", text))
+        self.assertNotIn("1017", text)
+        self.assertNotIn(r"vmlinuz-\S*azure", text)
+        self.assertNotIn(r"initrd\.img-\S*azure", text)
+        self.assertNotIn("PARTUUID=894056a3", text)
+
+    def test_the_search_line_is_read_and_a_missing_one_stops_the_step(self):
+        text = script_text()
+        read = function_body(text, "Read-SearchLine")
         self.assertIn(r"search\.fs_uuid\s+\S+\s+root", read)
-        self.assertIn(r"vmlinuz-\S*azure", read)
-        self.assertIn(r"initrd\.img-\S*azure", read)
-        self.assertIn("root=PARTUUID=", read)
-        self.assertIn("if ($missing.Count -gt 0)", read)
+        self.assertIn("return $line", read)
+        self.assertIn("has no search.fs_uuid line", read)
+        self.assertIn("The boot menu was left as it was.", read)
         self.assertIn("throw", read)
+        self.assertNotIn("vmlinuz", read)
+        self.assertNotIn("root=PARTUUID", read)
+
+    def test_the_root_partuuid_is_the_largest_linux_partition_from_windows(self):
+        text = script_text()
+        self.assertIn('$LinuxFsType = "{0fc63daf-8483-4772-8e79-3d69d8477de4}"', text)
+        body = function_body(text, "Get-RootPartUuid")
+        self.assertIn("Get-Partition -DiskNumber $DiskNumber", body)
+        self.assertIn("$_.GptType -eq $LinuxFsType", body)
+        self.assertIn("Measure-Object -Property Size -Maximum", body)
+        self.assertIn("$_.Size -eq $biggest", body)
+        # The PARTUUID of a GPT partition is its unique GUID: no braces, lower case, checked against the GUID shape
+        self.assertIn("$top[0].Guid -replace '[{}]', ''", body)
+        self.assertIn("ToLowerInvariant()", body)
+        self.assertIn("'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'", body)
+        # Stops for no candidate and for a tie for the largest size
+        self.assertIn("no Linux filesystem partition", body)
+        self.assertIn("of the same largest size", body)
+        self.assertIn("throw", body)
+
+    def test_the_root_partuuid_and_the_search_line_are_read_before_grub_is_written(self):
+        body = function_body(script_text(), "Set-EspBootMenu")
+        self.assertIn("Read-SearchLine ([System.IO.File]::ReadAllText($grubPath))", body)
+        self.assertIn("Get-RootPartUuid $diskNumber", body)
+        write = body.index("WriteAllText($grubPath")
+        self.assertLess(body.index("Read-SearchLine"), body.index("Copy-Item -LiteralPath $grubPath"))
+        self.assertLess(body.index("Get-RootPartUuid $diskNumber"), body.index("Copy-Item -LiteralPath $grubPath"))
+        self.assertLess(body.index("Copy-Item -LiteralPath $grubPath"), write)
+        self.assertIn("New-BootMenu $searchLine $partUuid", body)
 
     def test_the_grub_file_is_backed_up_and_written_as_utf8_without_bom_and_lf(self):
         text = script_text()
@@ -244,6 +297,13 @@ class SandboxImageDocsTest(unittest.TestCase):
         self.assertIn("never", block.lower())
         self.assertIn("current", block)
 
+    def test_the_block_describes_the_boot_menu_and_its_limit(self):
+        block = self.block()
+        self.assertIn("search.fs_uuid", block)
+        self.assertIn("PARTUUID", block)
+        self.assertIn("alphabetical", block)
+        self.assertNotIn("vmlinuz-7", block)
+
     def test_the_block_is_honest_about_ipv6(self):
         block = self.block()
         self.assertIn("IPv6", block)
@@ -254,3 +314,19 @@ class SandboxImageDocsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PowerShellParsePitfallTest(unittest.TestCase):
+    """`"$name: text"` doesn't parse on PowerShell 5.1 (it reads $name: as a drive reference); use ${name}: instead."""
+
+    def test_no_variable_is_followed_by_a_colon_and_a_space_in_any_script(self):
+        import re
+        from pathlib import Path
+        scripts = Path(__file__).resolve().parent.parent / "packaging" / "windows" / "scripts"
+        pattern = re.compile(r"(?<!\{)\$[A-Za-z_]\w*:(?=[\s\"'.)\]]|$)")
+        bad = []
+        for path in sorted(scripts.glob("*.ps1")):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.search(line):
+                    bad.append(f"{path.name}:{number}: {line.strip()}")
+        self.assertEqual(bad, [], "write ${name}: instead of $name: inside strings")

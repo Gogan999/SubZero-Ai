@@ -28,6 +28,7 @@ $ImageRoot = "https://cloud-images.ubuntu.com/noble"
 $ImageName = "noble-server-cloudimg-amd64-azure.vhd.tar.gz"
 $ImageVhdName = "livecd.ubuntu-cpc.azure.vhd"  # the disk inside the tar
 $EspType = "{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}"  # the GPT type of the EFI system partition
+$LinuxFsType = "{0fc63daf-8483-4772-8e79-3d69d8477de4}"  # the GPT type of a Linux filesystem partition (the root)
 $NeedFreeGB = 45
 $SandboxRoot = Join-Path $DataDir "sandbox"
 
@@ -73,43 +74,55 @@ function Get-ExpectedHash([string]$SumsFile, [string]$FileName) {
     throw "The checksum list has no line for $FileName, so the download can't be checked."
 }
 
-# Reads the four values the new boot menu needs from the image's EFI boot menu (the search line, the kernel,
-# the initrd and the root partition's PARTUUID). Stops with a plain message if any is missing; nothing is changed then.
-function Read-GrubValues([string]$Text) {
-    $search = ""
-    $kernel = ""
-    $initrd = ""
-    $partuuid = ""
+# The search line from the image's EFI grub.cfg. It points GRUB at the boot partition (ext4, which Windows can't read),
+# and it is kept exactly as the image has it. Stops with a plain message if it is missing; nothing is changed then.
+function Read-SearchLine([string]$Text) {
     foreach ($raw in ($Text -split "`r?`n")) {
         $line = $raw.Trim()
-        if ((-not $search) -and ($line -match '^search\.fs_uuid\s+\S+\s+root(\s|$)')) { $search = $line }
-        if ((-not $kernel) -and ($line -match '^linux\s+/?(vmlinuz-\S*azure)(\s|$)')) {
-            $kernel = $Matches[1]
-            if ($line -match 'root=PARTUUID=([0-9a-fA-F-]{36})(\s|$)') { $partuuid = $Matches[1] }
-        }
-        if ((-not $initrd) -and ($line -match '^initrd\s+/?(initrd\.img-\S*azure)(\s|$)')) { $initrd = $Matches[1] }
+        if ($line -match '^search\.fs_uuid\s+\S+\s+root(\s|$)') { return $line }
     }
-    $missing = @()
-    if (-not $search) { $missing += "the search.fs_uuid line" }
-    if (-not $kernel) { $missing += "a linux line with a vmlinuz-...-azure kernel" }
-    if (-not $partuuid) { $missing += "root=PARTUUID= on the linux line" }
-    if (-not $initrd) { $missing += "an initrd line with an initrd.img-...-azure file" }
-    if ($missing.Count -gt 0) {
-        throw ("The image's EFI boot menu doesn't have " + ($missing -join ", ") + ". The boot menu was left as it was. " +
-            "Some Ubuntu images keep these lines on the root disk instead, which this script can't read.")
-    }
-    return [pscustomobject]@{ Search = $search; Kernel = $kernel; Initrd = $initrd; PartUuid = $partuuid }
+    throw ("The image's EFI boot menu has no search.fs_uuid line, so GRUB can't find its boot partition. " +
+        "The boot menu was left as it was.")
 }
 
-# The new boot menu: no pause, the sandbox entry only, cloud-init told to use the NoCloud seed.
-function New-BootMenu($Values) {
+# The PARTUUID of the root filesystem: the largest Linux filesystem partition on the disk. For a GPT disk the PARTUUID
+# is the partition's own unique GUID (Get-Partition's Guid), so it is written without braces and in lower case.
+# Stops with a plain message if there is no such partition, or two equally large ones, so nothing is guessed.
+function Get-RootPartUuid([int]$DiskNumber) {
+    $linux = @(Get-Partition -DiskNumber $DiskNumber -ErrorAction Stop | Where-Object { $_.GptType -eq $LinuxFsType })
+    if ($linux.Count -eq 0) {
+        throw ("The image has no Linux filesystem partition, so the root partition can't be found. " +
+            "The boot menu was left as it was.")
+    }
+    $biggest = ($linux | Measure-Object -Property Size -Maximum).Maximum
+    $top = @($linux | Where-Object { $_.Size -eq $biggest })
+    if ($top.Count -ne 1) {
+        throw ("The image has $($top.Count) Linux partitions of the same largest size, so the root partition " +
+            "can't be told apart. The boot menu was left as it was.")
+    }
+    $guid = ($top[0].Guid -replace '[{}]', '').ToLowerInvariant()
+    if ($guid -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+        throw "Windows gave the root partition an unreadable GUID, so the boot menu was left as it was."
+    }
+    return $guid
+}
+
+# The new boot menu: no pause, the sandbox entry only, cloud-init told to use the NoCloud seed. The kernel and the
+# initrd are not named here: GRUB finds the files at boot. The loops set each variable to the last match of the glob,
+# which is the last name in alphabetical order (the highest version while the version numbers have the same length).
+# The lines use single quotes so that GRUB's $variables are not expanded by PowerShell; backticks escape the rest.
+function New-BootMenu([string]$SearchLine, [string]$PartUuid) {
     $lines = @(
-        $Values.Search,
+        $SearchLine,
         "set timeout=0",
         "set default=0",
+        "set sandbox_kernel=",
+        "set sandbox_initrd=",
+        'for k in /vmlinuz-*; do set sandbox_kernel=$k; done',
+        'for i in /initrd.img-*; do set sandbox_initrd=$i; done',
         "menuentry 'sandbox' {",
-        "  linux /$($Values.Kernel) root=PARTUUID=$($Values.PartUuid) ro console=tty1 console=ttyS0 ci.ds=NoCloud",
-        "  initrd /$($Values.Initrd)",
+        "  linux `$sandbox_kernel root=PARTUUID=$PartUuid ro console=tty1 console=ttyS0 ci.ds=NoCloud",
+        '  initrd $sandbox_initrd',
         "}"
     )
     return (($lines -join "`n") + "`n")
@@ -132,10 +145,13 @@ function Set-EspBootMenu([string]$Parent) {
         $grubPath = "$($letter):\EFI\ubuntu\grub.cfg"
         $backupPath = "$($letter):\EFI\ubuntu\grub.cfg.orig"
         if (-not (Test-Path -LiteralPath $grubPath)) { throw "There is no EFI\ubuntu\grub.cfg in the image." }
-        $values = Read-GrubValues ([System.IO.File]::ReadAllText($grubPath))
+        # Everything that can fail is read before anything is written
+        $searchLine = Read-SearchLine ([System.IO.File]::ReadAllText($grubPath))
+        $partUuid = Get-RootPartUuid $diskNumber
         if (-not (Test-Path -LiteralPath $backupPath)) { Copy-Item -LiteralPath $grubPath -Destination $backupPath }
         # UTF-8 without a byte-order mark, LF line endings
-        [System.IO.File]::WriteAllText($grubPath, (New-BootMenu $values), (New-Object System.Text.UTF8Encoding($false)))
+        $menu = New-BootMenu $searchLine $partUuid
+        [System.IO.File]::WriteAllText($grubPath, $menu, (New-Object System.Text.UTF8Encoding($false)))
         Write-Ok "Set the boot menu to the sandbox entry with ci.ds=NoCloud (the old one is grub.cfg.orig)."
     } finally {
         if ($letter) {
@@ -272,7 +288,7 @@ function Remove-SandboxImage([string]$Parent) {
         throw "Couldn't check the VM disks, so the base disk was kept ($($_.Exception.Message -replace '[\r\n]+', ' '))."
     }
     if ($users.Count -gt 0) {
-        throw "Kept $Parent: $($users.Count) VM disk(s) still use it as their base. Delete those sandboxes first, then run Remove again."
+        throw "Kept ${Parent}: $($users.Count) VM disk(s) still use it as their base. Delete those sandboxes first, then run Remove again."
     }
     Remove-Item -LiteralPath $Parent -Force
     Write-Ok "Removed $Parent."
