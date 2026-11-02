@@ -286,6 +286,18 @@ class RefusalTest(ProxyCase):
         self.assertEqual(status, 400)
 
 
+class UpstreamTimeoutTest(ProxyCase):
+    async def test_a_site_that_does_not_answer_gets_a_504_with_a_plain_message(self):
+        async def never(_address: str, _port: int):
+            await asyncio.sleep(30)
+
+        await self.start_proxy(connector=never, connect_seconds=0.2)
+        token = self.issue()
+        status, _headers, body = await self.refusal("example.com:443", basic(SANDBOX, token))
+        self.assertEqual(status, 504)
+        self.assertIn("didn't answer", body)
+
+
 class LoginTest(ProxyCase):
     async def test_a_missing_wrong_or_malformed_login_gets_407(self):
         await self.start_proxy()

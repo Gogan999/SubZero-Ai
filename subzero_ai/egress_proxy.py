@@ -58,7 +58,8 @@ MAX_HOST_CHARS = 253
 HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 HOST_RE = re.compile(rf"{HOST_LABEL}(?:\.{HOST_LABEL})*")
 REASONS = {400: "Bad Request", 403: "Forbidden", 405: "Method Not Allowed", 407: "Proxy Authentication Required",
-           431: "Request Header Fields Too Large", 502: "Bad Gateway", 503: "Service Unavailable"}
+           431: "Request Header Fields Too Large", 502: "Bad Gateway", 503: "Service Unavailable",
+           504: "Gateway Timeout"}
 # What a student or mentor sees when a request is refused
 MESSAGES = {
     "method": "This proxy only opens secure website connections (HTTPS). Other kinds of requests aren't allowed.",
