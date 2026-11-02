@@ -492,6 +492,14 @@ def new_vhd_script(child: Path, base: str | Path, disk_gb: int) -> str:
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
         f"$parent = Get-VHD -Path {ps_quote(str(base))}",
+        # A reset of the data folder's permissions (an install or restore) can remove the VM group's read access, and the
+        # service can't grant it back. Say so plainly instead of letting Hyper-V fail with "Access is denied".
+        f"$acl = Get-Acl -LiteralPath {ps_quote(str(base))}",
+        "$vmRead = $acl.Access | Where-Object { "
+        "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-83-0' }",
+        "if (-not $vmRead) { throw 'Virtual machines cannot read the sandbox base disk, so sandboxes cannot start. "
+        "An administrator needs to give the group NT VIRTUAL MACHINE\\Virtual Machines (S-1-5-83-0) Read access to the "
+        "base disk file; docs/CODE_SANDBOX_PLAN.md has the command.' }",
         f"if ($parent.Size -gt {int(disk_gb)}GB) {{ throw 'The base disk is bigger than the sandbox disk limit.' }}",
         f"New-VHD -Path {ps_quote(str(child))} -ParentPath {ps_quote(str(base))} -Differencing | Out-Null",
     ])

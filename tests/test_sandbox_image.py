@@ -455,3 +455,20 @@ class BaseDiskAccessTest(unittest.TestCase):
         self.assertIn("*S-1-5-18:F", text)
         self.assertIn("*S-1-5-32-544:F", text)
         self.assertIn("${ServiceAccount}:(R)", text)
+
+
+class BaseDiskPermissionsKeptTest(unittest.TestCase):
+    """An install or restore resets the data folder's permissions; that must not strip the base disk's VM-group read."""
+
+    def test_the_data_folder_reset_puts_the_base_disk_permissions_back(self):
+        text = (SCRIPTS / "common.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Restore-SandboxImageAccess", text)
+        reset = text.index("/reset /T /C /Q")
+        self.assertLess(reset, text.index("Restore-SandboxImageAccess\n}"), "called after the reset")
+        self.assertIn('"*S-1-5-83-0:(R)"', text)
+        self.assertIn("(R)", text[text.index("function Restore-SandboxImageAccess"):])
+
+    def test_the_image_check_reports_missing_vm_read_access(self):
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("S-1-5-83-0", text[text.index("function Show-ImageCheck"):])
+        self.assertTrue(text.isascii())
