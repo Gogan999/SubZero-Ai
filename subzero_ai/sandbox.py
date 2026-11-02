@@ -46,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from .config import Settings
+from .config import Settings, fake_sandbox_allowed
 from .db import Database, utcnow
 from .egress_proxy import EgressProxy, TokenStore
 
@@ -1538,6 +1538,9 @@ def backend_fingerprint(settings: Settings, kind: str) -> tuple:
 def make_backend(settings: Settings, kind: str) -> SandboxBackend:
     """The backend for a code_sandbox value, built from the current settings (see SandboxManager.backend)."""
     if kind == "fake":
+        if not fake_sandbox_allowed():
+            raise SandboxRefused("The Fake sandbox is only for testing. Choose the Hyper-V sandbox or turn sandboxes "
+                                 "off in Settings.")
         return FakeSandbox(settings.data_dir / "sandbox-fake")
     if kind == "hyperv":
         # The app's client key and every sandbox's host key are made on the host, on first use (see HyperVSandbox)

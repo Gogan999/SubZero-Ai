@@ -17,7 +17,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .ai_backend import resolve_backend
-from .config import CODE_STUDENT_SANDBOXES, MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, normalize_model_id
+from .config import MODEL_ID_SETTINGS, PROVIDERS, Settings, convert, fake_sandbox_allowed, normalize_model_id, student_sandboxes
 from .db import Database, utcnow
 from .egress_proxy import parse_hosts, parse_ports
 from .generation import PACKAGE_PROMPTS, PROMPT_FILES
@@ -28,7 +28,7 @@ log = logging.getLogger("subzero.settings")
 EFFORT_CHOICES = (("low", "Low"), ("medium", "Medium"), ("high", "High"))
 SANDBOX_CHOICES = (("off", "Off: commands run on the computer (as before)"),
                    ("hyperv", "Hyper-V: each session gets its own virtual computer"),
-                   ("fake", "Fake: this computer, no isolation (testing only)"))
+                   ) + ((("fake", "Fake: this computer, no isolation (testing only)"),) if fake_sandbox_allowed() else ())
 SWITCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}")
 # The dropdown value that means "type the model id under Other"; never a real model id
 OTHER_MODEL = "__other__"
@@ -440,7 +440,7 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
     if section == "code" and values.get("code_student_access"):
         # Students' sessions need a sandbox. Checked on the form's own sandbox value, so both can be saved together.
         kind = str(values.get("code_sandbox", settings.code_sandbox if settings is not None else "off"))
-        if kind.strip().lower() not in CODE_STUDENT_SANDBOXES:
+        if kind.strip().lower() not in student_sandboxes():
             errors["code_student_access"] = ("Turn on Hyper-V sandboxes first (Run Code commands in a sandbox), "
                                              "then let students start Code sessions.")
             del values["code_student_access"]

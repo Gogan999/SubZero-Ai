@@ -532,3 +532,27 @@ class MigrationFifteenTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeSandboxIsTestOnlyTest(unittest.TestCase):
+    """The Fake sandbox runs on the mini PC itself, so a real install must never be able to use it."""
+
+    def setUp(self):
+        import os
+        self._saved = os.environ.pop("SUBZERO_TESTING_FAKE_SANDBOX", None)
+
+    def tearDown(self):
+        import os
+        if self._saved is not None:
+            os.environ["SUBZERO_TESTING_FAKE_SANDBOX"] = self._saved
+
+    def test_without_the_testing_flag_only_hyperv_is_allowed_for_students(self):
+        from subzero_ai.config import student_sandboxes
+        self.assertEqual(student_sandboxes(), ("hyperv",))
+
+    def test_without_the_testing_flag_the_fake_backend_refuses_to_start(self):
+        from pathlib import Path
+        from subzero_ai.config import Settings
+        from subzero_ai.sandbox import SandboxRefused, make_backend
+        with self.assertRaises(SandboxRefused):
+            make_backend(Settings(data_dir=Path("/tmp/x")), "fake")

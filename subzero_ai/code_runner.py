@@ -40,7 +40,7 @@ from typing import Any, Iterator
 
 from .ai_backend import capabilities_for, resolve_backend
 from .claude import ClaudeError
-from .config import CODE_STUDENT_SANDBOXES, Settings
+from .config import Settings, student_sandboxes
 from .connectors import ConnectorError, GitHub
 from .db import Database, utcnow
 from .live import Tasks
@@ -595,7 +595,7 @@ class CodeRunner:
     def sandbox_problem(self) -> str | None:
         """Why a student's session can't use a sandbox right now, in plain words. None when it can."""
         kind = self.settings.code_sandbox.strip().lower()
-        if self.sandboxes is None or not self.sandboxed or kind not in CODE_STUDENT_SANDBOXES:
+        if self.sandboxes is None or not self.sandboxed or kind not in student_sandboxes():
             return STUDENT_NEEDS_SANDBOX
         return None
 

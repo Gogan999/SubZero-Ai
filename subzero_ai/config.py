@@ -244,7 +244,18 @@ _CONVERTERS = {
 # Settings whose config.env key isn't just the upper-cased name
 ENV_NAMES = {"slack_dms_enabled": "SLACK_DMS"}
 # The code_sandbox values that can run student Code sessions (the fake one is for tests only)
-CODE_STUDENT_SANDBOXES = ("hyperv", "fake")
+FAKE_SANDBOX_ENV = "SUBZERO_TESTING_FAKE_SANDBOX"
+
+
+def fake_sandbox_allowed() -> bool:
+    """The Fake sandbox runs commands on this computer with no isolation. It exists for the tests, which set this
+    environment variable (tests/__init__.py); a real install never does, so it can't be chosen there."""
+    return os.environ.get(FAKE_SANDBOX_ENV) == "1"
+
+
+def student_sandboxes() -> tuple[str, ...]:
+    """The sandbox kinds a student's Code session may run in: Hyper-V only (the Fake one only while testing)."""
+    return ("hyperv", "fake") if fake_sandbox_allowed() else ("hyperv",)
 MODEL_SETTINGS = ("model_default", "model_hard", "model_titles", "model_screener")
 MODEL_ID_SETTINGS = MODEL_SETTINGS + ("model_check_judge",)  # every setting that holds a model id
 
