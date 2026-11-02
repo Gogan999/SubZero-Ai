@@ -56,7 +56,7 @@ from .ai_backend import Capabilities, capabilities_for, make_client, resolve_bac
 from .claude import ClaudeClient
 from .code_runner import CodeRunner
 from .egress_proxy import EgressProxy, TokenStore
-from .sandbox import SandboxManager, reap_sandboxes
+from .sandbox import SandboxManager, reap_sandboxes, watch_sandbox_disks
 from .config import Settings, load_settings, normalize_model_id
 from .connectors import ConnectorError, Drive, GitHub
 from .db import Database
@@ -242,6 +242,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
                    CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks,
                               sandboxes=sandboxes, slack=slack), sandboxes=sandboxes)
     svc.nightly.reap = lambda: reap_sandboxes(svc)
+    svc.nightly.watch_disks = lambda: watch_sandbox_disks(svc)
     svc.egress = egress
     runner.capabilities_of = svc.capabilities
     if slack is not None:

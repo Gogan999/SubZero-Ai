@@ -79,6 +79,7 @@ class Nightly:
         self.tz = tz
         self._lock = asyncio.Lock()
         self.reap: Callable[[], Any] | None = None
+        self.watch_disks: Callable[[], Any] | None = None  # the quick sandbox disk check, run every tick
         self._last_reap: float | None = None
 
     @property
@@ -103,6 +104,11 @@ class Nightly:
     async def tick(self) -> bool:
         """Called every minute. Returns True if the nightly jobs ran."""
         await self._reap_if_due()
+        if self.watch_disks is not None:
+            try:
+                await asyncio.to_thread(self.watch_disks)
+            except Exception:
+                log.exception("Sandbox disk check failed")
         if not backup_due(self.last_backup_at, datetime.now(self.tz), self.settings.backup_hour):
             return False
         await self.run()

@@ -1100,6 +1100,10 @@ class CodeRunner:
     def _run_in_sandbox(self, session_id: int, workspace: Workspace, command: str) -> str:
         name, rest = split_command(command, self.command_programs())
         workspace.check_room()
+        try:
+            self.sandboxes.check_room()
+        except SandboxError as exc:  # SandboxRefused is one
+            raise ToolProblem(str(exc)) from exc
         handle = self._sandbox_for(session_id, workspace)
         backend = self.sandboxes.backend(handle.backend)
         env = {**SANDBOX_ENV, **self.sandboxes.command_env(handle)}  # includes the proxy login: never shown as is

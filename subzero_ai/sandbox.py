@@ -660,7 +660,7 @@ using System.Runtime.InteropServices.ComTypes;
 public static class SzIsoWriter {
     public static void Write(object comStream, string path) {
         IStream stream = (IStream)comStream;
-        STATSTG stat;
+        System.Runtime.InteropServices.ComTypes.STATSTG stat;
         stream.Stat(out stat, 1);
         long left = stat.cbSize;
         byte[] buffer = new byte[65536];
@@ -1226,14 +1226,28 @@ def default_run_icacls(argv: list[str]) -> None:
         raise SandboxError((proc.stderr or proc.stdout or "icacls failed").strip()[-200:])
 
 
+def plain_powershell_error(text: str) -> str:
+    """An error message as plain text: if powershell.exe still wrapped it in CLIXML, take the error lines out of it."""
+    if "#< CLIXML" in text or "<Objs" in text:
+        parts = re.findall(r'<S S="Error">(.*?)</S>', text, re.S)
+        if parts:
+            joined = "".join(parts)
+            text = re.sub(r"_x([0-9A-Fa-f]{4})_", lambda m: chr(int(m.group(1), 16)), joined)
+            text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").replace("&quot;", '"')
+    return text.strip()[-1500:]
+
+
 def default_run_powershell(script: str, timeout: int = 900) -> str:
     """Run a PowerShell script on the host and return its output. Needs an elevated PowerShell (M3). The script is
     passed encoded, so its line breaks and quotes survive the trip to powershell.exe."""
+    # Errors are caught and written as plain text (powershell.exe wraps its own error stream in CLIXML otherwise)
+    script = ("$ProgressPreference = 'SilentlyContinue'\ntry {\n" + script +
+              "\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }")
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     proc = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                            "-OutputFormat", "Text", "-EncodedCommand", encoded], capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
-        raise SandboxError((proc.stderr or proc.stdout or "PowerShell failed").strip()[-1500:])
+        raise SandboxError(plain_powershell_error(proc.stderr or proc.stdout or "PowerShell failed"))
     return proc.stdout
 
 
@@ -1799,6 +1813,12 @@ class SandboxManager:
             anchor = anchor.parent
         return shutil.disk_usage(anchor).free / (1024 ** 3)
 
+    def check_room(self) -> None:
+        """Before a command in a real sandbox: refuse when the drive is nearly full (below half the free-space floor)."""
+        if self.settings.code_sandbox == "hyperv" and self.free_gb() < self.settings.sandbox_min_free_gb / 2:
+            raise SandboxRefused("The computer is nearly out of disk space, so commands are paused. Ask an admin to "
+                                 "free some space.")
+
     def check_capacity(self) -> None:
         """Refuse a new sandbox when the limit is reached, the disk is low, or the base image isn't set."""
         if self.settings.code_sandbox == "hyperv" and not self.settings.sandbox_base_image:
@@ -1931,25 +1951,50 @@ def reap_sandboxes(services: Any, now: datetime | None = None) -> dict[str, int]
     return report
 
 
+def watch_sandbox_disks(services: Any) -> dict[str, int]:
+    """The quick check, run every minute: only the disk checks, not the full cleanup. Never raises."""
+    report = {"expired": 0, "orphans": 0, "failed": 0}
+    manager: SandboxManager | None = getattr(services, "sandboxes", None)
+    if manager is None:
+        return report
+    try:
+        with manager.lock:
+            _reap_oversize(manager, report)
+    except Exception:
+        log.exception("Sandbox disk check failed")
+    return report
+
+
 def _reap_oversize(manager: SandboxManager, report: dict[str, int]) -> None:
     """Delete a running sandbox whose disk has grown past sandbox_disk_cap_gb, so a few busy sandboxes can't fill the
     drive the app's database is on."""
     cap = int(getattr(manager.settings, "sandbox_disk_cap_gb", 0) or 0) * 1024 ** 3
-    if cap <= 0:
+    low = manager.settings.code_sandbox == "hyperv" and manager.free_gb() < manager.settings.sandbox_min_free_gb / 2
+    if cap <= 0 and not low:
         return
+    sizes = []
     for row in manager.store.db.all("SELECT * FROM sandbox_sessions WHERE state = 'running' AND name != ''"):
         try:
             size = getattr(manager.backend(row["backend"]), "disk_bytes", lambda handle: None)(manager.handle_of(row))
-            if size is None or size <= cap:
-                continue
-            manager.destroy_record(row, reason="disk limit reached")
+        except Exception:
+            report["failed"] += 1
+            log.warning("Couldn't read the disk size of sandbox %s", row["name"], exc_info=True)
+            continue
+        if size is not None:
+            sizes.append((size, row))
+    doomed = [(row, "disk limit reached") for size, row in sizes if cap > 0 and size > cap]
+    if low and not doomed and sizes:  # the drive is nearly full: the biggest sandbox goes
+        doomed = [(max(sizes, key=lambda pair: pair[0])[1], "the computer is nearly out of disk space")]
+    for row, reason in doomed:
+        try:
+            manager.destroy_record(row, reason=reason)
         except Exception:
             report["failed"] += 1
             log.warning("Couldn't check or delete sandbox %s for its disk size", row["name"], exc_info=True)
             continue
         report["expired"] += 1
         manager.db.audit("sandbox_reaped", actor_id=None, target_type="sandbox", target_id=row["id"],
-                         details={"name": row["name"], "reason": "disk limit reached"})
+                         details={"name": row["name"], "reason": reason})
 
 
 def _reap_row(manager: SandboxManager, row, stamp: str, report: dict[str, int]) -> None:

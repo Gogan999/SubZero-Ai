@@ -669,6 +669,21 @@ class HostKeyTest(unittest.TestCase):
                          Path("/srv/disks/szsandbox-1-s000-aaaaaa-seed.iso"))
 
 
+class PowerShellErrorTest(unittest.TestCase):
+    def test_clixml_errors_become_plain_text(self):
+        raw = ('#< CLIXML\n<Objs Version="1.1.0.1"><S S="Error">Add-Type : bad_x000D__x000A_</S>'
+               '<S S="Error">more &lt;here&gt;_x000D__x000A_</S></Objs>')
+        text = sandbox.plain_powershell_error(raw)
+        self.assertIn("Add-Type : bad", text)
+        self.assertIn("more <here>", text)
+        self.assertNotIn("CLIXML", text)
+        self.assertNotIn("_x000D_", text)
+        self.assertEqual(sandbox.plain_powershell_error("plain  "), "plain")
+
+    def test_the_iso_helper_names_the_com_statstg_type_in_full(self):
+        self.assertIn("System.Runtime.InteropServices.ComTypes.STATSTG stat;", sandbox.ISO_WRITER_SOURCE)
+
+
 class SeedDiskTest(unittest.TestCase):
     NAME = "szsandbox-7-s000-abcdef"
 
@@ -1392,6 +1407,31 @@ class ReaperTest(unittest.TestCase):
 
     def actions(self) -> list[str]:
         return [row["action"] for row in self.db.all("SELECT action FROM audit_log ORDER BY id")]
+
+    def test_the_quick_disk_check_deletes_an_oversize_sandbox_without_the_full_cleanup(self):
+        sid = self.make_session()
+        handle = self.manager.create_for_session(sid, actor_id=self.owner)
+        self.manager.backend("fake").disk_bytes = lambda h: 9 * 1024 ** 3
+        self.services.settings.sandbox_disk_cap_gb = 8
+        self.assertEqual(sandbox.watch_sandbox_disks(self.services)["expired"], 1)
+        self.assertEqual(self.records(sid)[0]["state"], "destroyed")
+
+    def test_a_nearly_full_drive_deletes_the_biggest_sandbox(self):
+        small, big = self.make_session(), self.make_session()
+        self.manager.create_for_session(small, actor_id=self.owner)
+        self.manager.create_for_session(big, actor_id=self.owner)
+        names = {r["code_session_id"]: r["name"] for r in self.records()}
+        sizes = {names[small]: 1 * 1024 ** 3, names[big]: 3 * 1024 ** 3}
+        self.manager.backend("fake").disk_bytes = lambda h: sizes[h.name]
+        s = self.services.settings
+        s.code_sandbox, s.sandbox_disk_cap_gb, s.sandbox_min_free_gb = "hyperv", 8, 10 ** 6
+        self.manager.free_gb = lambda: 1.0
+        try:
+            sandbox.watch_sandbox_disks(self.services)
+        finally:
+            s.code_sandbox = "fake"
+        states = {r["code_session_id"]: r["state"] for r in self.records()}
+        self.assertEqual((states[small], states[big]), ("running", "destroyed"))
 
     def test_a_running_sandbox_whose_disk_grows_past_the_cap_is_deleted(self):
         small, big = self.make_session(), self.make_session()
