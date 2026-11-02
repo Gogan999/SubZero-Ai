@@ -351,8 +351,16 @@ class HyperVCommandTest(unittest.TestCase):
         for script in host.scripts:
             for line in script.splitlines():
                 if BASE in line:
-                    self.assertTrue("Get-VHD" in line or "-ParentPath" in line, line)
+                    self.assertTrue("Get-VHD" in line or "-ParentPath" in line or "Get-Acl" in line, line)
                     self.assertFalse(any(word in line for word in DESTRUCTIVE), line)
+
+    def test_the_create_refuses_in_plain_words_when_vms_cannot_read_the_base_disk(self):
+        host = FakeHost()
+        hyperv(host).create(7)
+        [new_vhd] = host.sent("-Differencing")
+        self.assertIn("S-1-5-83-0", new_vhd)
+        self.assertLess(new_vhd.index("S-1-5-83-0"), new_vhd.index("New-VHD"), "checked before the child is made")
+        self.assertIn("cannot read the sandbox base disk", new_vhd)
 
     def test_the_vm_is_attached_only_to_the_internal_switch_with_caps(self):
         host = FakeHost()

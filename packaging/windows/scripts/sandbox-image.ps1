@@ -330,7 +330,18 @@ function Show-ImageCheck([string]$Parent, [bool]$Deep) {
         Write-Problem "Couldn't read the base disk ($($_.Exception.Message -replace '[\r\n]+', ' '))."
         $problems++
     }
-    if ($problems -eq 0) { Write-Ok "The base disk is read-only and dynamic." }
+    $vmGroup = $null
+    try {
+        $vmGroup = (Get-Acl -LiteralPath $Parent).Access | Where-Object {
+            $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq "S-1-5-83-0" }
+    } catch { }
+    if (-not $vmGroup) {
+        Write-Problem ("Virtual machines can't read the base disk (it has no permission for 'NT VIRTUAL MACHINE\\Virtual Machines'), " +
+            "so sandboxes can't start. An update or restore may have reset it. As an administrator run: " +
+            "icacls `"$Parent`" /grant `"*S-1-5-83-0:(R)`"")
+        $problems++
+    }
+    if ($problems -eq 0) { Write-Ok "The base disk is read-only and dynamic, and virtual machines can read it." }
     if ($Deep) {
         Write-Step "Computing the base disk's SHA-256 and comparing it with the one Build saved (about a minute)"
         $saved = Get-SavedHash $Parent

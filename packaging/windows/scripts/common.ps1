@@ -120,6 +120,20 @@ function Set-DataFolderAccess {
     if ($LASTEXITCODE -ne 0) { throw "Couldn't lock down $DataDir (icacls exit code $LASTEXITCODE)." }
     # Everything inside just inherits the folder's permissions.
     & icacls.exe (Join-Path $DataDir "*") /reset /T /C /Q | Out-Null
+    Restore-SandboxImageAccess
+}
+
+# The reset above wipes the permissions on the sandbox base disk, which Hyper-V needs: the virtual machines' group can
+# read it, and the app's service can only read it (the service can't grant permissions itself). Put them back.
+function Restore-SandboxImageAccess {
+    $images = Join-Path $DataDir "sandbox\images"
+    if (-not (Test-Path -LiteralPath $images)) { return }
+    foreach ($disk in @(Get-ChildItem -LiteralPath $images -Filter "*.vhdx" -File -ErrorAction SilentlyContinue)) {
+        & icacls.exe $disk.FullName /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null
+        & icacls.exe $disk.FullName /grant "${ServiceAccount}:(R)" | Out-Null
+        & icacls.exe $disk.FullName /grant "*S-1-5-83-0:(R)" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Couldn't restore the permissions on $($disk.FullName) (icacls exit code $LASTEXITCODE)." }
+    }
 }
 
 # Copy one folder over another, deleting files that are no longer in the source.

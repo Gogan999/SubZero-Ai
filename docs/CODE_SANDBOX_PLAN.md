@@ -424,3 +424,16 @@ Do it in order, and stop after each milestone for Logan to look:
 - **D5.** Should a student's Code session need a mentor to approve the starting request (recommended), and who may
   extend a session past 48 hours? Built 2026-11-02: approval is required (for the start and for follow-ups); mentors
   may extend up to 7 days from creation. Logan to confirm the extension cap.
+
+## Base disk permissions (found on the mini PC after the 0.9.0 install)
+
+Hyper-V has to read the base disk for every sandbox. The base disk is given `NT VIRTUAL MACHINE\Virtual Machines`
+(S-1-5-83-0) Read, the app's service Read, and SYSTEM and Administrators Full. The service cannot grant permissions
+itself, so if that Read entry is missing a create fails with "Access is denied" from Hyper-V. The app now checks for it
+before making a sandbox and says so plainly. As an administrator, put it back with:
+
+```
+icacls C:\ProgramData\SubZeroAI\sandbox\images\sandbox-base.vhdx /grant "*S-1-5-83-0:(R)"
+```
+
+Install and restore reset the permissions under the data folder; since 0.9.1 they put the base disk's back afterwards.
