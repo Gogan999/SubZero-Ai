@@ -16,6 +16,7 @@ from starlette.routing import Route
 
 from .code_runner import FINISHED, NO_CODE_MODEL, CodeError
 from .config import normalize_model_id
+from .pricing import cost_usd, usage_line
 from .render import markdown_html
 from .store import Viewer
 from .web import Services, error_page, fmt_time, model_label, page, render, services
@@ -84,6 +85,10 @@ def session_view(s: Services, row) -> dict[str, Any]:
             "ref": row["ref"], "error": row["error"], "updated": fmt_time(s.store, row["updated_at"]),
             "created": fmt_time(s.store, row["created_at"]), "live": row["status"] in LIVE,
             "tokens": row["input_tokens"] + row["output_tokens"],
+            "usage": usage_line(row["input_tokens"] + row["output_tokens"],
+                                cost_usd(row["model"], input_tokens=row["input_tokens"],
+                                         output_tokens=row["output_tokens"], one_request=False,
+                                         model_info=s.model_info)),
             "pending": row["pending"] if "pending" in row.keys() else 0,
             "student": bool(row["owner_is_student"]), "awaiting": row["status"] == "awaiting_approval",
             "screen_note": row["screen_note"]}

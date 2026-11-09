@@ -277,6 +277,11 @@ label.
   role badge and time, in that order, time pushed right.
 - Errors from Claude are a `--rejected-bg` panel with `role="alert"` and a
   "Try again" button when possible.
+- Mentors (only) see what a finished reply used at the right of Claude's
+  header row (`.msg-usage`, .8rem, `--ink-2`, tabular figures): "1,234 tokens
+  · about $0.004". The same wording follows the token count on a Code
+  session. Costs are estimates from `subzero_ai/pricing.py`, so always say
+  "about", and show only tokens when the price isn't known.
 
 ### Tags (message status)
 

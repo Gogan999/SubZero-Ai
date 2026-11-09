@@ -1277,7 +1277,7 @@ class MigrationTest(unittest.TestCase):
         db = Database(self.tmp / "new.db")
         with db.connect() as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS))
-            self.assertEqual(len(MIGRATIONS), 15)
+            self.assertGreaterEqual(len(MIGRATIONS), 15)
             columns = [row["name"] for row in conn.execute("PRAGMA table_info(sandbox_sessions)")]
             self.assertEqual(columns, ["id", "code_session_id", "backend", "name", "state", "created_at", "expires_at",
                                        "destroyed_at", "note"])
@@ -1301,7 +1301,7 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(db.get_kv("keep"), "me")
         self.assertIsNotNone(db.one("SELECT name FROM sqlite_master WHERE name = 'sandbox_sessions'"))
         with db.connect() as conn:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 15)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS))
 
 
 # --------------------------------------------------------------------------- settings

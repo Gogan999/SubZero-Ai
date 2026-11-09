@@ -303,6 +303,7 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .msg-head { display: flex; align-items: center; gap: .5rem; font-size: .88rem; color: var(--ink-2); margin-bottom: .35rem; }
 .msg-head .who { color: var(--ink); font-weight: 650; }
 .msg-head time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.msg-usage { margin-left: auto; font-size: .8rem; font-variant-numeric: tabular-nums; }
 .avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex: none; }
 .avatar.initial { display: inline-grid; place-items: center; background: var(--frost); color: var(--brand); font-weight: 700; font-size: .8rem; }
 .msg.person { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); padding: .8rem 1rem; }

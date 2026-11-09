@@ -66,6 +66,7 @@ from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
 # MODEL_LABELS and model_label stay importable from here (tests and older code use them)
 from .model_choices import model_block, model_label, option_label, selectable_models
+from .pricing import cost_usd, usage_line
 from .projects import MAX_PROJECT_FILES, ProjectError, Projects
 from .shares import SHARE_DAYS, ShareError, Shares, state as share_state
 from .render import (
@@ -531,6 +532,14 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
             pass
         view["can_retry"] = (m["status"] == ERROR and m["id"] == last_id
                              and (viewer.is_mentor or conv["owner_id"] == viewer.id))
+        # Mentors see what each finished reply used and roughly cost (see pricing.py for the price list)
+        tokens = sum(int(m[k] or 0)
+                     for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"))
+        if viewer.is_mentor and m["status"] in (COMPLETE, ERROR) and tokens:
+            view["usage"] = usage_line(tokens, cost_usd(
+                m["model"] or conv["model"], input_tokens=m["input_tokens"], output_tokens=m["output_tokens"],
+                cache_read_tokens=m["cache_read_tokens"], cache_write_tokens=m["cache_write_tokens"],
+                web_searches=m["web_searches"], model_info=s.model_info))
         return view
     view["html"] = plain_html(m["content"])
     view["raw"] = m["content"]
