@@ -798,9 +798,12 @@
       if (heading) heading.textContent = title;
     });
     events.addEventListener("visibility", () => window.location.reload());
+    // Leaving already (say, an admin's Delete chat form): let that page load instead of jumping to New chat
+    let leaving = false;
+    window.addEventListener("beforeunload", () => { leaving = true; });
     events.addEventListener("gone", () => {
       events.close();
-      window.location.href = "/chats";
+      if (!leaving) window.location.href = "/chats";
     });
     updateComposerLock();
     toBottom();

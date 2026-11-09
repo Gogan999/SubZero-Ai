@@ -29,6 +29,12 @@
       {% if (own or viewer.is_mentor) and conv.visibility != 'private' %}
       <a class="button small" href="/c/{{ conv.id }}/share">{{ icon('share') }} Share</a>
       {% endif %}
+      {% if viewer.is_admin %}
+      <form method="post" action="/c/{{ conv.id }}/delete">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button small reject" type="submit" data-confirm="Delete this chat for everyone? Its messages, files and share links are removed for good and can't be brought back. The audit log keeps a note that you deleted it.">Delete chat</button>
+      </form>
+      {% endif %}
     </div>
     {% if conv.visibility == 'private' %}
     <p class="private-note">Private: only {{ 'you' if own else conv.owner_name }} and mentors can see this chat.</p>

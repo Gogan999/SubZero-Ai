@@ -112,6 +112,7 @@ OUTCOME_WORDS = {
     "rejected": "Rejected",
     "held": "Held privately",
     "withdrawn": "Withdrawn by the student",
+    "deleted": "Chat deleted by an admin",
 }
 
 
@@ -134,6 +135,18 @@ def handled_card(*, student_name: str, subteam: str | None, title: str | None, t
         line += ". Follow up with the student in person."
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": line}]})
     return blocks
+
+
+def deleted_card(*, student_name: str, title: str | None, admin_slack_id: str | None, deleted_at: str) -> list[dict]:
+    """A review card whose chat an admin deleted: no buttons, no message text, and no link (the chat is gone)."""
+    line = OUTCOME_WORDS["deleted"]
+    if admin_slack_id:
+        line = f"Chat deleted by <@{admin_slack_id}>"
+    return [
+        {"type": "section", "text": {"type": "mrkdwn",
+                                     "text": f"*{_mrkdwn_escape(student_name)}* · {_mrkdwn_escape(title or 'New chat')}"}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": f"{line} {_slack_time(deleted_at)}"}]},
+    ]
 
 
 def card_fallback_text(student_name: str, outcome: str | None = None) -> str:

@@ -51,13 +51,41 @@ def delete_old_chats(db: Database, files_dir: Path, days: int, *, now: datetime 
         conn.execute(f"DELETE FROM conversations WHERE id IN ({marks})", ids)
         db.audit("old_chats_deleted", actor_id=None, details={"chats": len(ids), "older_than_days": days},
                  conn=conn)
+    remove_files(files_dir, paths)
+    log.info("Deleted %s chats with no activity for %s days", len(ids), days)
+    return len(ids)
+
+
+def remove_files(files_dir: Path, paths: list[str]) -> None:
+    """Delete attachment files (paths relative to files_dir), never anything outside it."""
     root = files_dir.resolve()
     for relative in paths:
         path = (files_dir / relative).resolve()
         if root in path.parents:
             path.unlink(missing_ok=True)
-    log.info("Deleted %s chats with no activity for %s days", len(ids), days)
-    return len(ids)
+
+
+def delete_chat(db: Database, files_dir: Path, conversation_id: int, *, actor_id: int) -> dict | None:
+    """Delete one chat with its messages, shares, Slack links and attached files, and write who did it to the audit
+    log (with the title, owner and message count, since the chat itself is gone). Returns what was deleted, or None
+    when the chat doesn't exist."""
+    with db.transaction() as conn:
+        conv = conn.execute("SELECT c.id, c.title, c.owner_id, u.name AS owner_name FROM conversations c "
+                            "JOIN users u ON u.id = c.owner_id WHERE c.id = ?", (conversation_id,)).fetchone()
+        if conv is None:
+            return None
+        messages = conn.execute("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?",
+                                (conversation_id,)).fetchone()["n"]
+        paths = [row["path"] for row in conn.execute(
+            "SELECT a.path FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.conversation_id = ?",
+            (conversation_id,))]
+        conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        details = {"title": conv["title"], "owner": conv["owner_name"], "owner_id": conv["owner_id"],
+                   "messages": messages, "files": len(paths)}
+        db.audit("chat_deleted", actor_id=actor_id, target_type="conversation", target_id=conversation_id,
+                 details=details, conn=conn)
+    remove_files(files_dir, paths)
+    return details
 
 
 def prune_dm_messages(db: Database, days: int = 7, *, now: datetime | None = None) -> int:

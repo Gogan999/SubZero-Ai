@@ -225,6 +225,7 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 | Withdraw their own waiting message | Yes | Yes | Yes |
 | Approve, edit, reject, handle privately | No | Yes | Yes |
 | Switch a chat to Opus 5.5 for hard problems | No | Yes | Yes |
+| Delete a chat for everyone (logged in the audit log) | No | No | Yes |
 | Audit log | No | No | Yes |
 
 - **Other students don't see messages that are waiting or rejected.** This is safer than the plan's original wording, because a message that needs handling privately is never shown to the team. To show them, set `SHOW_PENDING_TO_TEAM=1` or `SHOW_REJECTED_TO_TEAM=1`.
