@@ -159,6 +159,13 @@ Rules:
 - **App shell** (signed in): `.shell` is a grid of the sidebar and
   `.main-col`. The AI notice and test-mode bar sit at the top of `.main-col`,
   then `main`. The window scrolls; the sidebar is sticky.
+- **Chat pages** (`body.chat-page`, the conversation page) fill the window
+  exactly and the window never scrolls. The header, messages and long-chat
+  warning sit in `.thread-scroll` (`data-scroller`), which scrolls on its own;
+  the composer sits under it and stays at the bottom. The scroller spans the
+  whole column so its scrollbar is at the window's edge, and pads its content
+  in to the 780px reading width. New replies keep it pinned to the bottom only
+  if the reader was already near the bottom.
 - Side padding is at least 1rem on phones and 1.25rem on wider screens. There
   must never be sideways page scrolling.
 
@@ -356,8 +363,8 @@ show as "Student" or "Mentor" with an initial instead of a name or photo.
 
 ### Composer
 
-- Sticky at the bottom of the thread, fading the page behind it with a
-  `--paper` gradient.
+- On a chat page it sits under the scrolling messages (`.thread-scroll`), so
+  it never covers them and needs no fade.
 - One `.composer-box` (14px radius, `--field-edge` border, `--sheet` fill)
   holds the borderless textarea, the chosen files as removable chips, and the
   `.composer-bar`. The focus ring goes around the whole box.
@@ -376,7 +383,10 @@ show as "Student" or "Mentor" with an initial instead of a name or photo.
 ### Notices and banners
 
 - The AI notice above `main` must appear on every page. Don't remove or
-  shrink it below .85rem.
+  shrink it below .85rem. It lives in `_notice.html`. On chat pages at 900px
+  and below it moves to the top of the scrolling messages
+  (`.notice-in-thread`, a rounded card) so it scrolls away and leaves room
+  for the chat; above 900px the usual band (`.notice-fixed`) stays on top.
 - The test-mode bar (`.devbar`) uses pending colors so it can't be missed.
 - Inline warnings (long chat) use the pending pair; private-chat notes use the
   held pair.

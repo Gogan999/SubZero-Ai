@@ -691,12 +691,21 @@
   const conversationId = threadCol?.dataset.conversation;
   const buffers = new Map(); // reply id -> [{seq, text}] that arrived before the reply was on the page
 
+  // A chat's messages scroll inside their own box (the composer stays put); other pages scroll the window.
+  const scroller = document.querySelector("[data-scroller]");
+
   function nearBottom() {
+    if (scroller) return scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 240;
     return window.innerHeight + window.scrollY >= document.body.scrollHeight - 240;
   }
 
+  function toBottom() {
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    else window.scrollTo({ top: document.body.scrollHeight });
+  }
+
   function scrollDown(wasNear) {
-    if (wasNear) window.scrollTo({ top: document.body.scrollHeight });
+    if (wasNear) toBottom();
   }
 
   function appendChunk(body, seq, text) {
@@ -794,7 +803,7 @@
       window.location.href = "/chats";
     });
     updateComposerLock();
-    window.scrollTo({ top: document.body.scrollHeight });
+    toBottom();
   }
 
   // ------------------------------------------------------------ live queue
