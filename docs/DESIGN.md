@@ -6,8 +6,8 @@ change to a template (`subzero_ai/templates/`), the stylesheet
 must follow it. If a change needs something this file does not allow, update
 this file in the same pull request and say why in the PR description.
 
-The standards describe the site as it is today (version 0.4.0, with the
-claude.ai-style sidebar layout). Places where
+The standards describe the site as it is today (the claude.ai-style sidebar
+layout, styled with the Rune look described below). Places where
 the current code falls short are listed under [Known gaps](#known-gaps) so they
 can be fixed in small, separate PRs. New work must meet the standard even where
 old code does not yet.
@@ -26,9 +26,12 @@ old code does not yet.
 2. **Status is never hidden.** Every student message shows where it stands
    (waiting, approved, edited, rejected, held). Use the inspection tag (see
    [Tags](#tags-message-status)) for this, never color alone.
-3. **Calm, not cute.** The look is "drafting ink on cool drafting film": quiet
-   blues and grays, one brand color, color reserved for meaning. No gradients,
-   drop shadows, emoji decoration or animation for its own sake.
+3. **Calm, not cute.** The look follows [Rune](https://github.com/anomalyco/rune)'s
+   neutral theme (see [Where the look comes from](#where-the-look-comes-from)):
+   cool near-neutral grays, white cards lifted off the page by a hairline and a
+   soft shadow, a dark "contrast" button for the main action, one blue accent,
+   and color reserved for meaning. No gradients, heavy shadows, emoji
+   decoration or animation for its own sake.
 4. **No team name or number on screen.** Pages never show the team's name or
    FRC number (the `TEAM_NAME` and `TEAM_NUMBER` settings). Say "the team" or
    "your team" instead. Those settings may still go into Claude's instructions,
@@ -42,6 +45,34 @@ old code does not yet.
    writes may load libraries from the CDNs allowed in `EXPLAINER_CDNS`
    (`render.py`) inside their sandbox; that is deliberate.
 
+### Where the look comes from
+
+Rune (github.com/anomalyco/rune, MIT license) is a Rust UI framework that draws
+everything itself on the GPU, with an experimental web target that renders one
+WebGPU canvas. It can't be dropped into this site: the site is Jinja templates,
+plain CSS and plain JavaScript (principle 6), and a canvas UI would lose real
+links, form fields, screen-reader text and browser zoom, and wouldn't run on
+browsers without WebGPU. So the site borrows Rune's **design tokens** instead
+and keeps its own HTML:
+
+- Colors come from Rune's `tok::theme` and rune-kit's `Kit::neutral`
+  (OKLCH, hue 265), converted to sRGB hex. A few are nudged so every text pair
+  still passes WCAG AA: the accent blue is a little darker in light mode and a
+  little lighter in dark mode than Rune's, and `--field-edge` is darker than
+  Rune's faint field borders.
+- Status colors use rune-kit's state formula (light: background L 0.95 /
+  text L 0.5; dark: background L 0.3 / text L 0.75) at hue 80 (pending),
+  150 (approved), 25 (rejected) and 300 (held).
+- Shapes, shadows and controls copy rune-kit: 12px cards, the raised neutral
+  button, the dark contrast button, the segmented control with a raised
+  pressed segment, the switch, and the blue focus ring.
+- Type keeps the site's 16px base (Rune's desktop apps use 13px, too small for
+  students on phones) but uses Rune's weights: 400 body, 500–600 labels and
+  titles.
+
+If Rune's tokens change, the hex values here can be recomputed; keep the AA
+checks.
+
 ## 2. Color
 
 All colors are CSS custom properties on `:root` in `app.css`. **Never write a
@@ -52,18 +83,31 @@ token to both the light block and the dark block.
 
 | Token | Use | Light | Dark |
 |---|---|---|---|
-| `--paper` | Page background, input fill | `#eef3f6` | `#0e1922` |
-| `--sheet` | Cards, sidebar, top bar, composer box | `#ffffff` | `#15232f` |
-| `--frost` | Hover, selected item, mentor message, chips | `#e2ecf2` | `#1c2d3b` |
-| `--muted-bg` | Code bars, inline code, quiet panels, table heads | `#e9eef1` | `#1b2a36` |
-| `--rule` | Dividers and borders | `#d2dde5` | `#2a3b49` |
-| `--ink` | Body text | `#142231` | `#e4ecf2` |
-| `--ink-2` | Secondary text: meta, hints, timestamps | `#4a5b6b` | `#a3b3c1` |
-| `--brand` | Links, primary buttons, Claude's name, focus accents | `#1a5a86` | `#5aa3d8` |
-| `--brand-hover` | Hover for brand items | `#134a70` | `#79b6e3` |
-| `--brand-ink` | Text on a `--brand` fill | `#ffffff` | `#071520` |
-| `--focus` | Keyboard focus ring | `#0b7fd1` | `#7cc4ff` |
-| `--field-edge` | Border of text fields, selects and textareas (3:1 on `--paper` and `--sheet`) | `#7a8a98` | `#62788a` |
+| `--paper` | Page background, input fill (Rune `bg`) | `#f0f1f4` | `#121314` |
+| `--sheet` | Cards, sidebar, top bar, composer box (Rune `card`) | `#ffffff` | `#1c1d20` |
+| `--frost` | Hover, selected item, mentor message, chips (Rune `press`) | `#e3e4e7` | `#313132` |
+| `--muted-bg` | Code bars, inline code, quiet panels, table heads, segmented track (Rune `control_track`) | `#e7e9eb` | `#2a2b2d` |
+| `--rule` | Dividers and borders | `#dcdde1` | `#36373a` |
+| `--ink` | Body text | `#1a1c1f` | `#eff0f2` |
+| `--ink-2` | Secondary text: meta, hints, timestamps | `#606369` | `#a2a5aa` |
+| `--brand` | Links, Claude's name, the "on" switch, small accents (Rune's blue accent) | `#0763c4` | `#62a6f8` |
+| `--brand-hover` | Hover for brand items | `#004dad` | `#84b9fa` |
+| `--brand-ink` | Text on a `--brand` fill (rarely used now) | `#ffffff` | `#0b1a2a` |
+| `--contrast` | Fill of primary buttons, the brand mark and the New chat circle (Rune's contrast button) | `#2b2d31` | `#eff0f2` |
+| `--contrast-hover` | Hover for `--contrast` fills | `#3d4045` | `#d6d8dc` |
+| `--contrast-ink` | Text and icons on a `--contrast` fill | `#ffffff` | `#1c1d20` |
+| `--indicator` | The pressed segment of a `.segmented` control | `#ffffff` | `#4b4d50` |
+| `--knob` | The knob of a switch | `#ffffff` | `#f9f9fa` |
+| `--focus` | Keyboard focus ring (Rune's focus blue) | `#4c75d2` | `#6e9bfb` |
+| `--field-edge` | Border of text fields, selects and textareas, and the "off" switch track (3:1 on `--paper` and `--sheet`) | `#888b91` | `#66696f` |
+
+### Shadow and motion tokens
+
+| Token | Use |
+|---|---|
+| `--shadow-raised` | Cards, panels, the composer box, neutral buttons, the pressed segment, switch knobs (Rune's `raised` elevation: a 1px soft drop plus a hairline) |
+| `--shadow-float` | Things that float above the page: menus and dialogs (Rune's `floating` elevation) |
+| `--ease` | Duration and curve for hover and press color changes (.14s), approximating Rune's snappy spring |
 
 ### Status tokens
 
@@ -92,8 +136,8 @@ Rules:
 - Text must meet WCAG AA contrast: 4.5:1 for normal text, 3:1 for large text
   (24px, or 19px bold) and for icons, borders that identify a control, and the
   focus ring. All current text pairs pass in both themes (lowest is
-  `--brand` on `--frost` in dark mode at 5.2:1). Check any new pair before
-  merging.
+  `--brand` on `--frost`: 4.6:1 in light mode, 5.2:1 in dark). Check any new
+  pair before merging.
 - The one exception to "no raw colors" is the explainer iframe, which keeps a
   white background because the page inside it is written for light mode.
 
@@ -108,21 +152,21 @@ Rules:
 
   | Role | Size | Weight |
   |---|---|---|
-  | Sign-in title, start-page title | 2.2rem / 2rem (1.6rem on phones) | 700, letter-spacing −0.02em |
-  | Page title (`h1`) | 1.6rem | 700, letter-spacing −0.01em |
-  | Chat title | 1.35rem | 700 |
-  | Section title (`h2`), Markdown headings | 1.15rem / 1.1rem | 700 |
+  | Sign-in title, start-page title | 2.2rem / 2rem (1.6rem on phones) | 650, letter-spacing −0.02em |
+  | Page title (`h1`) | 1.6rem | 650, letter-spacing −0.01em |
+  | Chat title | 1.35rem | 650 |
+  | Section title (`h2`), Markdown headings | 1.15rem / 1.1rem | 650 |
   | Body | 1rem | 400 |
   | Secondary (meta, buttons, form labels) | .88–.95rem | 400–600 |
-  | Fine print (hints, chips, notes) | .8–.85rem | 400–650 |
-  | Smallest (pills, role badge) | .72–.75rem | 650 |
+  | Fine print (hints, chips, notes) | .8–.85rem | 400–600 |
+  | Smallest (pills, role badge) | .72–.75rem | 600 |
 
   Never go below .72rem, and never put sentences (more than a few words)
   below .8rem.
-- **Weights:** 400 body, 550–600 for emphasis and buttons, 650 for labels,
-  names and tags, 700–800 only for headings and the brand mark (the small brand-filled box in
-  the top bar; it holds a generic mark such as the app's initials, never the
-  team number).
+- **Weights** (Rune's): 400 body, 500–600 for emphasis, buttons, labels,
+  names and tags, 650 for headings, 700 only for the brand mark (the small
+  `--contrast`-filled box in the top bar; it holds a generic mark such as the
+  app's initials, never the team number).
 - **Line length:** keep reading text to about 62–75 characters. The thread
   column is capped at 780px for this reason; `.lede` caps at 62ch.
 - Numbers that line up or update (times, counts) use
@@ -138,16 +182,26 @@ Rules:
   siblings.
 - **Corner radius:**
   - 4px for tiny badges, inline code and small text buttons
-  - 6px for nav items, tabs and small panels
-  - 8px for buttons, inputs and code/explainer blocks
-  - `--radius` (10px) for cards: messages, queue items, tables
+  - 6px for nav items, tabs and small panels (Rune `radius::SM`)
+  - 8px for buttons, inputs and code/explainer blocks (Rune `radius::MD`)
+  - `--radius` (12px) for cards and menus: messages, queue items, tables,
+    panels (Rune `radius::LG`)
   - 14px for the sign-in panel and the composer box
   - 999px for pills and chips
-- **Borders** are 1px `--rule`. Use a heavier stripe (3–4px) only to mark state:
-  the selected chat (inset brand stripe) and pending queue cards
-  (`--pending-edge`).
-- **Shadows:** none, except the 3px `--frost` glow when dragging files onto the
-  composer. Use a border or a `--frost` fill to separate things instead.
+- **Borders** are 1px `--rule`. Use a heavier stripe (3–4px) only to mark
+  state: pending queue cards (`--pending-edge`). Selected rows (the current
+  chat, page or settings section) use a `--frost` fill, as Rune does.
+- **Shadows:** only the two tokens. `--shadow-raised` goes on cards that sit on
+  the page (`.panel`, `.msg.person`, `.queue-item`, `.artifact-card`,
+  `.project-side`, `.table-wrap`, `.share-link`, `.code-step.tool`,
+  `.signin-panel`), the composer box, neutral `.button`s and the composer's
+  tool buttons. `--shadow-float` goes on `.menu` and dialogs. Flat things get
+  no shadow: mentor messages (a `--frost` fill), quiet, approve and disabled
+  buttons, Claude's replies. The 3px `--frost` glow still marks dragging files
+  onto the composer.
+- **Motion:** buttons, links, menu items and fields change color over
+  `--ease`; switches slide their knob over the same. Nothing else animates,
+  and `prefers-reduced-motion` turns all of it off.
 - **Page widths:**
   - Chat thread and composer: max 780px, centered
   - Text pages (about, sign-in help): `.page.narrow`, max 760px
@@ -172,8 +226,8 @@ here in the same PR.
 `_sidebar.html`, on every signed-in page, top to bottom:
 
 - Brand (hidden on phones, where the mobile bar shows it).
-- `.side-new`: New chat, with a 28px brand-filled circle around the plus icon.
-  This is the sidebar's one brand-filled element.
+- `.side-new`: New chat, with a 28px `--contrast`-filled circle around the
+  plus icon. This is the sidebar's one filled element.
 - `.side-nav`: Chats (`/recents`), Projects (`/projects`), Artifacts (`/artifacts`), Code. Each row is
   icon + label, with a `.soon` pill or `.count` pushed right. The current page
   gets `aria-current="page"` and a `--frost` fill.
@@ -196,15 +250,16 @@ Extended thinking as checkboxes, each a `.menu-item.toggle` with a
 ### Appearance switch
 
 In the account menu, `.theme-switch` holds a `.segmented` group of three
-buttons (Light, Dark, Auto) with `aria-pressed`. The pressed one gets a
-`--sheet` fill on the `--muted-bg` track. The script applies the theme at once
+buttons (Light, Dark, Auto) with `aria-pressed`. The pressed one gets an
+`--indicator` fill and `--shadow-raised` on the `--muted-bg` track, like
+Rune's segmented control. The script applies the theme at once
 and saves it; without the script the form posts and the page reloads.
 
 ### Menus
 
 Pop-up menus (the account menu, the composer's tools menu) are `<details
 data-menu>` with a `<summary>` trigger and a `.menu` panel: `--sheet` fill,
-1px `--rule` border, `--radius` corners, no shadow. Items are `.menu-item`
+1px `--rule` border, `--radius` corners, `--shadow-float`. Items are `.menu-item`
 (links or buttons, icon + label). The script closes an open menu on a click
 outside it or Escape, returning focus to the trigger.
 
@@ -238,8 +293,8 @@ fonts or image files.
 
 | Class | Use |
 |---|---|
-| `.button.primary` | The one main action on a screen (New chat, Send, Approve on the queue). At most one per view area. |
-| `.button` (default) | Ordinary actions |
+| `.button.primary` | The one main action on a screen (New chat, Send, Save). At most one per view area. Rune's contrast button: `--contrast` fill, `--contrast-ink` text. |
+| `.button` (default) | Ordinary actions. Rune's neutral button: `--sheet` fill, `--rule` border, `--shadow-raised`. |
 | `.button.quiet` | Low-priority actions next to content (Withdraw) |
 | `.button.approve` / `.button.reject` | Mentor review actions only |
 | `.button.small` | Inside messages and dense rows |
@@ -288,7 +343,9 @@ punched eyelet showing a student message's status. Rules:
 
 - Claude's Markdown renders inside `.prose`. Code blocks are `.code` with a
   `.code-bar` showing the language and a Copy button. Syntax colors come from
-  Pygments via `/assets/code.css`; they must work in both themes.
+  Pygments via `/assets/code.css` (`default` light, `monokai` dark, both with
+  `nobackground` so the block keeps the `--sheet` card color); they must work
+  in both themes.
 - Tables in replies scroll sideways inside themselves.
 
 ### Explainers
@@ -395,7 +452,11 @@ Admin pages built from forms (Settings, setup, recovery sign-in) use these:
   shows in order. At 900px and below the menu is a sticky row of 44px tabs
   under the top bar that scrolls sideways.
 - `.field`: label, control, `.field-hint` and `.field-error`, stacked. Controls
-  use the `--field-edge` border. `.field.check` puts a checkbox beside its label.
+  use the `--field-edge` border. `.field.check` puts a checkbox beside its
+  label, drawn as Rune's switch: a 38×22px track (`--field-edge` off,
+  `--brand` on) with a `--knob`. It stays a real `<input type="checkbox">`, so
+  keyboards, screen readers and the form post work as before, and it gets the
+  normal focus ring.
 - `.form-actions`: the row of buttons under a form. Each panel's form has one
   `.button.primary` Save button.
 - `.flash` (`role="status"`) says what a save did, after the page reloads.
@@ -463,8 +524,8 @@ Target: WCAG 2.2 level AA.
   `:root[data-theme="dark"]`. Keep the two blocks identical. `/assets/code.css`
   switches the Pygments colors the same way. Components must not have their own dark
   rules; if something looks wrong in dark mode, fix or add a token.
-- Dark surfaces are deep blue-gray, never pure black. Dark text is off-white,
-  never pure white. Brand and status colors get lighter in dark mode so they
+- Dark surfaces are Rune's near-neutral grays with a faint cool tint, never
+  pure black. Dark text is off-white, never pure white. Brand and status colors get lighter in dark mode so they
   keep their contrast.
 - Every change is checked in both themes before merging (see the checklist).
 
@@ -505,7 +566,7 @@ Target: WCAG 2.2 level AA.
 Copy this into the PR description of any change that touches how the site
 looks, and tick each item:
 
-- [ ] Uses existing tokens and components; no raw colors or one-off styles
+- [ ] Uses existing tokens and components; no raw colors, shadows or one-off styles
 - [ ] Checked in light and dark mode
 - [ ] Checked at 320px and desktop width, with no sideways scrolling
 - [ ] Works with the keyboard alone, with a visible focus ring
