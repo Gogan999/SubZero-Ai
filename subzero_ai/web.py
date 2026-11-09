@@ -32,7 +32,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from . import __version__, saved_settings, setup_flow
+from . import __version__, maintenance, saved_settings, setup_flow, slack_cards
 from .approvals import ApprovalService, Outcome
 from .attachments import (
     ACCEPT,
@@ -66,6 +66,7 @@ from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
 # MODEL_LABELS and model_label stay importable from here (tests and older code use them)
 from .model_choices import model_block, model_label, option_label, selectable_models
+from .pricing import cost_usd, usage_line
 from .projects import MAX_PROJECT_FILES, ProjectError, Projects
 from .shares import SHARE_DAYS, ShareError, Shares, state as share_state
 from .render import (
@@ -531,6 +532,14 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
             pass
         view["can_retry"] = (m["status"] == ERROR and m["id"] == last_id
                              and (viewer.is_mentor or conv["owner_id"] == viewer.id))
+        # Mentors see what each finished reply used and roughly cost (see pricing.py for the price list)
+        tokens = sum(int(m[k] or 0)
+                     for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"))
+        if viewer.is_mentor and m["status"] in (COMPLETE, ERROR) and tokens:
+            view["usage"] = usage_line(tokens, cost_usd(
+                m["model"] or conv["model"], input_tokens=m["input_tokens"], output_tokens=m["output_tokens"],
+                cache_read_tokens=m["cache_read_tokens"], cache_write_tokens=m["cache_write_tokens"],
+                web_searches=m["web_searches"], model_info=s.model_info))
         return view
     view["html"] = plain_html(m["content"])
     view["raw"] = m["content"]
@@ -749,7 +758,8 @@ async def chats(request: Request, viewer: Viewer) -> Response:
 @page()
 async def recents_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
-    return render(request, "recents.html", viewer, **list_context(s, viewer, request))
+    return render(request, "recents.html", viewer, flash=request.session.pop("flash", None),
+                  **list_context(s, viewer, request))
 
 
 def coming_soon(key: str):
@@ -1051,6 +1061,41 @@ async def set_model(request: Request, viewer: Viewer) -> Response:
     if "application/json" in request.headers.get("accept", ""):
         return JSONResponse({"ok": True})
     return RedirectResponse(f"/c/{conv['id']}", status_code=303)
+
+
+@page(require="admin")
+async def delete_chat(request: Request, viewer: Viewer) -> Response:
+    """Admins (only) can delete a chat for good: its messages, files and share links go, the audit log keeps who
+    deleted it and what it was called, and any review cards still waiting in Slack lose their buttons."""
+    s = services(request)
+    cid = request.path_params["cid"]
+    # Review cards for messages still waiting; read them before the delete takes them away
+    cards = s.db.all("SELECT sc.channel, sc.ts, u.name AS author_name FROM slack_cards sc "
+                     "JOIN messages m ON m.id = sc.message_id LEFT JOIN users u ON u.id = m.author_id "
+                     "WHERE m.conversation_id = ? AND m.status = 'pending'", (cid,))
+    deleted = maintenance.delete_chat(s.db, s.attachments.files_dir, cid, actor_id=viewer.id)
+    if deleted is None:
+        return error_page(request, viewer, 404, "Chat not found", "This chat doesn't exist, or it was already deleted.")
+    # Anyone with the chat open is sent back to their chat list; the review queue drops its messages
+    s.broker.publish(f"conv:{cid}", {"type": "visibility"})
+    s.broker.publish("queue", {"type": "queue"})
+    if cards and s.slack is not None:
+        s.tasks.spawn(_mark_cards_deleted(s, cards, viewer, deleted["title"]), name=f"chat-deleted-{cid}")
+    request.session["flash"] = f"Deleted the chat “{deleted['title'] or 'New chat'}”."
+    return RedirectResponse("/recents", status_code=303)
+
+
+async def _mark_cards_deleted(s: Services, cards, viewer: Viewer, title: str | None) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for card in cards:
+        name = card["author_name"] or "A student"
+        slack_id = viewer.slack_user_id if viewer.slack_user_id[:1] in ("U", "W") else None  # not test sign-ins
+        blocks = slack_cards.deleted_card(student_name=name, title=title, admin_slack_id=slack_id, deleted_at=now)
+        try:
+            await s.slack.update_message(card["channel"], card["ts"], slack_cards.card_fallback_text(name, "deleted"),
+                                         blocks)
+        except Exception:
+            log.exception("Couldn't update a Slack card after deleting a chat")
 
 
 @page()
@@ -1699,6 +1744,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/c/{cid:int}/m/{mid:int}", message_partial),
         Route("/c/{cid:int}/events", conversation_events),
         Route("/c/{cid:int}/model", set_model, methods=["POST"]),
+        Route("/c/{cid:int}/delete", delete_chat, methods=["POST"]),
         Route("/c/{cid:int}/x/{mid:int}/{n:int}", explainer_page),
         Route("/connectors/github", github_browse),
         Route("/c/{cid:int}/share", share_page),

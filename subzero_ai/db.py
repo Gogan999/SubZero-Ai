@@ -323,6 +323,10 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_code_sessions_owner ON code_sessions (created_by, created_at);
     CREATE INDEX idx_code_sessions_status ON code_sessions (status, updated_at);
     """,
+    # Tokens written to the prompt cache for a reply (billed at 1.25x input), so its cost estimate includes them
+    """
+    ALTER TABLE messages ADD COLUMN cache_write_tokens INTEGER;
+    """,
 ]
 
 

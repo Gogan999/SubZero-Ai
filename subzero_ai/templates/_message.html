@@ -1,6 +1,6 @@
 {% if m.role == 'assistant' %}
 <li class="msg claude" id="m{{ m.id }}" data-message="{{ m.id }}" data-status="{{ m.status }}">
-  <div class="msg-head"><span class="who">Claude</span>{% if m.status == 'streaming' %}<span class="typing">Replying…</span>{% endif %}</div>
+  <div class="msg-head"><span class="who">Claude</span>{% if m.status == 'streaming' %}<span class="typing">Replying…</span>{% endif %}{% if m.usage %}<span class="msg-usage" title="Estimated from the model's price list. Only mentors see this.">{{ m.usage }}</span>{% endif %}</div>
   {% if m.status == 'error' %}
   <div class="msg-error" role="alert">
     <p>Claude couldn't reply: {{ m.error }}</p>

@@ -1,8 +1,15 @@
 {% extends "base.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
+{% block body_class %}chat-page{% endblock %}
+{# On phones the AI notice moves to the top of the messages and scrolls away with them, so it doesn't use up the
+   little room a chat has there. On wider screens it stays above the chat. #}
+{% block notice %}{% set notice_class = " notice-fixed" %}{% include "_notice.html" %}{% endblock %}
 {% block main %}
 <section class="thread-col" data-conversation="{{ conv.id }}">
+  {# The messages scroll inside this box; the composer under it stays put at the bottom of the window #}
+  <div class="thread-scroll" data-scroller>
+  {% set notice_class = " notice-in-thread" %}{% include "_notice.html" %}
   <header class="thread-head">
     <div class="thread-title">
       <h1 data-title>{{ title }}</h1>
@@ -22,6 +29,12 @@
       {% if (own or viewer.is_mentor) and conv.visibility != 'private' %}
       <a class="button small" href="/c/{{ conv.id }}/share">{{ icon('share') }} Share</a>
       {% endif %}
+      {% if viewer.is_admin %}
+      <form method="post" action="/c/{{ conv.id }}/delete">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button small reject" type="submit" data-confirm="Delete this chat for everyone? Its messages, files and share links are removed for good and can't be brought back. The audit log keeps a note that you deleted it.">Delete chat</button>
+      </form>
+      {% endif %}
     </div>
     {% if conv.visibility == 'private' %}
     <p class="private-note">Private: only {{ 'you' if own else conv.owner_name }} and mentors can see this chat.</p>
@@ -36,6 +49,7 @@
   {% if can_send and long_chat %}
   <p class="long-chat" role="note">This chat has gotten long, so each reply costs more and Claude can lose track of early details. For a new question, <a href="/chats">start a fresh chat</a> with a short summary of where you got to.</p>
   {% endif %}
+  </div>
   {% if can_send %}
   {% if viewer.is_mentor %}
   <form id="model-form" method="post" action="/c/{{ conv.id }}/model" hidden><input type="hidden" name="csrf" value="{{ csrf }}"></form>

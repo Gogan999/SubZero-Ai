@@ -7,6 +7,7 @@
     <h1>Your chat history</h1>
     <a class="button primary" href="/chats">{{ icon('plus') }} New chat</a>
   </div>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
   <form class="search" method="get" action="/recents" role="search">
     <input type="hidden" name="scope" value="{{ scope }}">
     {% if owner_filter %}<input type="hidden" name="owner" value="{{ owner_filter.id }}">{% endif %}

@@ -528,7 +528,7 @@ class MigrationFifteenTest(unittest.TestCase):
                              "the steps were not cascaded away by the rebuild")
             self.assertEqual(db.one("SELECT code_session_id FROM sandbox_sessions")["code_session_id"], 7)
             with db.connect() as conn:
-                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 15)
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS))
                 indexes = [row["name"] for row in conn.execute("PRAGMA index_list(code_sessions)")]
                 self.assertIn("idx_code_sessions_owner", indexes)
                 conn.execute("UPDATE code_sessions SET status = 'awaiting_approval' WHERE id = 7")  # now allowed

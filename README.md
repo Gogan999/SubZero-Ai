@@ -2,7 +2,7 @@
 
 A claude.ai-style chat for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
-This is version 0.9.1: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)). Code sessions can run their commands in a disposable Hyper-V sandbox (see [docs/CODE_SANDBOX_PLAN.md](docs/CODE_SANDBOX_PLAN.md)); students can use Code once a mentor turns that on.
+This is version 0.10.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)). Code sessions can run their commands in a disposable Hyper-V sandbox (see [docs/CODE_SANDBOX_PLAN.md](docs/CODE_SANDBOX_PLAN.md)); students can use Code once a mentor turns that on. Chats scroll inside the window, admins can delete chats, and mentors see an estimated cost next to token counts.
 
 ## What's in this version
 
@@ -225,9 +225,12 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 | Withdraw their own waiting message | Yes | Yes | Yes |
 | Approve, edit, reject, handle privately | No | Yes | Yes |
 | Switch a chat to Opus 5.5 for hard problems | No | Yes | Yes |
+| See tokens and an estimated cost on each reply and Code session | No | Yes | Yes |
+| Delete a chat for everyone (logged in the audit log) | No | No | Yes |
 | Audit log | No | No | Yes |
 
 - **Other students don't see messages that are waiting or rejected.** This is safer than the plan's original wording, because a message that needs handling privately is never shown to the team. To show them, set `SHOW_PENDING_TO_TEAM=1` or `SHOW_REJECTED_TO_TEAM=1`.
+- **Costs are estimates.** They come from the price list in `subzero_ai/pricing.py` (US dollars per million tokens, standard API rates, plus $0.01 per web search). Edit that file when prices change; it lists its assumptions at the top. Models it doesn't list use the price the AI helper reports, and replies through the Claude subscription show no API cost.
 - One message per chat can wait at a time. Each student can have 3 waiting messages and 25 approved messages per day; the count resets at midnight.
 - If a card waits 2 hours, the app posts one reminder in the card's Slack thread.
 - **Approval window**: after a mentor approves a message, the student's follow-ups in that chat go straight to Claude until they stop chatting for 5 minutes (each message sent restarts the clock). The first message of every chat, messages with files, and anything after a rejection, a "handle privately", or a MENTOR ALERT still wait. Admins can change the minutes, turn it off with 0, and list students who always wait, under Settings, Approval window.

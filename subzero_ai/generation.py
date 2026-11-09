@@ -389,9 +389,10 @@ class ReplyRunner:
             error = "Claude returned an empty reply."
         self.db.execute(
             "UPDATE messages SET content = ?, status = ?, error = ?, input_tokens = ?, output_tokens = ?, "
-            "cache_read_tokens = ?, web_searches = ?, sources = ?, updated_at = ? WHERE id = ?",
+            "cache_read_tokens = ?, cache_write_tokens = ?, web_searches = ?, sources = ?, updated_at = ? WHERE id = ?",
             (text, status, error or None, usage.get("input_tokens"), usage.get("output_tokens"),
-             usage.get("cache_read_input_tokens"), usage.get("web_searches") or (1 if sources else None),
+             usage.get("cache_read_input_tokens"), usage.get("cache_creation_input_tokens"),
+             usage.get("web_searches") or (1 if sources else None),
              json.dumps([{"url": s["url"], "title": s["title"][:200]} for s in sources[:20]]) if sources else None,
              utcnow(), reply_id),
         )

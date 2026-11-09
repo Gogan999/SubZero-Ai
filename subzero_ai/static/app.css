@@ -203,6 +203,19 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .pill.plain { background: var(--frost); color: var(--ink); font-variant-numeric: tabular-nums; }
 
 .thread-col { width: 100%; max-width: 780px; margin: 0 auto; padding: 1.25rem 1.25rem 0; display: flex; flex-direction: column; flex: 1; }
+/* A chat fills the window exactly: the messages scroll inside .thread-scroll and the composer stays at the bottom,
+   so the page itself never grows. The scroller spans the whole column (its scrollbar sits at the window's edge) and
+   pads its content in to the same 780px reading width. */
+body.chat-page { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+body.chat-page .shell { flex: 1; min-height: 0; }
+body.chat-page .main-col { min-height: 0; overflow: hidden; }
+body.chat-page .main-col > main { min-height: 0; }
+body.chat-page .thread-col { max-width: none; padding: 0; min-height: 0; }
+.thread-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column;
+  padding: 1.25rem max(1.25rem, calc((100% - 740px) / 2)) 1rem; }
+body.chat-page .composer, body.chat-page .read-only { width: 100%; max-width: 780px; margin: 0 auto; padding-left: 1.25rem; padding-right: 1.25rem; }
+body.chat-page .composer { position: static; background: none; padding-top: .5rem; }
+.notice-in-thread { display: none; }
 .thread-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: .5rem 1rem; padding-bottom: .75rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--rule); }
 .thread-title { min-width: 0; }
 .thread-head h1 { font-size: 1.35rem; margin-bottom: .2rem; overflow-wrap: anywhere; }
@@ -290,6 +303,7 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .msg-head { display: flex; align-items: center; gap: .5rem; font-size: .88rem; color: var(--ink-2); margin-bottom: .35rem; }
 .msg-head .who { color: var(--ink); font-weight: 650; }
 .msg-head time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.msg-usage { margin-left: auto; font-size: .8rem; font-variant-numeric: tabular-nums; }
 .avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex: none; }
 .avatar.initial { display: inline-grid; place-items: center; background: var(--frost); color: var(--brand); font-weight: 700; font-size: .8rem; }
 .msg.person { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); padding: .8rem 1rem; }
@@ -575,6 +589,11 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
   .side-nav a, .side-new, .chat-list a, .menu-item { min-height: 44px; }
   .topbar-inner { gap: .5rem; }
   .thread-col { padding-top: .75rem; }
+  .thread-scroll { padding-top: .75rem; }
+  body.chat-page .mobile-bar { position: static; flex: none; }
+  .notice-fixed { display: none; }
+  .notice-in-thread { display: block; border: 0; border-radius: var(--radius); margin-bottom: 1rem; }
+  .notice-in-thread p { padding: .5rem .75rem; }
   .greeting { font-size: 1.6rem; }
   .start { align-items: flex-start; padding-top: 2.5rem; }
   .panel { scroll-margin-top: calc(var(--topbar) + 1rem); }

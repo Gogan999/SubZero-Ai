@@ -1,7 +1,7 @@
 <div class="code-status" data-code-status="{{ session.status }}" {% if session.live %}data-code-live{% endif %}>
   <span class="pill {{ session.kind }}">{{ session.label }}</span>
   {% if session.live %}<span class="typing">Claude is working…</span>{% endif %}
-  {% if session.tokens and mentor %}<span class="fine">{{ '{:,}'.format(session.tokens) }} tokens so far</span>{% endif %}
+  {% if session.tokens and mentor %}<span class="fine" title="Estimated from the model's price list">{{ session.usage }} so far</span>{% endif %}
   {% if can_stop %}
   <form method="post" action="/code/{{ session.id }}/stop">
     <input type="hidden" name="csrf" value="{{ csrf }}">
