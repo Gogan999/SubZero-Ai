@@ -41,7 +41,7 @@ Track A (website) runs in order. Track B (engine) starts in parallel with new fi
 
 | ID | Feature | Status |
 |---|---|---|
-| F1 | Untangle, change nothing: `web_common.py`, `prompts.py`, screener as its own service, GitHub split from Drive | todo |
+| F1 | Untangle, change nothing: `web_common.py`, `prompts.py`, screener as its own service, GitHub split from Drive | done f6416be |
 | F2 | Rule tests through Slack (`tests/test_rules.py`), old web tests still present | todo |
 | F3a | Remove projects, share links, artifacts/explainers, Drive, uploads/attachments, composer tools | todo |
 | F3b | Remove web chat pages; read-only mentor chat page + Review; redirects; Slack wording; removed settings; test triage | todo |
@@ -49,7 +49,7 @@ Track A (website) runs in order. Track B (engine) starts in parallel with new fi
 | F5 | Settings reorganised + `archive.py` (archive download, delete old website chats) | todo |
 | F6 | Files page for mentors and admins | todo |
 | G1 | `anthropic_gateway.py` (new file, parallel) | todo |
-| G2 | `sandbox_runner/` Node runner on the Agent SDK + fake runner for tests (new files, parallel) | todo |
+| G2 | `sandbox_runner/` Node runner on the Agent SDK + fake runner for tests (new files, parallel) | done |
 | G3 | Engine driver `code_engine.py`, migration v17, engine settings, concurrency queue, defaults on | todo |
 | G4 | Site for the new engine: transcript, plan-first, cost and cap, sign-in setting with warning | todo |
 | G5 | Sandbox base image provisioning (tools + runner baked in, version check) | todo |
