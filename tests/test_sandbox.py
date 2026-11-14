@@ -76,7 +76,7 @@ from subzero_ai.sandbox import (
 )
 
 from .helpers import MENTOR, Harness
-from .test_features import FakeResponse, FakeWeb, repo_zip
+from .helpers import FakeResponse, FakeWeb, repo_zip
 
 BASE = "/srv/sandbox/base.vhdx"
 SWITCH = "szsandbox-internal"

@@ -9,7 +9,7 @@ import unittest
 from subzero_ai.render import explainer_title
 
 from .test_milestone3 import png_bytes
-from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
+from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, FakeResponse, FakeWeb, Harness, repo_zip
 
 
 class FeatureTest(unittest.TestCase):
@@ -407,34 +407,6 @@ class ShareTest(FeatureTest):
         self.assertEqual(self.anon(f"/s/wrong/x/{reply_id}/0").status_code, 404)
 
 
-class FakeResponse:
-    def __init__(self, status=200, body=b"", headers=None, url="https://api.github.com/"):
-        self.status_code, self.body, self.url = status, body, url
-        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
-
-    def json(self):
-        return json.loads(self.body)
-
-    def iter_content(self, size):
-        for i in range(0, len(self.body), size):
-            yield self.body[i:i + size]
-
-
-class FakeWeb:
-    """Stands in for requests.Session: answers by URL, and records what was asked."""
-
-    def __init__(self, routes):
-        self.routes, self.calls = routes, []
-
-    def __call__(self):
-        return self
-
-    def get(self, url, params=None, headers=None, **kwargs):
-        self.calls.append({"url": url, "params": params, "headers": headers or {}})
-        answer = self.routes.get(url)
-        return answer() if callable(answer) else (answer or FakeResponse(404, b"{}", url=url))
-
-
 REPO_ROOT = [{"name": "src", "path": "src", "type": "dir", "size": 0},
              {"name": "build.gradle", "path": "build.gradle", "type": "file", "size": 1200},
              {"name": "robot.bin", "path": "robot.bin", "type": "file", "size": 99}]
@@ -544,20 +516,6 @@ class ConnectorsTest(FeatureTest):
         self.assertEqual(len(audit), 1)
         self.assertNotIn("secret123", audit[0]["details"])
         self.assertEqual(self.kim.post("/settings/connectors", {"connector_github_repo": ""}).status_code, 403)
-
-
-def repo_zip() -> bytes:
-    import io
-    import zipfile
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("team-robot-code-abc123/build.gradle", "plugins { id 'java' }\n")
-        z.writestr("team-robot-code-abc123/src/Robot.java", "public class Robot {\n  int kP = 5;\n}\n")
-        z.writestr("team-robot-code-abc123/../evil.txt", "outside")
-        script = zipfile.ZipInfo("team-robot-code-abc123/gradlew")
-        script.external_attr = 0o755 << 16
-        z.writestr(script, "#!/bin/sh\necho BUILD SUCCESSFUL \"$@\"\n")
-    return buf.getvalue()
 
 
 class CodeTest(FeatureTest):

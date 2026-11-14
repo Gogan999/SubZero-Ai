@@ -15,60 +15,9 @@ from subzero_ai import sandbox, saved_settings
 from subzero_ai.code_runner import build_system_prompt
 from subzero_ai.db import MIGRATIONS, Database
 
-from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
-from .test_features import FakeResponse, FakeWeb, repo_zip
+from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, CodeStudentTest, FakeResponse, FakeWeb, Harness, repo_zip
 
 API = "https://api.github.com/repos/team/robot-code/zipball"
-
-
-class CodeStudentTest(unittest.TestCase):
-    """Students' sessions with the fake sandbox switched on and student access turned on."""
-
-    overrides: dict = {}
-
-    def setUp(self):
-        self.h = Harness(connector_github_repo="team/robot-code", code_sandbox="fake", sandbox_min_free_gb=0,
-                         code_student_access=True, **self.overrides)
-        self.ava = self.h.login(STUDENT)
-        self.ben = self.h.login(STUDENT_2)
-        self.kim = self.h.login(MENTOR)
-        self.h.services.github.session_factory = FakeWeb({API: FakeResponse(200, repo_zip())})
-        self.code = self.h.services.code
-        self.db = self.h.services.db
-        self.manager = self.h.services.sandboxes
-        self.root = self.h.services.settings.data_dir / "sandbox-fake"
-
-    def tearDown(self):
-        self.h.close()
-
-    # ---- helpers
-    def ask(self, actor, task="Add a notes file and run the build."):
-        resp = actor.post("/code", {"task": task}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303, resp.text)
-        location = resp.headers["location"]
-        self.h.idle()
-        if not location.rsplit("/", 1)[1].isdigit():
-            return None, location
-        return int(location.rsplit("/", 1)[1]), location
-
-    def approve(self, sid):
-        resp = self.kim.post(f"/code/{sid}/approve-request", {"note": ""}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303, resp.text)
-        self.h.idle()
-
-    def decline(self, sid, note=""):
-        resp = self.kim.post(f"/code/{sid}/decline-request", {"note": note}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303, resp.text)
-        self.h.idle()
-
-    def tool_turns(self) -> int:
-        return sum(1 for c in self.h.claude.calls if c["kind"] == "tool_turn")
-
-    def actions(self) -> list[str]:
-        return [row["action"] for row in self.db.all("SELECT action FROM audit_log ORDER BY id")]
-
-    def steps(self, sid, status=None):
-        return [s for s in self.code.steps(sid) if s["kind"] == "tool" and (status is None or s["status"] == status)]
 
 
 class StudentAccessTest(CodeStudentTest):
