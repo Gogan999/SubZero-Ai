@@ -16,10 +16,11 @@ from starlette.routing import Route
 
 from .code_runner import FINISHED, NO_CODE_MODEL, CodeError
 from .config import normalize_model_id
+from .model_choices import model_label
 from .pricing import cost_usd, usage_line
 from .render import markdown_html
 from .store import Viewer
-from .web import Services, error_page, fmt_time, model_label, page, render, services
+from .web_common import Services, error_page, fmt_time, page, render, services
 
 STATUS_LABELS = {"awaiting_approval": ("Waiting for a mentor to approve", "pending"),
                  "preparing": ("Copying the repository", "pending"), "running": ("Working", "pending"),
@@ -172,7 +173,7 @@ async def code_start(request: Request, viewer: Viewer) -> Response:
             if problem:
                 raise CodeError(problem)
             task = str(form.get("task", ""))
-            verdict = await s.approvals.screener.check(task) if s.settings.screener_enabled else None
+            verdict = await s.screener.check(task) if s.settings.screener_enabled else None
             session_id = s.code.request(viewer, task, allowed[0], screen_note(verdict))  # students use the default
     except CodeError as exc:
         request.session["code_error"] = str(exc)
@@ -250,7 +251,7 @@ async def code_follow_up(request: Request, viewer: Viewer) -> Response:
             s.code.follow_up(viewer, sid, str(form.get("text", "")))
         else:
             text = str(form.get("text", ""))
-            verdict = await s.approvals.screener.check(text) if s.settings.screener_enabled else None
+            verdict = await s.screener.check(text) if s.settings.screener_enabled else None
             s.code.request_follow_up(viewer, sid, text, screen_note(verdict))
     except CodeError as exc:
         request.session["code_error"] = str(exc)

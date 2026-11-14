@@ -22,17 +22,31 @@ from .config import Settings
 
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 BRANCH_RE = re.compile(r"[A-Za-z0-9._/-]{1,100}")
-DRIVE_ID_RE = re.compile(r"[A-Za-z0-9_-]{15,200}")
 SUPPORTED = TEXT_EXTENSIONS | IMAGE_EXTENSIONS  # no videos: Claude only sees stills taken in the browser
 MAX_FETCH_BYTES = 10 * 1024 * 1024
 TIMEOUT = 20
-GOOGLE_HOSTS = (".google.com", ".googleusercontent.com")
 
 
+# --------------------------------------------------------------------------- shared by GitHub and Drive
 class ConnectorError(AttachmentError):
     """A problem fetching a file, worded for the student."""
 
 
+def _supported(name: str) -> bool:
+    dot = name.rfind(".")
+    return dot > 0 and name[dot:].lower() in SUPPORTED
+
+
+def _read_limited(resp: requests.Response, limit: int, what: str) -> bytes:
+    data = bytearray()
+    for chunk in resp.iter_content(64 * 1024):
+        data += chunk
+        if len(data) > limit:
+            raise ConnectorError(f"{what} is over {limit // (1024 * 1024)} MB, too big to add.")
+    return bytes(data)
+
+
+# --------------------------------------------------------------------------- GitHub
 @dataclass
 class Entry:
     name: str
@@ -40,11 +54,6 @@ class Entry:
     kind: str  # "dir" or "file"
     size: int
     supported: bool
-
-
-def _supported(name: str) -> bool:
-    dot = name.rfind(".")
-    return dot > 0 and name[dot:].lower() in SUPPORTED
 
 
 def clean_path(path: str) -> str:
@@ -55,15 +64,6 @@ def clean_path(path: str) -> str:
     if any(part in ("", ".", "..") for part in path.split("/")) and path:
         raise ConnectorError("That isn't a path in the repository.")
     return path
-
-
-def _read_limited(resp: requests.Response, limit: int, what: str) -> bytes:
-    data = bytearray()
-    for chunk in resp.iter_content(64 * 1024):
-        data += chunk
-        if len(data) > limit:
-            raise ConnectorError(f"{what} is over {limit // (1024 * 1024)} MB, too big to add.")
-    return bytes(data)
 
 
 class GitHub:
@@ -143,6 +143,11 @@ class GitHub:
         item.name = f"{self.settings.connector_github_repo.split('/')[-1]}/{path}"[-120:]
         return item
 
+
+# --------------------------------------------------------------------------- Google Drive
+# Everything below is Drive only; nothing above depends on it.
+DRIVE_ID_RE = re.compile(r"[A-Za-z0-9_-]{15,200}")
+GOOGLE_HOSTS = (".google.com", ".googleusercontent.com")
 
 # Google Docs editors files are exported as text; other Drive files are downloaded as they are.
 DRIVE_KINDS = {

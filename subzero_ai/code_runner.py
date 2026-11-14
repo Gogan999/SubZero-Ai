@@ -44,6 +44,7 @@ from .config import Settings, student_sandboxes
 from .connectors import ConnectorError, GitHub
 from .db import Database, utcnow
 from .live import Tasks
+from .prompts import load_safety_prompt
 from .sandbox import (
     COPY_SKIP, GUEST_GRADLE_OPTS, GUEST_HOME, GUEST_PATH, MAX_OUTPUT_CHARS, MAX_SESSION_BYTES, ExitResult, OutputTail,
     SandboxError, SandboxHandle, SandboxManager, changed_in_archive, kill_process_tree, pack_tree, read_output,
@@ -1166,7 +1167,6 @@ class CodeRunner:
                        "The patch only has changes made through approved edits, so check these by hand.")
 
     def system_prompt(self, row) -> str:
-        from .generation import load_safety_prompt  # imported here: generation pulls in much of the app
         text = build_system_prompt(student=bool(row["owner_is_student"]), sandboxed=self.sandboxed,
                                    free_rein=bool(row["free_rein"]), commands=self.command_programs())
         # The chat safety rules apply to Code too (they come first, and the Code rules below only narrow them)
