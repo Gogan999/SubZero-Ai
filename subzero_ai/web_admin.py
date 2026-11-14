@@ -37,7 +37,7 @@ from .pi_client import (
 from .roles import RECOVERY_USER, is_excluded_account
 from .saved_settings import SLACK_ID_RE
 from .store import Viewer
-from .web import (
+from .web_common import (
     Services,
     _finish_login,
     _load_model_names,

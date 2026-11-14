@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 
 from .config import Settings, normalize_model_id
 from .db import Database, utcnow
-from .generation import EXPLAINER_REQUEST, detect_alert, load_system_prompt
+from .generation import EXPLAINER_REQUEST, detect_alert
+from .prompts import load_system_prompt
 from .render import explainers
 from .screener import SCREEN_SYSTEM, parse_answer, screen_body
 
