@@ -87,3 +87,20 @@
 - D81 (G5): "Image is current" is a `.tools.json` record beside the disk matching TOOLS_VERSION, runner, SDK and Node versions; `--force` builds `-r2`, never overwrites.
 - D82 (G3, review K1): `sandbox-network.ps1` opens the gateway port (default 3129) on the sandbox host address beside the proxy port, with a `GatewayPort` parameter and the matching check in `checks.py`. Logan re-runs the network script on the mini PC.
 - D83 (G3, review K2): Students keep seeing every step of their own session as it happens (the plan's UX says so, and the classic engine did the same). Rule 7 gates the patch download and the Changes panel, not the transcript.
+
+## D84 A follow-up takes back the patch release
+When a follow-up run starts on a session (either engine), `patch_released` goes back to 0 and the mentor releases
+again after looking at the new changes. Audited as part of the follow-up approval. (Review MJ1, rule 7.)
+
+## D85 Students don't see file bodies before release (narrows D83)
+A student still sees their session's steps, but for Write and Edit steps only the file name and a line count until a
+mentor releases the changes; after release the bodies show. Mentors always see everything. Plan-first means a mentor
+no longer approves each edit, so the release is the one place the content is checked.
+
+## D86 Old-chat delete: verified, video-inclusive backup; exact ids
+The delete job picks the chat ids once, makes a backup that includes videos, checks the zip (reads cleanly, has the
+database, not empty), then deletes exactly those ids. Any failure deletes nothing.
+
+## D87 Saved mentor list expires in memory too
+The 7-day limit applies to the list held in memory as well as the one loaded from disk; a saved time in the future
+is rejected.

@@ -47,7 +47,7 @@ Track A (website) runs in order. Track B (engine) starts in parallel with new fi
 | F3b | Remove web chat pages; read-only mentor chat page + Review; redirects; Slack wording; removed settings; test triage | done |
 | F4 | Code interface: shell/sidebar, Code home, "Needs a mentor", session states, on-page diff, About, role fallback fix | done (in review) |
 | F5 | Settings reorganised + `archive.py` (archive download, delete old website chats) | done (in review) |
-| F6 | Files page for mentors and admins | todo |
+| F6 | Files page for mentors and admins | done (in review) |
 | G1 | `anthropic_gateway.py` (new file, parallel) | done |
 | G2 | `sandbox_runner/` Node runner on the Agent SDK + fake runner for tests (new files, parallel) | done |
 | G3 | Engine driver `code_engine.py`, migration v17, engine settings, concurrency queue, defaults on | done (in review) |

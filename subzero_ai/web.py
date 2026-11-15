@@ -146,12 +146,21 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     return svc
 
 
+def _stored(s: Services, row) -> bool:
+    """False once a mentor has deleted the file from the Files page (the chat keeps its row)."""
+    try:
+        s.attachments.path(row)
+    except OSError:
+        return False
+    return True
+
+
 def file_views(s: Services, message_id: int, rows=None) -> list[dict[str, Any]]:
     rows = s.attachments.for_message(message_id) if rows is None else rows
     # Video stills are only for Claude; the page shows the video itself
     rows = [f for f in rows if f["kind"] != "frame"]
     return [{"id": f["id"], "name": f["name"], "size": size_label(f["size"]), "kind": f["kind"],
-             "url": f"/files/{f['id']}"} for f in rows]
+             "url": f"/files/{f['id']}", "removed": not _stored(s, f)} for f in rows]
 
 
 def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = None, files=None) -> dict[str, Any]:
@@ -486,7 +495,7 @@ async def attachment_file(request: Request, viewer: Viewer) -> Response:
     try:
         path = s.attachments.path(row)
     except OSError:
-        return PlainTextResponse("This file is missing from the server.", status_code=404)
+        return PlainTextResponse("This file was removed from the server.", status_code=404)
     media_type = row["media_type"] if row["kind"] != "text" else "text/plain; charset=utf-8"
     disposition = "attachment" if request.query_params.get("download") else "inline"
     ascii_name = row["name"].encode("ascii", "replace").decode().replace('"', "'").replace("?", "_")
@@ -626,6 +635,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                background: bool = True) -> Starlette:
     from .web_admin import admin_routes
     from .web_code import code_routes
+    from .web_files import files_routes
 
     settings = settings or load_settings()
     s = build_services(settings, slack=slack, claude=claude)
@@ -724,6 +734,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/audit", audit_page),
         *admin_routes,
         *code_routes,
+        *files_routes,
         Route("/about", about_page),
         Route("/healthz", health),
         Route("/assets/code.css", code_css),

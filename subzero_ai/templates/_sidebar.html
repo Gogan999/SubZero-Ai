@@ -15,6 +15,7 @@
           <span class="count" data-needs-count aria-label="{{ needs_count }} waiting"{% if not needs_count %} hidden{% endif %}>{{ needs_count }}</span></a></li>
         <li><a href="/queue" {% if path.startswith('/queue') or path.startswith('/c/') %}aria-current="page"{% endif %}>{{ icon('review') }} Review
           {% if review_count %}<span class="count" aria-label="{{ review_count }} waiting">{{ review_count }}</span>{% endif %}</a></li>
+        <li><a href="/files" {% if path.startswith('/files') %}aria-current="page"{% endif %}>{{ icon('file') }} Files</a></li>
         {% if viewer.is_admin %}
         <li><a href="/audit" {% if path.startswith('/audit') %}aria-current="page"{% endif %}>{{ icon('log') }} Audit log</a></li>
         <li><a href="/settings" {% if path.startswith('/settings') %}aria-current="page"{% endif %}>{{ icon('settings') }} Settings

@@ -568,3 +568,8 @@ body.code-view .main-col > main { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+
+/* Files page */
+.file-title { font-weight: 600; overflow-wrap: anywhere; }
+.files-table input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--brand); }
+@media (max-width: 700px) { .files-table td[data-label="Tick"] { grid-template-columns: 6.5rem auto; } }

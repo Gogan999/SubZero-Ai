@@ -513,4 +513,12 @@
       setTimeout(tick, 2000);
     }
   }
+
+  // Files page: the box in the table head ticks or clears every row
+  const selectAll = document.querySelector("[data-select-all]");
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      document.querySelectorAll('[data-files-form] input[name="ids"]').forEach((box) => { box.checked = selectAll.checked; });
+    });
+  }
 })();
