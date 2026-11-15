@@ -4,7 +4,7 @@
 Behaviour is scripted by magic words in the task or message text and works on real files in
 `cwd`, so patches can be tested. Standalone: standard library only.
 
-Magic words: AGENT-FAIL, AGENT-CRASH, AGENT-SLOW, AGENT-TODO, AGENT-SUB, AGENT-COMPACT.
+Magic words: AGENT-FAIL, AGENT-CRASH, AGENT-SLOW, AGENT-SNEAK, AGENT-TODO, AGENT-SUB, AGENT-COMPACT.
 """
 from __future__ import annotations
 
@@ -122,6 +122,9 @@ def _turn(text: str, cwd: str, state: dict, plan_first: bool) -> None:
     _check_stop()
     emit({"type": "text", "text": "Looking at the project."})
 
+    if plan_first and "AGENT-SNEAK" in text:  # a tool that changes files, before the plan is approved
+        emit({"type": "tool_start", "id": "sneak-%d" % n, "name": "Write",
+              "input": {"file_path": os.path.join(cwd, NOTES), "content": "x"}})
     if plan_first:
         pid = "plan-%d" % n
         emit({"type": "tool_start", "id": pid, "name": "ExitPlanMode", "input": {}})

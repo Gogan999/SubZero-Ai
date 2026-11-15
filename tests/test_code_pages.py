@@ -63,6 +63,8 @@ class PagesTest(CodeStudentTest):
         return resp.text
 
     def ask_plan_first(self, actor, task="Fix the arm."):
+        if actor is self.ava or actor is self.ben:  # a student's sessions follow the setting, never the form
+            self.h.services.settings.code_plan_first_students = True
         resp = actor.post("/code", {"task": task, "plan_first": ["0", "1"]}, follow_redirects=False)
         self.assertEqual(resp.status_code, 303, resp.text)
         self.h.idle()
@@ -145,24 +147,37 @@ class HomeTest(PagesTest):
         self.assertRegex(page, r'<button class="button primary" type="submit" disabled>')
         self.assertIn('id="code-task"', page, "the box stays so nothing is lost")
 
-    def test_plan_first_tick_is_stored_for_students_and_mentors(self):
+    def test_plan_first_for_students_follows_the_setting_and_never_the_form(self):
         self.h.services.settings.code_plan_first_students = True
         page = self.ava.get("/code").text
-        self.assertRegex(page, r'name="plan_first" value="1"[^>]*checked')
-        self.assertIn("Claude writes a plan and waits for a mentor to approve it before changing anything.", page)
-        self.assertNotRegex(self.kim.get("/code").text, r'name="plan_first" value="1"[^>]*checked')
-        # ticked or not, what the form sends is what is stored
-        yes = self.ask_plan_first(self.ava, "Plan me.")
-        self.assertEqual(self.code.get(yes)["plan_first"], 1)
-        self.approve(yes)
-        self.kim.post(f"/code/{yes}/stop", {})
+        self.assertNotIn('name="plan_first"', page, "students get no tick box")
+        self.assertIn("Claude writes a plan first and a mentor checks it.", page)
+        self.assertNotIn("Claude writes a plan and waits for a mentor to approve it", page)
+        on = self.ava.post("/code", {"task": "Try to skip it.", "plan_first": "0"}, follow_redirects=False)
         self.h.idle()
+        self.assertEqual(self.code.get(int(on.headers["location"].rsplit("/", 1)[1]))["plan_first"], 1)
+        self.kim.post(f"/code/{int(on.headers['location'].rsplit('/', 1)[1])}/stop", {})
+        self.h.idle()
+        self.h.services.settings.code_plan_first_students = False
+        page = self.ben.get("/code").text
+        self.assertNotIn('name="plan_first"', page)
+        self.assertNotIn("plan first", page.lower().split("<main")[1])
+        off = self.ben.post("/code", {"task": "Try to force it.", "plan_first": ["0", "1"]}, follow_redirects=False)
+        self.h.idle()
+        self.assertEqual(self.code.get(int(off.headers["location"].rsplit("/", 1)[1]))["plan_first"], 0)
+
+    def test_plan_first_tick_is_stored_for_mentors(self):
+        self.assertNotRegex(self.kim.get("/code").text, r'name="plan_first" value="1"[^>]*checked')
+        self.assertIn("Claude writes a plan and waits for a mentor to approve it before changing anything.",
+                      self.kim.get("/code").text)
         no = self.kim.post("/code", {"task": "No plan.", "plan_first": "0"}, follow_redirects=False)
         self.h.idle()
         self.assertEqual(self.code.get(int(no.headers["location"].rsplit("/", 1)[1]))["plan_first"], 0)
         mentor = self.kim.post("/code", {"task": "Plan please.", "plan_first": ["0", "1"]}, follow_redirects=False)
         self.h.idle()
         self.assertEqual(self.code.get(int(mentor.headers["location"].rsplit("/", 1)[1]))["plan_first"], 1)
+        self.h.services.settings.code_plan_first_mentors = True
+        self.assertRegex(self.kim.get("/code").text, r'name="plan_first" value="1"[^>]*checked')
 
     def test_a_form_without_the_field_gets_the_default(self):
         self.h.services.settings.code_plan_first_mentors = True
@@ -297,7 +312,7 @@ class SessionStateTest(PagesTest):
         for button in ("Release to student", "Download patch", "Delete"):
             self.assertIn(button, mentor)
         self.assertNotIn("Stop</button>", mentor)
-        self.kim.post(f"/code/{sid}/release", {})
+        self.release(sid)
         student = self.page(self.ava, sid)
         self.assertIn("AGENT_NOTES.md", student)
         self.assertIn("+- Make notes.", student)
@@ -396,7 +411,7 @@ class ReleaseAgainTest(PagesTest):
     def test_a_follow_up_run_needs_a_new_release(self):
         sid, _ = self.ask(self.ava, "Make notes.")
         self.approve(sid)
-        self.kim.post(f"/code/{sid}/release", {})
+        self.release(sid)
         self.assertEqual(self.code.get(sid)["patch_released"], 1)
         self.assertEqual(self.ava.get(f"/code/{sid}/changes.patch").status_code, 200)
         self.assertIn("AGENT_NOTES.md", self.page(self.ava, sid))
@@ -414,14 +429,14 @@ class ReleaseAgainTest(PagesTest):
         self.assertNotIn("diff-file", page)
         self.assertNotIn("+- Also add a second note.", self.ava.get(f"/code/{sid}/steps").text)
         self.assertIn("Release to student", self.page(self.kim, sid))
-        self.kim.post(f"/code/{sid}/release", {})
+        self.release(sid)
         self.assertEqual(self.ava.get(f"/code/{sid}/changes.patch").status_code, 200)
         self.assertIn("Download patch", self.page(self.ava, sid))
 
     def test_a_mentor_follow_up_on_a_released_session_also_resets_it(self):
         sid, _ = self.ask(self.ava, "Make notes.")
         self.approve(sid)
-        self.kim.post(f"/code/{sid}/release", {})
+        self.release(sid)
         self.kim.post(f"/code/{sid}/follow-up", {"text": "One more thing."})
         self.h.idle()
         self.assertEqual(self.code.get(sid)["patch_released"], 0)
@@ -438,6 +453,125 @@ class ReleaseAgainTest(PagesTest):
             self.code.follow_up(Viewer(id=mentor["id"], slack_user_id=mentor["slack_user_id"], name="Kim",
                                        role="mentor"), sid, "Again.")
         self.assertEqual(self.code.get(sid)["patch_released"], 0)
+
+
+class ReleaseGuardTest(PagesTest):
+    """B1: only what a mentor saw is released, and only from a finished session with nothing waiting."""
+
+    PATCH_A = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n"
+
+    def ready_session(self, status="done") -> int:
+        sid = self.make_session(self.ava, status=status)
+        self.write_patch(sid, self.PATCH_A)
+        return sid
+
+    def released(self, sid) -> int:
+        return self.code.get(sid)["patch_released"]
+
+    def test_a_running_session_cannot_be_released(self):
+        sid = self.ready_session("running")
+        self.release(sid)
+        self.assertEqual(self.released(sid), 0)
+        self.assertEqual(self.ava.get(f"/code/{sid}/changes.patch").status_code, 403)
+
+    def test_a_plan_or_a_follow_up_that_waits_blocks_the_release(self):
+        sid = self.ready_session("waiting")
+        self.add_step(sid, tool="plan", tool_input={"plan": "1. Do it"}, status="pending")
+        self.release(sid)
+        self.assertEqual(self.released(sid), 0)
+        done = self.ready_session("done")
+        self.add_step(done, kind="note", output="More please", status="pending")
+        self.release(done)
+        self.assertEqual(self.released(done), 0)
+        self.assertNotIn("Release to student", self.page(self.kim, done))
+        self.db.execute("UPDATE code_steps SET status = 'declined' WHERE session_id = ?", (done,))
+        self.release(done)
+        self.assertEqual(self.released(done), 1)
+
+    def test_a_stale_or_missing_fingerprint_is_refused(self):
+        sid = self.ready_session()
+        page = self.page(self.kim, sid)
+        seen = re.search(r'name="fingerprint" value="([0-9a-f]{64})"', page).group(1)
+        self.assertEqual(seen, self.code.patch_fingerprint(sid))
+        for bad in ("", "nonsense"):
+            self.kim.post(f"/code/{sid}/release", {"fingerprint": bad}, follow_redirects=False)
+            self.assertEqual(self.released(sid), 0, repr(bad))
+        self.kim.post(f"/code/{sid}/release", {}, follow_redirects=False)
+        self.assertEqual(self.released(sid), 0)
+        self.write_patch(sid, self.PATCH_A + "+three\n")  # the changes moved on after the mentor looked
+        resp = self.kim.post(f"/code/{sid}/release", {"fingerprint": seen}, follow_redirects=True, headers=HTML)
+        self.assertEqual(self.released(sid), 0)
+        self.assertIn("The changes are different now. Look again.", resp.text)
+        self.assertEqual(self.ava.get(f"/code/{sid}/changes.patch").status_code, 403)
+        self.release(sid)
+        self.assertEqual(self.released(sid), 1)
+
+    def test_a_normal_release_works_on_the_classic_engine_too(self):
+        sid = self.make_session(self.ava, status="done", engine="classic")
+        work = self.code.workspace(sid)
+        work.base.mkdir(parents=True)
+        work.work.mkdir(parents=True)
+        (work.base / "a.txt").write_text("one\n")
+        (work.work / "a.txt").write_text("two\n")
+        page = self.page(self.kim, sid)
+        seen = re.search(r'name="fingerprint" value="([0-9a-f]{64})"', page).group(1)
+        (work.work / "a.txt").write_text("three\n")
+        self.kim.post(f"/code/{sid}/release", {"fingerprint": seen}, follow_redirects=False)
+        self.assertEqual(self.released(sid), 0, "stale on the classic engine")
+        self.release(sid)
+        self.assertEqual(self.released(sid), 1)
+        self.assertEqual(self.ava.get(f"/code/{sid}/changes.patch").status_code, 200)
+
+
+class SignInTest(PagesTest):
+    """A missing Code sign-in is caught when a session is asked for or approved, not after the sandbox is made."""
+
+    def viewer(self, actor, role):
+        from subzero_ai.store import Viewer
+        user = self.h.services.store.user(self.user_id(actor))
+        return Viewer(id=user["id"], slack_user_id=user["slack_user_id"], name=user["name"], role=role)
+
+    def sign_out(self):
+        self.h.services.settings.anthropic_api_key = ""
+
+    def refused(self, call) -> str:
+        from subzero_ai.code_runner import CodeError
+        with self.assertRaises(CodeError) as caught:
+            call()
+        return str(caught.exception)
+
+    def test_a_mentor_start_is_refused_with_the_reason(self):
+        self.sign_out()
+        message = self.refused(lambda: self.code.start(self.viewer(self.kim, "mentor"), "Fix it", "claude-sonnet-5-5"))
+        self.assertIn("no Anthropic API key is saved", message)
+        self.assertEqual(self.db.one("SELECT COUNT(*) AS n FROM code_sessions")["n"], 0)
+
+    def test_a_student_request_is_refused_in_plain_words(self):
+        self.sign_out()
+        student = self.viewer(self.ava, "student")
+        message = self.refused(lambda: self.code.request(student, "Fix it", "claude-sonnet-5-5"))
+        self.assertEqual(message, "Code isn't set up yet. Ask a mentor.")
+        self.assertEqual(self.db.one("SELECT COUNT(*) AS n FROM code_sessions")["n"], 0)
+
+    def test_approving_a_request_or_a_follow_up_is_refused_and_leaves_it_waiting(self):
+        sid, _ = self.ask(self.ava, "Make notes.")
+        self.sign_out()
+        mentor = self.viewer(self.kim, "mentor")
+        self.assertIn("API key", self.refused(lambda: self.code.decide_request(mentor, sid, True)))
+        self.assertEqual(self.code.get(sid)["status"], "awaiting_approval")
+        done = self.make_session(self.ava, status="done")
+        step = self.add_step(done, kind="note", output="More please", status="pending")
+        step_id = step if isinstance(step, int) else self.db.one("SELECT MAX(id) AS i FROM code_steps")["i"]
+        self.assertIn("API key", self.refused(lambda: self.code.decide_follow_up(mentor, step_id, True)))
+        self.assertEqual(self.db.one("SELECT status FROM code_steps WHERE id = ?", (step_id,))["status"], "pending")
+
+    def test_the_classic_engine_does_not_need_the_new_sign_in(self):
+        self.h.services.settings.code_engine = "classic"
+        self.sign_out()
+        started = []
+        self.code.tasks.spawn = lambda coro, name="": (started.append(name), coro.close())  # no event loop here
+        self.code.start(self.viewer(self.kim, "mentor"), "Fix it", "claude-sonnet-5-5")
+        self.assertEqual(len(started), 1)
 
 
 class HiddenBodiesTest(PagesTest):
@@ -462,10 +596,35 @@ class HiddenBodiesTest(PagesTest):
             self.assertIn("2 lines changed", html_text)
             self.assertNotIn("secret body", html_text)
             self.assertNotIn("kP = 2", html_text)
-        self.kim.post(f"/code/{sid}/release", {})
+        self.release(sid)
         after = self.page(self.ava, sid)
         self.assertIn("secret body", after)
         self.assertIn("kP = 2 // tuned", after)
+
+    def test_a_student_sees_labels_not_commands_or_outputs_before_release(self):
+        sid = self.make_session(self.ava, status="done")
+        long_command = "echo start && " + "x" * 300 + "\nsecret second line"
+        self.add_step(sid, tool="Bash", tool_input={"command": long_command, "description": "Run the build"},
+                      output="SECRET BUILD OUTPUT")
+        self.add_step(sid, tool="Read", tool_input={"file_path": "src/Robot.java"}, output="SECRET FILE TEXT")
+        self.add_step(sid, tool="Grep", tool_input={"pattern": "kP"}, output="SECRET MATCH", status="error")
+        self.add_step(sid, tool="Mystery", tool_input={"password": "SECRET INPUT"}, output="SECRET ODD OUTPUT")
+        self.add_step(sid, kind="text", output="Claude says hello.")
+        self.add_step(sid, tool="todo", tool_input={"items": [{"content": "Visible task", "status": "pending"}]})
+        self.add_step(sid, tool="plan", tool_input={"plan": "Visible plan"}, status="approved")
+        for text in (self.page(self.ava, sid), self.ava.get(f"/code/{sid}/steps").text):
+            for hidden in ("SECRET", "secret second line", "x" * 130):
+                self.assertNotIn(hidden, text)
+            for shown in ("Run the build", "echo start", "Read src/Robot.java", "Searched for kP", "Used Mystery",
+                          "Claude says hello.", "Visible task", "Visible plan"):
+                self.assertIn(shown, text)
+        mentor = self.page(self.kim, sid)
+        for shown in ("SECRET BUILD OUTPUT", "SECRET MATCH", "secret second line", "SECRET INPUT"):
+            self.assertIn(shown, mentor)
+        (self.code.workspace(sid).root / "work").mkdir(parents=True)
+        self.release(sid)
+        after = self.page(self.ava, sid)
+        self.assertIn("SECRET BUILD OUTPUT", after)
 
     def test_a_mentor_always_sees_everything(self):
         sid = self.build()
@@ -528,7 +687,7 @@ class DiffPanelTest(PagesTest):
         self.write_patch(sid, self.PATCH)
         self.assertNotIn("src/Arm.java", self.page(self.ava, sid))
         self.assertNotIn("double kP", self.ava.get(f"/code/{sid}/steps").text)
-        self.kim.post(f"/code/{sid}/release", {})
+        self.release(sid)
         page = self.page(self.ava, sid)
         self.assertIn("src/Arm.java", page)
         self.assertIn("double kP = 0.2;", page)

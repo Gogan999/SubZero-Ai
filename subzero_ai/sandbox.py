@@ -235,11 +235,27 @@ def _zip_parts(name: str) -> list[str]:
     return parts
 
 
-def unpack_tree(data: bytes, dest: Path) -> int:
-    """Unpack a zip made by pack_tree into `dest`. Returns the number of files."""
+WINDOWS_RESERVED = frozenset({"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)),
+                              *(f"lpt{n}" for n in range(1, 10))})
+WINDOWS_BAD_CHARS = frozenset('<>:"|?*')
+
+
+def windows_name_problem(part: str) -> bool:
+    """True if Windows can't hold a file or folder with this name: a reserved device name (with or without an
+    extension), a name ending in a dot or a space, a control character, or one of < > : " | ? *. Platform independent."""
+    if not part or part[-1] in ". " or any(c in WINDOWS_BAD_CHARS or ord(c) < 32 for c in part):
+        return True
+    return part.split(".", 1)[0].rstrip(" ").lower() in WINDOWS_RESERVED
+
+
+def unpack_tree(data: bytes, dest: Path, *, safe_names: bool = False, skipped: list[str] | None = None) -> int:
+    """Unpack a zip made by pack_tree into `dest`. Returns the number of files. With safe_names (on the host, which
+    is Windows), a file whose path Windows can't hold, or whose folder or name differs from an earlier one only by
+    case, is skipped instead of being dropped or merged by the file system. Skipped paths are added to `skipped`."""
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     count = 0
+    seen: dict[tuple[str, ...], tuple[str, ...]] = {}  # lower-case path -> the spelling that came first
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
@@ -248,7 +264,18 @@ def unpack_tree(data: bytes, dest: Path) -> int:
         for info in archive.infolist():
             if info.is_dir():
                 continue
-            target = dest.joinpath(*_zip_parts(info.filename))
+            parts = _zip_parts(info.filename)
+            if safe_names:
+                clash = any(windows_name_problem(part) for part in parts)
+                for i in range(1, len(parts) + 1):
+                    first = seen.setdefault(tuple(p.lower() for p in parts[:i]), tuple(parts[:i]))
+                    if first != tuple(parts[:i]):
+                        clash = True
+                if clash:
+                    if skipped is not None:
+                        skipped.append("/".join(parts))
+                    continue
+            target = dest.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
@@ -2207,6 +2234,10 @@ def _reap_orphans(manager: SandboxManager, report: dict[str, int]) -> None:
         try:
             backend = manager.backend(kind)
             names = backend.list_existing()
+        except SandboxRefused as exc:  # not set up (for example no base image yet): one plain line is enough
+            report["failed"] += 1
+            log.warning("Couldn't list the %s sandboxes: %s", kind, exc)
+            continue
         except Exception:
             report["failed"] += 1
             log.warning("Couldn't list the %s sandboxes", kind, exc_info=True)

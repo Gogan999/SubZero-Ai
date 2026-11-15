@@ -148,6 +148,7 @@ class SessionPolicy:
     cap_usd: float | None = None
     spent_usd: float | Callable[[], float] = 0.0
     extra_system: str = ""
+    on_cap: Callable[[], None] | None = None  # called when a request is refused for the spending cap (D92)
 
     def spent(self) -> float:
         return float(self.spent_usd() if callable(self.spent_usd) else self.spent_usd)
@@ -242,6 +243,26 @@ def search_uses(payload: dict[str, Any]) -> int:
     return uses
 
 
+def _tool_allowed(tool: Any, allow_web_tools: bool) -> bool:
+    """D93: only client tools (a plain definition, or type "custom") pass, and the web search and fetch server tools
+    when web is on. Every other server tool type (code execution, MCP, computer use and so on) is removed."""
+    if not isinstance(tool, dict):
+        return True  # not a tool definition at all: Anthropic refuses it
+    kind = tool.get("type")
+    if kind is None or kind == "custom":
+        return True
+    return bool(allow_web_tools) and isinstance(kind, str) and kind.startswith(("web_search", "web_fetch"))
+
+
+def typical_request_cost(model: str) -> float:
+    """What the gateway reserves for the smallest request this model can get: a short prompt and the default
+    max_tokens. A session this close to its cap would be refused by the gateway anyway. 0.0 for an unpriced model."""
+    price = price_for(model)
+    if price is None:
+        return 0.0
+    return (price.input * 1000 + price.output * DEFAULT_MAX_TOKENS) / 1_000_000
+
+
 def rewrite_request(payload: dict[str, Any], *, allowed_models: Any, allow_web_tools: bool,
                     extra_system: str = "") -> dict[str, Any]:
     """The request body after the team's rules are applied. Raises GatewayError for a refused request."""
@@ -266,9 +287,7 @@ def rewrite_request(payload: dict[str, Any], *, allowed_models: Any, allow_web_t
     out.pop("mcp_servers", None)  # Anthropic's servers would connect to any address named here
     tools = out.get("tools")
     if isinstance(tools, list):
-        prefixes = ("mcp",) if allow_web_tools else ("mcp", "web_search", "web_fetch")
-        out["tools"] = [t for t in tools if not (isinstance(t, dict) and isinstance(t.get("type"), str)
-                                                 and t["type"].startswith(prefixes))]
+        out["tools"] = [t for t in tools if _tool_allowed(t, allow_web_tools)]
     if extra_system.strip():
         block = {"type": "text", "text": extra_system}
         if isinstance(system, str):
@@ -758,6 +777,14 @@ class AnthropicGateway:
             estimate += search_uses(out) * WEB_SEARCH_PRICE
         return data, model, estimate, max_tokens
 
+    @staticmethod
+    def _tell_cap(policy: SessionPolicy) -> None:
+        if policy.on_cap is not None:
+            try:
+                policy.on_cap()
+            except Exception:
+                log.exception("Gateway: the cap callback failed")
+
     async def _prepare_call(self, conn: _Conn, req: _Request, key: str, policy: SessionPolicy) -> _Call | None:
         """Read and check the request. Sends the refusal and returns None if it can't go to Anthropic. When it returns
         a call, the cost estimate is already reserved against the session's cap."""
@@ -773,9 +800,11 @@ class AnthropicGateway:
                 spent = policy.spent()
                 if spent >= policy.cap_usd:
                     log.info("Gateway: session %s is at its cap", key)
+                    self._tell_cap(policy)
                     raise GatewayError(402, "billing_error", CAP_MESSAGE)
                 if spent + self._reserved.get(key, 0.0) + estimate > policy.cap_usd:
                     log.info("Gateway: session %s could go over its cap", key)
+                    self._tell_cap(policy)
                     raise GatewayError(402, "billing_error", OVER_CAP_MESSAGE)
                 reserve = estimate
             credential = self._lookup(self._credential, "credential")

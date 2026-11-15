@@ -35,8 +35,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .anthropic_gateway import Credential, SessionPolicy, Usage, bare_model
-from .code_runner import FINISHED, MAX_TASK_CHARS, SANDBOX_OFF_STOPPED, CodeError, Workspace
+from .anthropic_gateway import Credential, SessionPolicy, Usage, bare_model, typical_request_cost
+from .code_runner import (
+    FINISHED, MAX_OPEN_SESSIONS, MAX_TASK_CHARS, OPEN_STUDENT_STATES, SANDBOX_OFF_STOPPED, CodeError, Workspace,
+)
 from .pi_client import bridge_credentials_path
 from .prompts import load_safety_prompt
 from .sandbox import (
@@ -75,6 +77,7 @@ AGENT_ENV = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, "LANG": "C.UTF-8"}
 GIT_ENV = {**AGENT_ENV, "GIT_AUTHOR_NAME": "SubZero AI", "GIT_AUTHOR_EMAIL": "sandbox@subzero.invalid",
            "GIT_COMMITTER_NAME": "SubZero AI", "GIT_COMMITTER_EMAIL": "sandbox@subzero.invalid",
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
+CHANGING_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash")  # tools that need an approved plan first
 PLAN_TOOL, TODO_TOOL = "ExitPlanMode", "TodoWrite"  # tools the runner reports in another way (plan, todo events)
 
 NEEDS_SANDBOX = ("The new Code engine needs the sandbox. An admin can turn on Hyper-V in Settings, Code, or switch to "
@@ -124,6 +127,7 @@ class AgentRun:
     skip_ids: set[str] = field(default_factory=set)  # tool calls shown another way (plan, task list)
     records_mark: int = 0  # gateway records counted when the current turn began
     timer: Any = None
+    gated: bool = False  # plan-first and the plan isn't approved yet: changing tools must not start (D89)
     closing: bool = False  # the idle timer fired: it is being closed and must not take a new turn
 
 
@@ -215,6 +219,7 @@ class AgentEngine:
         self._pending: dict[int, Action] = {}
         self._waiting_noted: set[int] = set()
         self._tools_ok: set[str] = set()  # sandboxes already checked for the Code tools
+        self._cap_refusals: set[int] = set()  # sessions the gateway refused for the cap since their turn began
         self._spent: dict[int, float] = {}  # dollars so far per session: the gateway's running total
         self._records: dict[int, int] = {}  # how many replies the gateway has counted per session
 
@@ -267,7 +272,7 @@ class AgentEngine:
         live = run is not None and run.driving and run.started and not run.closed and not run.stopped
         if row["status"] == "running" and not live:
             raise CodeError("Claude is still starting up. Send the follow-up again in a moment.")
-        cr._check_open_limit(row["created_by"], student=bool(row["owner_is_student"]))
+        self._check_open_limit(row)
         self._check_cap(row)
         self._remember_loop()
         turn = self._next_turn(sid)
@@ -289,7 +294,17 @@ class AgentEngine:
         """A mentor answered the plan: tell the runner (starting a new one if the old one is gone)."""
         self._remember_loop()
         row = self.cr.get(session_id)
-        if row is not None:
+        if row is not None and approve:
+            try:
+                self._check_cap(row)
+            except CodeError:
+                # The route already marked the plan approved: put it back, so the plan is still waiting for a mentor
+                # (after the cap is raised in Settings) and nothing runs.
+                self.cr.db.execute("UPDATE code_steps SET status = 'pending', reviewed_by = NULL, review_note = NULL "
+                                   "WHERE id = (SELECT MAX(id) FROM code_steps WHERE session_id = ? AND "
+                                   "tool = 'plan' AND status = 'approved')", (session_id,))
+                raise
+        elif row is not None:
             self._refresh_cap(row)
         self.cr._set(session_id, status="running")
         self._schedule(session_id, Action("plan", approve=approve, note=note))
@@ -357,13 +372,14 @@ class AgentEngine:
             return None
         s = self.settings
         student = bool(row["owner_is_student"])
-        models = {row["model"], s.model_default, s.model_hard, s.model_titles, s.model_screener}
+        models = self._allowed_models(row)
         who = "a student on the team" if student else "a mentor"
         return SessionPolicy(
-            allowed_models={m for m in models if m},
+            allowed_models=models,
             allow_web_tools=bool(s.code_web_tools_students if student else s.code_web_tools_mentors),
             cap_usd=row["cap_usd"] or None,
             spent_usd=lambda: self._spent_of(sid),
+            on_cap=lambda: self._cap_refusals.add(sid),
             extra_system=f"{load_safety_prompt(s)}\n\nThis Code session belongs to {who}.")
 
     def record(self, key: str, usage: Usage, cost: float) -> None:
@@ -428,11 +444,51 @@ class AgentEngine:
         self.cr.db.execute("UPDATE code_sessions SET cost_usd = cost_usd + ?, input_tokens = input_tokens + ?, "
                            "output_tokens = output_tokens + ? WHERE id = ?", (cost, int(tokens_in), int(tokens_out), sid))
 
+    def _allowed_models(self, row) -> set[str]:
+        """The models a session's Claude may ask the gateway for (also the ones the background model settings use)."""
+        s = self.settings
+        return {m for m in (row["model"], s.model_default, s.model_hard, s.model_titles, s.model_screener) if m}
+
+    def model_env(self, row) -> dict[str, str]:
+        """Environment that points the SDK's background and helper models at models the gateway accepts. It asks for
+        a Haiku-, Sonnet- or Opus-class model by name; one that isn't allowed is replaced by the session's own."""
+        own = bare_model(row["model"])
+        allowed = sorted({bare_model(m) for m in self._allowed_models(row)} - {""})
+
+        def pick(word: str) -> str:
+            return next((m for m in allowed if word in m.lower()), own)
+
+        return {"ANTHROPIC_SMALL_FAST_MODEL": pick("haiku"), "ANTHROPIC_DEFAULT_HAIKU_MODEL": pick("haiku"),
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": pick("sonnet"), "ANTHROPIC_DEFAULT_OPUS_MODEL": pick("opus")}
+
     def _check_cap(self, row) -> None:
+        """Refuse when the session has spent its cap, or is so close that the gateway would refuse even the smallest
+        request (spent plus typical_request_cost for the session's model is over the cap)."""
         self._refresh_cap(row)
         cap = self.role_cap(bool(row["owner_is_student"]))
-        if cap is not None and self._spent_of(row["id"]) >= cap:
+        if cap is None:
+            return
+        if self._spent_of(row["id"]) + typical_request_cost(bare_model(row["model"])) > cap:
             raise CodeError(cap_text(cap))
+
+    def _check_open_limit(self, row) -> None:
+        """The open-session limit for a follow-up, not counting this session (it is already open, and a mentor's
+        follow-up on a student's session must not be refused by the student's own limit)."""
+        cr, sid = self.cr, row["id"]
+        if row["owner_is_student"]:
+            marks = ", ".join("?" for _ in OPEN_STUDENT_STATES)
+            n = cr.db.one(f"SELECT COUNT(*) AS n FROM code_sessions WHERE created_by = ? AND owner_is_student = 1 AND "
+                          f"id != ? AND status IN ({marks})", (row["created_by"], sid, *OPEN_STUDENT_STATES))["n"]
+            limit = self.settings.code_student_max_open
+            if n >= limit:
+                raise CodeError(f"You can have {limit} Code session{'s' if limit != 1 else ''} open at a time. Wait "
+                                "until it finishes, then try again.")
+            return
+        n = cr.db.one("SELECT COUNT(*) AS n FROM code_sessions WHERE created_by = ? AND id != ? AND status IN "
+                      "('preparing', 'running', 'waiting')", (row["created_by"], sid))["n"]
+        if n >= MAX_OPEN_SESSIONS:
+            raise CodeError(f"You already have {MAX_OPEN_SESSIONS} Code sessions waiting or running. Stop or finish "
+                            "one first.")
 
     def _refresh_cap(self, row) -> None:
         """A mentor who raised the cap in Settings can carry a session on: the cap is read again at each new run."""
@@ -572,11 +628,13 @@ class AgentEngine:
         self._cancel_timer(run)
         run.idle = False
         run.turn = self._next_turn(run.session_id)
+        self._cap_refusals.discard(run.session_id)
         run.records_mark = self._records.get(run.session_id, 0)
         settings = self.settings
         student = bool(row["owner_is_student"])
         if run.started and action.kind == "plan" and run.plan_id:
             run.plan_id = ""
+            run.gated = run.gated and not action.approve
             self._send(run, {"type": "plan_decision", "approve": action.approve, "note": action.note})
             return
         if run.started:
@@ -599,6 +657,7 @@ class AgentEngine:
                                        sub_agents=bool(settings.code_sub_agents)))
         backend = self.cr.sandboxes.backend(run.handle.backend)
         run.started = True
+        run.gated = plan_first
         run.open_turns += 1
         self._send(run, {"type": "start", "task": text, "model": bare_model(row["model"]),
                          "cwd": backend.abs_path(run.handle, "work"), "resume": resume, "plan_first": plan_first,
@@ -618,7 +677,7 @@ class AgentEngine:
             await self._ensure_gateway()
         base_url = f"http://{settings.sandbox_host_address}:{settings.sandbox_gateway_port}"
         backend = manager.backend(handle.backend)
-        env = {**AGENT_ENV, **manager.gateway_env(handle, base_url)}
+        env = {**AGENT_ENV, **manager.gateway_env(handle, base_url), **self.model_env(cr.get(sid))}
         stream = await asyncio.to_thread(backend.open_stream, handle, self.runner_argv(backend), cwd="work", env=env)
         loop = asyncio.get_running_loop()
         run = AgentRun(sid, handle, stream, asyncio.Queue(maxsize=EVENT_QUEUE_SIZE))
@@ -694,6 +753,9 @@ class AgentEngine:
                 outcome = self._apply(sid, run, event)
                 if outcome == "plan":
                     return
+                if outcome == "gate":
+                    self._gate_violation(sid, run, event)
+                    return
                 if outcome == "exit":
                     self._after_exit(sid, run, event)
                     return
@@ -738,6 +800,8 @@ class AgentEngine:
             if name in (PLAN_TOOL, TODO_TOOL):
                 run.skip_ids.add(tool_id)
                 return None
+            if run.gated and name in CHANGING_TOOLS:
+                return "gate"
             data = event.get("input")
             data = dict(data) if isinstance(data, dict) else {"value": data}
             if event.get("parent_id"):
@@ -788,6 +852,19 @@ class AgentEngine:
                            "'The session ended before this finished.') WHERE session_id = ? AND status = 'running'",
                            (_now(), sid))
 
+    def _gate_violation(self, sid: int, run: AgentRun, event: dict[str, Any]) -> None:
+        """A plan-first run started a tool that changes things before its plan was approved: end it (D89)."""
+        with self._lock:
+            if self._runs.get(sid) is run:
+                del self._runs[sid]
+        run.closed = True
+        run.stopped = True
+        self._cancel_timer(run)
+        run.stream.terminate()
+        self._close_steps(sid)
+        self._fail(sid, INTERNAL_FAIL, f"Claude tried to use {str(event.get('name'))[:40]} before the plan was "
+                                       "approved, so the run was stopped. Nothing was kept from that step.")
+
     def _protocol_error(self, sid: int, run: AgentRun) -> None:
         """The runner wrote a line over the limit: end it and fail the run with a plain message."""
         with self._lock:
@@ -835,8 +912,10 @@ class AgentEngine:
         self._close_steps(sid)
         row = cr.get(sid)
         cap, spent = row["cap_usd"], self._spent_of(sid)
+        refused = sid in self._cap_refusals
+        self._cap_refusals.discard(sid)
         if event.get("is_error"):
-            if cap and spent >= cap:
+            if cap and (spent >= cap or refused):
                 text = cap_text(float(cap))
                 cr._note(sid, run.turn, text)
                 cr._set(sid, status="stopped", error=text)
@@ -1055,7 +1134,14 @@ class AgentEngine:
         else:
             marker.unlink(missing_ok=True)
         data = backend.get_archive(handle, src="work", exclude=COPY_SKIP)
-        self._save_files(workspace, data)
+        skipped = self._save_files(workspace, data)
+        if skipped:
+            count = len(skipped)
+            notes.append(f"{count} file{'s' if count != 1 else ''} couldn't be copied to the server because of "
+                         f"{'their names' if count != 1 else 'its name'}.")
+            self._mentor_note(sid, max(0, self._next_turn(sid) - 1),
+                              "Windows can't hold these names, so they are only in the sandbox's export: "
+                              + ", ".join(skipped[:10]) + (f" and {count - 10} more" if count > 10 else ""))
         try:
             state = backend.get_archive(handle, src=".claude", exclude=frozenset())
             if len(state) <= 200 * 1024 * 1024:
@@ -1065,21 +1151,24 @@ class AgentEngine:
         return notes
 
     @staticmethod
-    def _save_files(workspace: Workspace, data: bytes) -> None:
+    def _save_files(workspace: Workspace, data: bytes) -> list[str]:
         """Keep the sandbox's files on the host: the zip, and a work folder that matches them (the next sandbox starts
-        from it). Nothing is unpacked if the files would be too big."""
+        from it). Nothing is unpacked if the files would be too big. Returns the paths Windows can't hold, which
+        are left out of the work folder."""
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             if sum(info.file_size for info in archive.infolist()) > MAX_SESSION_BYTES:
                 raise SandboxError("The sandbox's files are too big to save, so they weren't kept.")
         (workspace.root / "sandbox-export.zip").write_bytes(data)
         fresh = workspace.root / "work.new"
         shutil.rmtree(fresh, ignore_errors=True)
+        skipped: list[str] = []
         try:
-            unpack_tree(data, fresh)
+            unpack_tree(data, fresh, safe_names=True, skipped=skipped)
             shutil.rmtree(workspace.work, ignore_errors=True)
             fresh.rename(workspace.work)
         finally:
             shutil.rmtree(fresh, ignore_errors=True)
+        return skipped
 
     def export(self, sid: int, handle: SandboxHandle) -> None:
         """Called when a session's sandbox is about to be deleted (CodeRunner._export_sandbox)."""

@@ -4,6 +4,7 @@ import { createEventMapper } from "./events.mjs";
 import { buildOptions } from "./options.mjs";
 
 const INTERRUPT_GRACE_MS = 5000;
+const CHANGING_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]);
 
 // Simple async queue used as the SDK's streaming input.
 class InputQueue {
@@ -77,13 +78,20 @@ export async function run({ query, stdin, stdout, env = process.env, versions = 
   const endedP = new Promise((r) => { ended = r; });
   let stopping = false;
   let pendingPlan = null; // { resolve }
+  // D89: until a plan-first run's plan is approved, tools that change things are denied here, whatever the SDK's mode.
+  let planGate = false;
   // Lets the entry point release a waiting plan decision if the process is crashing.
   control.cancelPlan = () => { if (pendingPlan) pendingPlan.resolve({ approve: false, note: "stopped" }); };
 
   emit({ type: "ready", runner_version: versions.runner_version, sdk_version: versions.sdk_version });
 
   const canUseTool = async (name, toolInput, opts = {}) => {
-    if (name !== "ExitPlanMode") return { behavior: "allow", updatedInput: toolInput };
+    if (name !== "ExitPlanMode") {
+      if (planGate && CHANGING_TOOLS.has(name)) {
+        return { behavior: "deny", message: "Finish the plan first. Nothing can be changed or run until a mentor approves it." };
+      }
+      return { behavior: "allow", updatedInput: toolInput };
+    }
     const plan = typeof toolInput?.plan === "string" && toolInput.plan ? toolInput.plan : mapper.lastText;
     const id = opts.toolUseID || "plan";
     emit({ type: "plan", id, plan });
@@ -96,6 +104,7 @@ export async function run({ query, stdin, stdout, env = process.env, versions = 
         emit({ type: "error", message: "The agent could not switch out of planning mode, so it was not allowed to continue.", detail: String(e && e.message || e).slice(0, 200) });
         return { behavior: "deny", message: "Could not switch out of planning mode; stopping here." };
       }
+      planGate = false;
       return { behavior: "allow", updatedInput: toolInput };
     }
     const note = decision.note ? String(decision.note) : "The mentor declined this plan.";
@@ -126,6 +135,7 @@ export async function run({ query, stdin, stdout, env = process.env, versions = 
   }
 
   function start(msg) {
+    planGate = Boolean(msg.plan_first);
     const options = buildOptions(msg, { env, canUseTool, abortController: abort });
     input.push(userMessage(String(msg.task ?? "")));
     openTurns++;

@@ -19,6 +19,7 @@
       {% endif %}
       {% if can_release %}
       <form method="post" action="/code/{{ session.id }}/release"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="fingerprint" value="{{ fingerprint }}">
         <button class="button small primary" type="submit" data-confirm="Release these changes? {{ session.owner }} will be able to read and download them.">Release to student</button></form>
       {% endif %}
       {% if changes %}<a class="button small" href="/code/{{ session.id }}/changes.patch" download>Download patch</a>{% endif %}

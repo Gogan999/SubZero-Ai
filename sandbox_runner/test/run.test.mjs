@@ -119,6 +119,63 @@ test("plan approve switches to bypassPermissions", async () => {
   assert.deepEqual(calls[0].state.modes, ["bypassPermissions"]);
 });
 
+test("plan-first: Write and Bash are denied before approval and allowed after", async () => {
+  const h = io();
+  const { query, calls } = stubQuery(async function* ({ options, nextInput, state }) {
+    await nextInput();
+    yield initMsg;
+    state.before = [];
+    for (const name of ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "Read"]) {
+      state.before.push((await options.canUseTool(name, {}, { toolUseID: "t-" + name })).behavior);
+    }
+    await options.canUseTool("ExitPlanMode", {}, { toolUseID: "pl1" });
+    state.after = [];
+    for (const name of ["Write", "Bash"]) state.after.push((await options.canUseTool(name, {}, {})).behavior);
+    yield resultMsg();
+    await nextInput();
+  });
+  const p = go(query, h);
+  h.send(startMsg({ plan_first: true }));
+  await until(() => types(h).includes("plan"));
+  h.send({ type: "plan_decision", approve: true, note: "" });
+  await until(() => types(h).includes("turn_done"));
+  h.end(); await p;
+  assert.deepEqual(calls[0].state.before, ["deny", "deny", "deny", "deny", "deny", "allow"]);
+  assert.deepEqual(calls[0].state.after, ["allow", "allow"]);
+});
+
+test("a declined plan keeps the gate shut; a run that is not plan-first has no gate", async () => {
+  const h = io();
+  const { query, calls } = stubQuery(async function* ({ options, nextInput, state }) {
+    await nextInput();
+    yield initMsg;
+    await options.canUseTool("ExitPlanMode", {}, { toolUseID: "pl1" });
+    state.after = (await options.canUseTool("Bash", {}, {})).behavior;
+    yield resultMsg();
+    await nextInput();
+  });
+  const p = go(query, h);
+  h.send(startMsg({ plan_first: true }));
+  await until(() => types(h).includes("plan"));
+  h.send({ type: "plan_decision", approve: false, note: "no" });
+  await until(() => types(h).includes("turn_done"));
+  h.end(); await p;
+  assert.equal(calls[0].state.after, "deny");
+  const h2 = io();
+  const second = stubQuery(async function* ({ options, nextInput, state }) {
+    await nextInput();
+    yield initMsg;
+    state.r = (await options.canUseTool("Write", {}, {})).behavior;
+    yield resultMsg();
+    await nextInput();
+  });
+  const p2 = go(second.query, h2);
+  h2.send(startMsg({ plan_first: false }));
+  await until(() => types(h2).includes("turn_done"));
+  h2.end(); await p2;
+  assert.equal(second.calls[0].state.r, "allow");
+});
+
 test("plan decline denies with the note; plan text from input preferred", async () => {
   const h = io();
   const { query, calls } = planScript({ plan: "Step 1" });

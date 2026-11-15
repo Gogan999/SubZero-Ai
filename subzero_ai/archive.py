@@ -47,6 +47,11 @@ Progress = Callable[[int, int, str], None]
 
 
 # --------------------------------------------------------------------------- what counts as old
+# A chat with a message that came in by Slack DM is never an old website chat, even if its thread link wasn't saved
+NO_DM = ("NOT EXISTS (SELECT 1 FROM messages m JOIN slack_dm_messages d ON d.message_id = m.id "
+         "WHERE m.conversation_id = c.id)")
+
+
 def _select_old(conn: sqlite3.Connection, now: datetime | None = None, ids: list[int] | None = None) -> None:
     """Make two temporary tables on this connection: _old_chats (conversations with no Slack thread, at least
     MIN_AGE_MINUTES old; or, given `ids`, just those of them that still exist and still have no Slack thread) and
@@ -57,14 +62,14 @@ def _select_old(conn: sqlite3.Connection, now: datetime | None = None, ids: list
     if ids is None:
         conn.execute("CREATE TEMP TABLE _old_chats AS SELECT c.id AS id FROM conversations c "
                      "LEFT JOIN slack_threads t ON t.conversation_id = c.id "
-                     "WHERE t.conversation_id IS NULL AND c.created_at <= ?", (cutoff,))
+                     f"WHERE t.conversation_id IS NULL AND c.created_at <= ? AND {NO_DM}", (cutoff,))
     else:
         conn.execute("CREATE TEMP TABLE _old_chats (id INTEGER PRIMARY KEY)")
         for start in range(0, len(ids), 500):
             chunk = ids[start:start + 500]
             conn.execute("INSERT OR IGNORE INTO _old_chats SELECT c.id FROM conversations c "
                          "LEFT JOIN slack_threads t ON t.conversation_id = c.id WHERE t.conversation_id IS NULL "
-                         f"AND c.id IN ({','.join('?' * len(chunk))})", chunk)
+                         f"AND {NO_DM} AND c.id IN ({','.join('?' * len(chunk))})", chunk)
     conn.execute("CREATE TEMP TABLE _old_projects AS SELECT p.id AS id FROM projects p WHERE NOT EXISTS ("
                  "SELECT 1 FROM conversations c WHERE c.project_id = p.id AND c.id NOT IN (SELECT id FROM _old_chats))")
 

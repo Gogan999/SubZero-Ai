@@ -311,6 +311,18 @@ class GatewayCase(unittest.IsolatedAsyncioTestCase):
         status, _, _ = await self.call("POST", "/v1/messages", self.message())
         self.assertEqual(status, 200)
 
+    async def test_a_cap_refusal_tells_the_policys_callback(self):
+        told = []
+        self.policy.on_cap = lambda: told.append(1)
+        self.policy.cap_usd = 1.0
+        self.policy.spent_usd = lambda: 1.0
+        status, _, _ = await self.call("POST", "/v1/messages", self.message())
+        self.assertEqual((status, told), (402, [1]))
+        self.policy.spent_usd = lambda: 0.0
+        self.policy.cap_usd = 0.0001  # the worst case for one request is over it
+        status, _, _ = await self.call("POST", "/v1/messages", self.message())
+        self.assertEqual((status, told), (402, [1, 1]))
+
     # ---- replies and usage
     async def test_streaming_passes_through_and_records_once(self):
         self.upstream.content_type = "text/event-stream"
@@ -829,6 +841,18 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(out["tools"], [])
         self.assertEqual(out["system"][0], {"type": "text", "text": "a"})
         self.assertNotIn("cache_control", out["system"][-1])
+
+    def test_only_client_tools_and_the_web_tools_pass(self):
+        tools = [{"name": "Bash", "input_schema": {}}, {"type": "custom", "name": "Mine", "input_schema": {}},
+                 {"type": "code_execution_20250522", "name": "code_execution"},
+                 {"type": "computer_20250124", "name": "computer"}, {"type": "web_search_20250305", "name": "ws"},
+                 {"type": "web_fetch_20250910", "name": "wf"}, {"type": "bash_20250124", "name": "bash"},
+                 {"type": "mcp_toolset", "mcp_server_name": "x"}]
+        names = lambda out: [t.get("name") or t["type"] for t in out["tools"]]
+        off = rewrite_request({"model": MODEL, "tools": tools}, allowed_models={MODEL}, allow_web_tools=False)
+        self.assertEqual(names(off), ["Bash", "Mine"])
+        on = rewrite_request({"model": MODEL, "tools": tools}, allowed_models={MODEL}, allow_web_tools=True)
+        self.assertEqual(names(on), ["Bash", "Mine", "ws", "wf"])
 
     def test_filter_headers_allow_list(self):
         got = filter_headers({"Authorization": "x", "Host": "h", "Content-Length": "1", "Connection": "keep-alive",

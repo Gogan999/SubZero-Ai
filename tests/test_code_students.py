@@ -225,7 +225,7 @@ class StudentPrivacyTest(CodeStudentTest):
         self.assertNotIn("Download patch", self.ava.get(f"/code/{sid}").text, "no download before release")
         self.assertNotIn("changes-title", self.ava.get(f"/code/{sid}").text, "no file list before release")
         self.assertEqual(self.kim.get(f"/code/{sid}/changes.patch").status_code, 200, "mentors always can")
-        self.kim.post(f"/code/{sid}/release", {"note": ""}, follow_redirects=False)
+        self.release(sid)
         self.h.idle()
         patch = self.ava.get(f"/code/{sid}/changes.patch")
         self.assertEqual(patch.status_code, 200)
@@ -237,7 +237,9 @@ class StudentPrivacyTest(CodeStudentTest):
         self.approve(sid)
         page = self.ava.get(f"/code/{sid}").text
         self.assertIn("Ran a command", page)
-        self.assertIn("BUILD SUCCESSFUL", page)
+        self.assertNotIn("BUILD SUCCESSFUL", page, "command output waits for a mentor to release (D91)")
+        self.release(sid)
+        self.assertIn("BUILD SUCCESSFUL", self.ava.get(f"/code/{sid}").text)
 
 
 class StudentFollowUpTest(CodeStudentTest):

@@ -7,6 +7,7 @@ from __future__ import annotations
 import atexit
 import base64
 import io
+import logging
 import os
 import re
 import shutil
@@ -2323,6 +2324,62 @@ class SandboxNetworkDriftTest(unittest.TestCase):
     def test_the_block_rule_codes_are_described(self):
         for code in NETWORK_CODE_PREFIXES:
             self.assertTrue(describe_network_problem(code + "x") != "", code)
+
+
+class WindowsNamesTest(unittest.TestCase):
+    def zip_of(self, names: list[str]) -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for name in names:
+                z.writestr(name, "x")
+        return buf.getvalue()
+
+    def test_names_windows_cannot_hold_are_skipped_and_reported(self):
+        bad = ["con", "src/NUL.txt", "aux.java", "lpt1", "COM9.log", "trailing.", "trail ", "a<b", 'q"x', "p|q", "w?",
+               "s*", "dir/prn.x"]
+        good = ["ok.txt", "src/Main.java", "console.txt", "com10", "a.b.c"]
+        with tempfile.TemporaryDirectory() as tmp:
+            skipped: list[str] = []
+            count = unpack_tree(self.zip_of(bad + good), Path(tmp), safe_names=True, skipped=skipped)
+            self.assertEqual(sorted(skipped), sorted(bad))
+            self.assertEqual(count, len(good))
+            self.assertTrue((Path(tmp) / "src" / "Main.java").is_file())
+
+    def test_names_that_differ_only_by_case_are_not_merged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skipped: list[str] = []
+            unpack_tree(self.zip_of(["Readme.md", "README.md", "Src/a.txt", "src/b.txt", "Src/c.txt"]), Path(tmp),
+                        safe_names=True, skipped=skipped)
+            self.assertEqual(sorted(skipped), ["README.md", "src/b.txt"])
+            self.assertEqual(sorted(p.name for p in Path(tmp).rglob("*") if p.is_file()), ["Readme.md", "a.txt", "c.txt"])
+
+    def test_the_default_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(unpack_tree(self.zip_of(["con", "a<b"]), Path(tmp)), 2)
+
+
+class ListingLogTest(unittest.TestCase):
+    def test_a_refused_backend_logs_one_plain_line_without_a_traceback(self):
+        from subzero_ai import sandbox as module
+
+        class Manager:
+            store = mock.Mock(known_names=lambda: set(), any_creating=lambda: False)
+
+            def kinds_in_use(self):
+                return {"hyperv"}
+
+            def backend(self, kind):
+                raise SandboxRefused("Set the sandbox base image in Settings first.")
+
+        logging.disable(logging.NOTSET)  # tests/__init__ turns logging off; this test checks the log line
+        self.addCleanup(logging.disable, logging.CRITICAL)
+        report = {"failed": 0}
+        with self.assertLogs("subzero.sandbox", "WARNING") as logs:
+            module._reap_orphans(Manager(), report)
+        self.assertEqual(report["failed"], 1)
+        [record] = logs.records
+        self.assertIsNone(record.exc_info)
+        self.assertIn("Set the sandbox base image in Settings first.", record.getMessage())
 
 
 if __name__ == "__main__":

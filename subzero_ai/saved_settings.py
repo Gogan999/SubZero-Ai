@@ -121,11 +121,11 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               choices=AUTH_CHOICES),
         Field("code_max_running", "Code sessions working at the same time", "int",
               "The others wait their turn and start by themselves. Each working session uses a sandbox's memory.", 1, 8),
-        Field("code_plan_first_students", "Students' sessions start with a plan a mentor approves", "bool",
-              "The starting tick of the plan-first choice on a student's session. With it, Claude writes a plan and "
-              "waits for a mentor before it changes anything."),
-        Field("code_plan_first_mentors", "Mentors' sessions start with a plan to approve", "bool",
-              "The starting tick of the plan-first choice on a mentor's session."),
+        Field("code_plan_first_students", "Students' sessions always start with a plan a mentor approves", "bool",
+              "On: every student session starts with a plan, Claude changes nothing until a mentor approves it, and "
+              "students can't turn that off. Off: student sessions get no plan step and no choice."),
+        Field("code_plan_first_mentors", "Mentors' sessions start with the plan-first box ticked", "bool",
+              "Only the starting tick on the start form. A mentor can untick or tick it for each session."),
         Field("code_web_tools_students", "Let Claude search the web in students' sessions", "bool",
               "Turn it off to keep students' sessions off the open web. Applies to the next request."),
         Field("code_web_tools_mentors", "Let Claude search the web in mentors' sessions", "bool",

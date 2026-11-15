@@ -339,8 +339,10 @@ class CodeStudentTest(unittest.TestCase):
     overrides: dict = {}
 
     def setUp(self):
-        self.h = Harness(connector_github_repo="team/robot-code", code_sandbox="fake", sandbox_min_free_gb=0,
-                         code_student_access=True, **self.overrides)
+        options = dict(connector_github_repo="team/robot-code", code_sandbox="fake", sandbox_min_free_gb=0,
+                       code_student_access=True, anthropic_api_key="sk-ant-TESTKEY")  # Code refuses without a sign-in
+        options.update(self.overrides)
+        self.h = Harness(**options)
         self.ava = self.h.login(STUDENT)
         self.ben = self.h.login(STUDENT_2)
         self.kim = self.h.login(MENTOR)
@@ -372,6 +374,11 @@ class CodeStudentTest(unittest.TestCase):
         resp = self.kim.post(f"/code/{sid}/decline-request", {"note": note}, follow_redirects=False)
         self.assertEqual(resp.status_code, 303, resp.text)
         self.h.idle()
+
+    def release(self, sid, actor=None):
+        """A mentor releases a session's changes, with the fingerprint the page's form carries."""
+        return (actor or self.kim).post(f"/code/{sid}/release", {"fingerprint": self.code.patch_fingerprint(sid)},
+                                        follow_redirects=False)
 
     def tool_turns(self) -> int:
         return sum(1 for c in self.h.claude.calls if c["kind"] == "tool_turn")

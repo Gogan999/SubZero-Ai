@@ -47,7 +47,7 @@
           placeholder="The arm overshoots at high speed. Find where its PID is set up, suggest a fix, and run the build."></textarea>
         <div class="composer-bar">
           <div class="composer-left">
-            {% if agent %}
+            {% if agent and mentor %}
             <input type="hidden" name="plan_first" value="0">
             <label class="plan-first"><input type="checkbox" name="plan_first" value="1" aria-describedby="plan-help"{% if plan_first %} checked{% endif %}> Plan first</label>
             {% endif %}
@@ -64,7 +64,8 @@
         </div>
       </div>
       <p class="repo-line" id="code-repo">{{ icon('branch') }} <span>Working in <span class="mono">{{ repo }}</span>{% if branch %} on branch <span class="mono">{{ branch }}</span>{% else %} on its main branch{% endif %}.</span></p>
-      {% if agent %}<p class="field-hint" id="plan-help">Claude writes a plan and waits for a mentor to approve it before changing anything.</p>{% endif %}
+      {% if agent and mentor %}<p class="field-hint" id="plan-help">Claude writes a plan and waits for a mentor to approve it before changing anything.</p>
+      {% elif agent and plan_first %}<p class="field-hint">Claude writes a plan first and a mentor checks it.</p>{% endif %}
       {% if not mentor %}<p class="field-hint">A mentor reads your request before Claude starts.</p>{% endif %}
       {% if home.limit %}<p class="form-error" role="status">{{ home.limit }}</p>{% endif %}
     </form>

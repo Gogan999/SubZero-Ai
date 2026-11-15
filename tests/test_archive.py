@@ -141,6 +141,21 @@ class SelectionTest(Seeded):
                                                           (SAME_TEXT,))}
         self.assertEqual(text, {self.web1, self.slack_chat}, "identical content, only one of them is old")
 
+    def test_a_dm_chat_whose_thread_link_was_lost_is_not_old(self):
+        lost = self.chat(self.ava, "Lost link", [("user", "From Slack", "approved")])
+        mid = self.db.one("SELECT id FROM messages WHERE conversation_id = ?", (lost,))["id"]
+        self.db.execute("INSERT INTO slack_dm_messages (channel, ts, message_id, created_at) "
+                        "VALUES ('D0LOST', '1.000100', ?, ?)", (mid, OLD))
+        self.assertEqual(self.db.one("SELECT COUNT(*) AS n FROM slack_threads WHERE conversation_id = ?",
+                                     (lost,))["n"], 0)
+        with self.db.connect() as conn:
+            archive._select_old(conn)
+            ids = {r["id"] for r in conn.execute("SELECT id FROM _old_chats")}
+            archive._select_old(conn, ids=[lost, self.web1])
+            chosen = {r["id"] for r in conn.execute("SELECT id FROM _old_chats")}
+        self.assertNotIn(lost, ids)
+        self.assertEqual(chosen, {self.web1}, "also when the ids are picked ahead of time")
+
     def test_a_brand_new_chat_without_a_thread_yet_is_not_old(self):
         young = self.chat(self.ava, "Just now", [("user", "Hi", "pending")], created=archive.utcnow())
         with self.db.connect() as conn:

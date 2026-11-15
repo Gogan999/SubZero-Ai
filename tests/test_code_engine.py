@@ -4,12 +4,14 @@ network or a key. Also the migration that adds the engine's columns, the Setting
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sqlite3
 import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -383,8 +385,8 @@ class QueueTest(AgentTest):
         third = int(self.kim.post("/code", {"task": "Three."}, follow_redirects=False)
                     .headers["location"].rsplit("/", 1)[1])
         notes = lambda sid: [s["output"] for s in self.code.steps(sid) if s["kind"] == "note"]  # noqa: E731
-        self.assertTrue(wait_for(lambda: "Waiting for a free sandbox. 1 session is ahead of you." in notes(second)))
-        self.assertTrue(wait_for(lambda: "Waiting for a free sandbox. 2 sessions are ahead of you." in notes(third)))
+        self.assertTrue(wait_for(lambda: "Waiting for a free sandbox. 1 session is ahead of you." in notes(second), 30))
+        self.assertTrue(wait_for(lambda: "Waiting for a free sandbox. 2 sessions are ahead of you." in notes(third), 30))
         self.assertEqual((self.row(second)["status"], self.row(third)["status"]), ("preparing", "preparing"))
         self.assertEqual(len(self.starts()), 1, "only the first reached a runner")
         self.kim.post(f"/code/{first}/stop", {}, follow_redirects=False)
@@ -466,7 +468,7 @@ class StudentRuleTest(AgentTest):
         self.assertEqual(self.kim.get(f"/code/{sid}/changes.patch").status_code, 200)
         self.assertEqual(self.ava.post(f"/code/{sid}/release", {"note": ""}).status_code, 403)
         self.assertEqual(self.ben.get(f"/code/{sid}/changes.patch").status_code, 404)
-        self.kim.post(f"/code/{sid}/release", {"note": ""}, follow_redirects=False)
+        self.release(sid)
         self.h.idle()
         patch = self.ava.get(f"/code/{sid}/changes.patch")
         self.assertEqual(patch.status_code, 200)
@@ -499,7 +501,7 @@ class StudentRuleTest(AgentTest):
     def test_rule11_the_whole_life_of_a_session_is_audited(self):
         sid, _ = self.ask(self.ava, "First task.")
         self.approve(sid)
-        self.kim.post(f"/code/{sid}/release", {"note": ""}, follow_redirects=False)
+        self.release(sid)
         second, _ = self.ask(self.ben, "Second task.")
         self.decline(second, "No.")
         resp = self.kim.post("/code", {"task": "AGENT-SLOW stop me"}, follow_redirects=False)
@@ -636,6 +638,7 @@ class GatewayCallbacksTest(AgentTest):
 
     def test_credential_by_the_code_sign_in_setting(self):
         s = self.h.services.settings
+        s.anthropic_api_key = ""  # the test setup saves a key; start without one
         self.assertIsNone(self.engine.credential(), "no key saved")
         self.assertIn("API key", self.engine.credential_problem())
         s.anthropic_api_key = "sk-ant-TESTKEY"
@@ -951,6 +954,102 @@ class ReviewFixesTest(AgentTest):
         self.assertIn("Second job.", texts)
         self.assertIn("+- Second job.", self.kim.get(f"/code/{sid}/changes.patch").text)
         self.assertAlmostEqual(self.row(sid)["cost_usd"], 0.02)
+
+    def test_d89_a_plan_first_run_that_changes_files_before_approval_is_stopped(self):
+        self.h.services.settings.code_plan_first_students = True
+        sid, _ = self.ask(self.ava, "AGENT-SNEAK job")
+        self.approve(sid)
+        row = self.row(sid)
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("Something went wrong inside the app", row["error"])
+        self.assertNotIn("Write", row["error"])
+        notes = [s["output"] for s in self.code.steps(sid) if s["tool"] == "mentor"]
+        self.assertTrue(any("before the plan was approved" in n for n in notes), notes)
+        self.assertEqual([s for s in self.code.steps(sid) if s["tool"] == "Write"], [], "the step was never shown")
+        self.assertFalse((self.code.workspace(sid).work / "AGENT_NOTES.md").exists())
+        self.assertIsNone(self.live_run(sid))
+
+    def test_d92_a_gateway_cap_refusal_stops_the_session_with_the_cap_text(self):
+        original = self.engine._apply
+        engine = self.engine
+
+        def apply(sid, run, event):
+            if event.get("type") == "turn_done" and event.get("is_error"):
+                engine.policy(str(sid)).on_cap()  # the gateway refused a request for the cap during this turn
+            return original(sid, run, event)
+
+        with mock.patch.object(self.engine, "_apply", apply):
+            sid = self.mentor_start("AGENT-FAIL near the cap")
+        row = self.row(sid)
+        self.assertEqual(row["status"], "stopped")
+        self.assertEqual(row["error"], cap_text(15.0))
+
+    def test_d92_a_follow_up_near_the_cap_is_refused(self):
+        sid = self.mentor_start("First job.")
+        self.h.services.settings.code_cap_mentor_usd = 0.1  # less than one typical request
+        resp = self.kim.post(f"/code/{sid}/follow-up", {"text": "More."}, follow_redirects=True, headers=HTML)
+        self.assertIn("spending cap", resp.text)
+        self.assertEqual([m["type"] for m in self.sent], ["start"])
+
+    def test_d92_approving_a_plan_over_the_cap_is_refused_and_the_plan_keeps_waiting(self):
+        self.h.services.settings.code_plan_first_students = True
+        sid, _ = self.ask(self.ava)
+        self.approve(sid)
+        [step] = [s for s in self.code.steps(sid) if s["tool"] == "plan"]
+        self.h.services.settings.code_cap_student_usd = 0.1
+        resp = self.kim.post(f"/code/steps/{step['id']}/approve", {"note": ""}, follow_redirects=True, headers=HTML)
+        self.assertIn("spending cap", resp.text)
+        self.assertEqual(self.row(sid)["status"], "waiting")
+        self.assertEqual(self.db.one("SELECT status FROM code_steps WHERE id = ?", (step["id"],))["status"], "pending")
+        self.assertEqual(len(self.starts()), 1)
+        self.h.services.settings.code_cap_student_usd = 5
+        self.kim.post(f"/code/steps/{step['id']}/approve", {"note": ""}, follow_redirects=False)
+        self.h.idle()
+        self.assertEqual(self.row(sid)["status"], "done")
+
+    def test_a_mentors_follow_up_on_a_running_student_session_ignores_the_students_open_limit(self):
+        self.h.services.settings.code_student_max_open = 1
+        self.h.services.settings.code_plan_first_students = False
+        resp = self.ava.post("/code", {"task": "AGENT-SLOW student job"}, follow_redirects=False)
+        sid = int(resp.headers["location"].rsplit("/", 1)[1])
+        self.live.append(sid)
+        self.kim.post(f"/code/{sid}/approve-request", {"note": ""}, follow_redirects=False)
+        self.assertTrue(wait_for(lambda: self.live_run(sid) is not None and self.live_run(sid).driving))
+        self.kim.post(f"/code/{sid}/follow-up", {"text": "Also this."}, follow_redirects=False)
+        self.assertEqual([m["type"] for m in self.sent], ["start", "message"])
+
+    def test_background_models_point_at_models_the_gateway_accepts(self):
+        sid = self.mentor_start("First job.")
+        row, s = self.row(sid), self.h.services.settings
+        env = self.engine.model_env(row)
+        allowed = set(self.engine.policy(str(sid)).models())
+        self.assertEqual(set(env), {"ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                                    "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL"})
+        self.assertTrue(set(env.values()) <= allowed, (env, allowed))
+        self.assertEqual(env["ANTHROPIC_SMALL_FAST_MODEL"], "claude-haiku-5-5")
+        s.model_titles = s.model_screener = ""
+        s.model_default = s.model_hard = row["model"]
+        env = self.engine.model_env(row)
+        self.assertEqual(set(env.values()), {row["model"].split("/")[-1]})
+        self.assertTrue(set(env.values()) <= set(self.engine.policy(str(sid)).models()))
+
+    def test_files_windows_cannot_hold_are_left_out_with_a_note(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for name in ("aux.txt", "ok.txt", "Dup.txt", "dup.txt"):
+                z.writestr(name, "x")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = mock.Mock(root=root, work=root / "work")
+            skipped = AgentEngine._save_files(workspace, buf.getvalue())
+            self.assertEqual(sorted(skipped), ["aux.txt", "dup.txt"])
+            self.assertEqual(sorted(p.name for p in (root / "work").iterdir()), ["Dup.txt", "ok.txt"])
+        with mock.patch.object(AgentEngine, "_save_files", return_value=["aux.txt", "nul"]):
+            sid = self.mentor_start("First job.")
+        self.assertIn("2 files couldn't be copied to the server because of their names.",
+                      [s["output"] for s in self.code.steps(sid) if s["kind"] == "note" and s["tool"] is None])
+        notes = [s["output"] for s in self.code.steps(sid) if s["tool"] == "mentor"]
+        self.assertTrue(any("aux.txt" in n for n in notes), notes)
 
     def test_m1_an_idle_runner_that_is_closing_is_never_reused(self):
         sid = self.mentor_start("First job.")

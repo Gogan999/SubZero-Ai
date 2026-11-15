@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
+import hmac
 import io
 import json
 import logging
@@ -74,6 +76,7 @@ FINISHED = ("done", "stopped", "failed")  # a session in one of these states has
 AWAITING = "awaiting_approval"  # a student's request that a mentor hasn't answered yet
 OPEN_STUDENT_STATES = (AWAITING, "preparing", "running", "waiting")
 NO_CODE_MODEL = "Code sessions need a Claude model. An admin can pick one in Settings."
+STUDENT_NOT_SET_UP = "Code isn't set up yet. Ask a mentor."
 NO_REPO = "Code needs the team's GitHub repository. An admin can add it in Settings, on the Code tab."
 STUDENTS_OFF = "Code isn't open to students yet. A mentor or admin can turn it on in Settings, Code."
 STUDENT_NEEDS_SANDBOX = ("Code for students needs the sandbox turned on. An admin can turn on Hyper-V in Settings, "
@@ -719,6 +722,14 @@ class CodeRunner:
             raise CodeError(f"Keep the task under {MAX_TASK_CHARS:,} characters.")
         return task
 
+    def _check_sign_in(self, *, for_student: bool = False) -> None:
+        """Refuse up front when the new Code engine has nothing to sign in with, instead of failing later."""
+        if self.engine_now() != "agent":
+            return
+        problem = self.agent.credential_problem()
+        if problem:
+            raise CodeError(STUDENT_NOT_SET_UP if for_student else problem)
+
     # ---- starting and steering
     def start(self, viewer: Viewer, task: str, model: str, plan_first: bool | None = None) -> int:
         if not viewer.is_mentor:
@@ -730,6 +741,7 @@ class CodeRunner:
             raise CodeError(problem)
         if not capabilities_for(model, resolve_backend(self.settings)).code:
             raise CodeError(NO_CODE_MODEL)
+        self._check_sign_in()
         task = self._clean_task(task)
         self._check_open_limit(viewer.id)
         if self.sandboxed:
@@ -765,6 +777,7 @@ class CodeRunner:
             raise CodeError(problem)
         if not capabilities_for(model, resolve_backend(self.settings)).code:
             raise CodeError(NO_CODE_MODEL)
+        self._check_sign_in(for_student=True)
         task = self._clean_task(task)
         self._check_open_limit(viewer.id, student=True)
         self._check_daily_limit(viewer.id)
@@ -875,6 +888,9 @@ class CodeRunner:
         if row is None:
             raise CodeError("That session doesn't exist.")
         if row["engine"] == "agent":
+            problem = self.agent.credential_problem()
+            if problem:
+                raise CodeError(problem)
             self.agent.follow_up(row, text, actor_id, step_id)
             return
         text = self._clean_follow_up(row, text)
@@ -953,6 +969,10 @@ class CodeRunner:
         problem = self.sandbox_problem()
         if problem:
             raise CodeError(problem)
+        if row["engine"] == "agent":
+            problem = self.agent.credential_problem()
+            if problem:
+                raise CodeError(problem)
         self._check_capacity()
         free_rein = int(bool(self.settings.code_student_free_rein))
         now = utcnow()
@@ -1019,8 +1039,19 @@ class CodeRunner:
                           details={"title": row["title"], "owner_id": row["created_by"],
                                    "student": bool(row["owner_is_student"])}, conn=conn)
 
-    def release_patch(self, viewer: Viewer, session_id: int) -> None:
-        """A mentor lets a student download the patch. Until then the student sees that a mentor is looking."""
+    def patch_fingerprint(self, session_id: int) -> str:
+        """A short name for the changes as they are now: the stored patch (new engine) or the computed changes
+        (classic). The release form carries it, so a release only covers what the mentor was shown."""
+        workspace = self.workspace(session_id)
+        text = workspace.patch_text()
+        if text is None:
+            text = json.dumps([[c["name"], c["kind"], c["diff"]] for c in workspace.changes()])
+        return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+    def release_patch(self, viewer: Viewer, session_id: int, fingerprint: str = "") -> None:
+        """A mentor lets a student download the patch. Until then the student sees that a mentor is looking. Only a
+        finished session with nothing waiting can be released, and only the changes the mentor was shown (the
+        fingerprint from the page's form)."""
         if not viewer.is_mentor:
             raise CodeError("Only mentors can release changes.")
         row = self.get(session_id)
@@ -1028,12 +1059,19 @@ class CodeRunner:
             raise CodeError("That session doesn't exist.")
         if not self.workspace(session_id).ready():
             raise CodeError("There are no changes to release yet.")
+        if row["status"] not in FINISHED:
+            raise CodeError("Claude is still working. Release the changes when the session is done.")
+        if self.db.one("SELECT 1 FROM code_steps WHERE session_id = ? AND status = 'pending'", (session_id,)):
+            raise CodeError("A request or a plan is still waiting for a mentor. Answer it before you release changes.")
         problem = self.agent.patch_problem(session_id) if row["engine"] == "agent" else ""
         if problem:
             raise CodeError(problem)
+        if not hmac.compare_digest(str(fingerprint or ""), self.patch_fingerprint(session_id)):
+            raise CodeError("The changes are different now. Look again.")
         with self.db.transaction() as conn:
             changed = conn.execute("UPDATE code_sessions SET patch_released = 1, updated_at = ? WHERE id = ? AND "
-                                   "patch_released = 0", (utcnow(), session_id)).rowcount
+                                   "patch_released = 0 AND status IN ('done', 'stopped', 'failed')",
+                                   (utcnow(), session_id)).rowcount
             if changed:
                 self.db.audit("code_patch_released", actor_id=viewer.id, target_type="code", target_id=session_id,
                               details={"owner_id": row["created_by"]}, conn=conn)

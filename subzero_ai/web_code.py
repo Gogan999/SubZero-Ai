@@ -34,6 +34,7 @@ STUDENT_SHOWN_CHARS = 6000  # a student sees at most this much of each step's ou
 SIDEBAR_SESSIONS = 25  # sessions listed in the sidebar
 SHOWN_LINES, SHOWN_CHARS = 12, 1500  # an output longer than this is cut with "Show more"
 MAX_REST_CHARS = 20_000  # the most a "Show more" holds; the rest of a long output isn't sent to the page
+SHOWN_COMMAND = 120  # a student sees at most this much of a command before release
 MAX_BODY_LINES = 200  # the most lines of a written file or an edit a step carries (the diff panel has the rest)
 NEEDS_LABELS = {"request": "Student request", "follow_up": "Student follow-up", "plan": "Plan to approve",
                 "step": "Step to approve"}
@@ -139,13 +140,23 @@ def step_view(s: Services, row, *, student_session: bool = False, shown: int | N
 
 
 def _hide_bodies(view: dict[str, Any]) -> None:
-    """Take the content out of a Write or Edit step (and a classic file change): the name and a line count stay."""
+    """What a student may see before a mentor releases the changes (D85, D91): Claude's messages, each step's label,
+    the task list and the plan. Not file contents, not output, and only the first line of a command."""
+    if view["kind"] != "tool" or view["shape"] in ("plan", "todo"):
+        return
+    view.update(output="", head="", rest="")
+    command = view["command"]
+    if command:
+        first = command.splitlines()[0] if command.strip() else ""
+        view["command"] = first[:SHOWN_COMMAND] + (" ..." if first != command or len(first) > SHOWN_COMMAND else "")
     if view["shape"] == "edit":
-        view.update(lines=None, output="", head="", rest="", hidden=True, detail=view["detail"] or "Some lines changed")
+        view.update(lines=None, hidden=True, detail=view["detail"] or "Some lines changed")
     elif view["shape"] == "write":
-        view.update(content=None, output="", head="", rest="", hidden=True, detail=view["detail"] or "A file")
+        view.update(content=None, hidden=True, detail=view["detail"] or "A file")
+    elif view["shape"] == "generic":
+        view.update(detail="")  # what the tool was given can hold file text
     elif view["diff"] is not None:
-        view.update(diff=None, output="", head="", rest="", hidden=True)
+        view.update(diff=None, hidden=True)
 
 
 def _engine_view(view: dict[str, Any], tool: str, args: dict, done: bool) -> None:
@@ -380,8 +391,8 @@ async def code_start(request: Request, viewer: Viewer) -> Response:
                 raise CodeError(problem)
             task = str(form.get("task", ""))
             verdict = await s.screener.check(task) if s.settings.screener_enabled else None
-            session_id = s.code.request(viewer, task, allowed[0], screen_note(verdict),  # students use the default
-                                        plan_first=plan_first)
+            # Students use the default model and the plan-first setting; a value from the form is ignored (D90)
+            session_id = s.code.request(viewer, task, allowed[0], screen_note(verdict))
     except CodeError as exc:
         request.session["code_error"] = str(exc)
         return RedirectResponse("/code", status_code=303)
@@ -473,8 +484,9 @@ def _session_context(s: Services, row, viewer: Viewer) -> dict[str, Any]:
                                                                                 and not released) else False,
             "no_changes": ready and not all_changes and row["status"] == "done",
             "can_release": (mentor and student_session and ready and not released and bool(changes)
-                            and not patch_problem),
-            "released": released, "free_clicks": agent or bool(s.settings.code_student_free_rein),
+                            and not patch_problem and view["final"] and waiting is None),
+            "released": released, "fingerprint": s.code.patch_fingerprint(row["id"]) if (
+                mentor and student_session and ready and not released and changes and view["final"]) else "", "free_clicks": agent or bool(s.settings.code_student_free_rein),
             "screen_note": row["screen_note"] if mentor else None,
             "sandbox_left": hours_left(box["expires_at"]) if box is not None else None,
             "can_extend": mentor and box is not None, "can_stop": mentor and row["status"] not in FINISHED}
@@ -587,7 +599,7 @@ async def _stop(request, viewer, s: Services, form) -> str:
 
 async def _release(request, viewer, s: Services, form) -> str:
     sid = request.path_params["sid"]
-    s.code.release_patch(viewer, sid)
+    s.code.release_patch(viewer, sid, str(form.get("fingerprint", "")))
     return f"/code/{sid}"
 
 
