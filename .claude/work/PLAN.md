@@ -1,6 +1,6 @@
 # Plan: Code-only pivot, v0.11.0
 
-Status: **approved by Logan 2026-11-14; build running** (thread "Build Code-only pivot v0.11.0") under
+Status: **built 2026-11-15; PR #20 ready for review, waiting on Logan's mini PC test** (thread "Build Code-only pivot v0.11.0") under
 `.claude/WORKFLOW.md`. Plan approval is already given, so build straight through.
 
 - Source of truth for scope: the plan doc https://claude.ai/artifact/QhxREwgrj1b2nLyX2UadYK ("SubZero AI:
@@ -53,8 +53,8 @@ Track A (website) runs in order. Track B (engine) starts in parallel with new fi
 | G3 | Engine driver `code_engine.py`, migration v17, engine settings, concurrency queue, defaults on | done |
 | G4 | Site for the new engine: transcript, plan-first, cost and cap, sign-in setting with warning | done |
 | G5 | Sandbox base image provisioning (tools + runner baked in, version check) | done |
-| H1 | Docs, CLAUDE.md, version 0.11.0 | todo |
-| H2 | Verify: suites, upgrade/rollback, walk-through, screenshots, zip, whole-diff review | todo |
+| H1 | Docs, CLAUDE.md, version 0.11.0 | done |
+| H2 | Verify: suites, upgrade/rollback, walk-through, screenshots, zip, whole-diff review | done |
 
 ### F1 Untangle (no behaviour change)
 - New `subzero_ai/web_common.py` holding what every web module shares (Services, build_services may stay in web.py if
