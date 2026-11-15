@@ -104,3 +104,28 @@ database, not empty), then deletes exactly those ids. Any failure deletes nothin
 ## D87 Saved mentor list expires in memory too
 The 7-day limit applies to the list held in memory as well as the one loaded from disk; a saved time in the future
 is rejected.
+
+## D88 Release only what the mentor saw
+`release_patch` refuses unless the session is finished with no follow-up or plan waiting, and the form carries a
+fingerprint of the changes the mentor was shown; a mismatch refuses with "The changes are different now. Look again."
+
+## D89 Plan-first is enforced on the host and in the runner
+Until a plan-first session's plan is approved, the runner denies Write, Edit, MultiEdit, NotebookEdit and Bash, and
+the host stops the run with a mentor note if such a tool starts anyway. Project hooks/settings from the repository
+are not loaded for plan-first runs before approval if the SDK allows turning that off.
+
+## D90 Students can't untick plan-first
+When "Students' sessions start with a plan" is on (default), a student's session is always plan-first; the tick box
+is shown to mentors only. Mentors' own default stays a tick they can change. (For Logan to confirm.)
+
+## D91 Before release a student sees labels, not bodies (extends D85)
+Before release a student sees Claude's own messages, each step's label (tool, file name, short description), the
+task list and the plan; not file bodies, command text past the first line, or command/read output.
+
+## D92 Cap handling near the limit
+The gateway tells the engine when it refused a request for the cap; the session then stops with the cap message.
+A follow-up or plan approval is refused when spent plus one typical request is over the cap.
+
+## D93 Gateway tool allow-list
+The gateway passes only client tools (plain tool definitions) and, when web is on, the web search/fetch server
+tools. Every other server tool type is removed.
