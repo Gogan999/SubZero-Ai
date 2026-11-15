@@ -42,17 +42,17 @@ Track A (website) runs in order. Track B (engine) starts in parallel with new fi
 | ID | Feature | Status |
 |---|---|---|
 | F1 | Untangle, change nothing: `web_common.py`, `prompts.py`, screener as its own service, GitHub split from Drive | done f6416be |
-| F2 | Rule tests through Slack (`tests/test_rules.py`), old web tests still present | todo |
-| F3a | Remove projects, share links, artifacts/explainers, Drive, uploads/attachments, composer tools | todo |
-| F3b | Remove web chat pages; read-only mentor chat page + Review; redirects; Slack wording; removed settings; test triage | todo |
+| F2 | Rule tests through Slack (`tests/test_rules.py`), old web tests still present | done |
+| F3a | Remove projects, share links, artifacts/explainers, Drive, uploads/attachments, composer tools | done |
+| F3b | Remove web chat pages; read-only mentor chat page + Review; redirects; Slack wording; removed settings; test triage | done |
 | F4 | Code interface: shell/sidebar, Code home, "Needs a mentor", session states, on-page diff, About, role fallback fix | todo |
 | F5 | Settings reorganised + `archive.py` (archive download, delete old website chats) | todo |
 | F6 | Files page for mentors and admins | todo |
-| G1 | `anthropic_gateway.py` (new file, parallel) | todo |
+| G1 | `anthropic_gateway.py` (new file, parallel) | done |
 | G2 | `sandbox_runner/` Node runner on the Agent SDK + fake runner for tests (new files, parallel) | done |
 | G3 | Engine driver `code_engine.py`, migration v17, engine settings, concurrency queue, defaults on | todo |
 | G4 | Site for the new engine: transcript, plan-first, cost and cap, sign-in setting with warning | todo |
-| G5 | Sandbox base image provisioning (tools + runner baked in, version check) | todo |
+| G5 | Sandbox base image provisioning (tools + runner baked in, version check) | done |
 | H1 | Docs, CLAUDE.md, version 0.11.0 | todo |
 | H2 | Verify: suites, upgrade/rollback, walk-through, screenshots, zip, whole-diff review | todo |
 
@@ -144,6 +144,11 @@ plain message when the image is too old.
 - G5 M5: docs note the builder token is visible in the ssh command line to local admins during the run.
 - F3a M5: model_check.py:22 comment over 120 columns.
 - CLAUDE.md test counts are stale (H1).
+- F3b M2: app.css stale comment near .thread-scroll; dead `.chat-list`, `.side-new` selectors.
+- F3b M4: add a test for a mentor's Retry on a failed reply from `/c/{cid}`.
+- F3b M5: unused imports in tests/test_code_students.py.
+- safety.md line 1 and the 'team can see these chats' line: now only mentors can see chats; reword to 'the team's mentors can see these conversations' (H1).
+- F5: when the archive deletes chats that still have Slack review cards, mark the cards (the old `_mark_cards_deleted` went with the delete route).
 
 ## Open questions / for Logan at the end
 - Mini PC steps (image, sign-in token, sandbox test, deploy).
