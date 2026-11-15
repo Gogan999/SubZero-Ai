@@ -315,7 +315,7 @@ class Store:
         where, params = [], []
         if actor == "system":
             where.append("l.actor_id IS NULL")
-        elif actor.isdigit():
+        elif actor.isascii() and actor.isdecimal() and len(actor) <= 12:
             where.append("l.actor_id = ?")
             params.append(int(actor))
         if action:

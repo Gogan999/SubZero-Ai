@@ -19,7 +19,8 @@ from .screener import SCREEN_SYSTEM, parse_answer, screen_body
 
 log = logging.getLogger("subzero.model_check")
 
-CHECK_VERSION = 1  # raise it when the cases change; older results then stop counting (0.11 dropped a case, so old passes still hold)
+# Raise CHECK_VERSION when the cases change; older results then stop counting (0.11 dropped a case, so old passes hold)
+CHECK_VERSION = 1
 CHAT_TIMEOUT = 120
 JUDGE_TIMEOUT = 45
 SCREEN_TIMEOUT = 30

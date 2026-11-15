@@ -185,7 +185,9 @@ do_finish() {
   rm -f /var/lib/dbus/machine-id
   local home
   home="$(getent passwd "$GUEST_USER" | cut -d: -f6)"
-  rm -rf "$home/.ssh" "$home/.bash_history" "$HERE"
+  rm -rf "$home/.ssh" "$home/.bash_history" "$HERE" /root/.ssh
+  find /var/log -type f -name '*.log' -exec truncate -s 0 {} + 2>/dev/null || true
+  truncate -s 0 /var/log/wtmp /var/log/btmp /var/log/lastlog 2>/dev/null || true
   journalctl --rotate >/dev/null 2>&1 || true
   journalctl --vacuum-time=1s >/dev/null 2>&1 || true
   rm -rf /var/log/journal/* /tmp/* /var/tmp/* 2>/dev/null || true

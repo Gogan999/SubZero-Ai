@@ -271,7 +271,7 @@ class AgentEngine:
         else:
             cr.db.execute("UPDATE code_steps SET status = 'done', reviewed_by = ?, review_note = NULL WHERE id = ?",
                           (actor_id, step_id))
-        cr._set(sid, status="running", error=None)
+        cr._set(sid, status="running", error=None, patch_released=0)  # a mentor releases the new changes again (D84)
         cr.db.audit("code_follow_up", actor_id=actor_id, target_type="code", target_id=sid, details={"text": text})
         if row["status"] == "running":
             self._send(run, {"type": "message", "text": text})  # the runner queues it behind the turn in progress

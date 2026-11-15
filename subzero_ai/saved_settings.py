@@ -37,7 +37,7 @@ OTHER_MODEL = "__other__"
 # provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
 MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
 PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "google": "Google (Gemini)",
-                   "openrouter": "OpenRouter", "claude-bridge": "Claude subscription (Claude Code)"}
+                   "openrouter": "OpenRouter", "claude-bridge": "Claude subscription"}
 # A note shown under a provider's checkbox
 PROVIDER_HELP = {
     "claude-bridge": ("Replies use the logged-in Claude subscription's limits. When they run out, students get an "

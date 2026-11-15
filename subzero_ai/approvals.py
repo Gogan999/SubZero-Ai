@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -221,32 +222,61 @@ class ApprovalService:
             self.db.audit("slack_card_failed", actor_id=None, target_type="message", target_id=message_id,
                           details={"error": str(exc)})
 
-    async def repost_cards(self) -> dict[str, int]:
-        """Post the approval card again for every message still waiting for a mentor (the Settings page's "Post the
-        cards again", for when cards were missed or scrolled away). It uses the same card as the first time, so who
-        can approve doesn't change. The old card, if there was one, is replaced by a short note, and the new card
-        takes over the message's later updates. Returns how many cards were posted and how many couldn't be."""
-        posted = failed = 0
-        for msg in self.store.pending_messages():
-            old = self.store.card(msg["id"])
-            await self._post_card(msg["id"])
-            new = self.store.card(msg["id"])
-            if new is None or (old is not None and (new["channel"], new["ts"]) == (old["channel"], old["ts"])):
-                failed += 1
-                continue
-            posted += 1
-            if old is None:
-                continue
-            if old["reminded_at"]:  # the reminder for this message was already sent; don't send another at once
-                self.db.execute("UPDATE slack_cards SET reminded_at = ? WHERE message_id = ?",
-                                (old["reminded_at"], msg["id"]))
-            note = [{"type": "context", "elements": [{"type": "mrkdwn", "text": "This card was posted again below."}]}]
-            try:
-                await self.slack.update_message(old["channel"], old["ts"],
-                                                slack_cards.card_fallback_text(msg["author_name"]), note)
-            except Exception:
-                log.exception("Couldn't replace the old Slack card for message %s", msg["id"])
-        return {"posted": posted, "failed": failed}
+    REPOST_MAX = 40  # cards posted by one press of the button; pressing again carries on with the rest
+    REPOST_COOLDOWN = 10.0  # seconds before the button works again
+    REPOST_MEMORY = 600.0  # a message reposted this recently is skipped by the next press
+
+    async def repost_cards(self) -> dict:
+        """Post the approval card again for messages still waiting for a mentor (the Settings page's "Post the cards
+        again", for when cards were missed or scrolled away). It uses the same card as the first time, so who can
+        approve doesn't change. The old card, if there was one, is replaced by a short note, and the new card takes
+        over the message's later updates. At most REPOST_MAX cards per press, and a second press while one is running
+        or just after it posts nothing ("busy"). Returns the counts: posted, failed, skipped (decided or deleted
+        meanwhile), remaining (still to do next press)."""
+        now = time.monotonic()
+        if getattr(self, "_reposting", False) or now - getattr(self, "_repost_ended", -1e9) < self.REPOST_COOLDOWN:
+            return {"posted": 0, "failed": 0, "skipped": 0, "remaining": 0, "busy": True}
+        self._reposting = True
+        done: dict[int, float] = {k: t for k, t in getattr(self, "_repost_done", {}).items()
+                                  if now - t < self.REPOST_MEMORY}
+        self._repost_done = done
+        posted = failed = skipped = 0
+        try:
+            todo = [m["id"] for m in self.store.pending_messages() if m["id"] not in done]
+            remaining = max(len(todo) - self.REPOST_MAX, 0)
+            for message_id in todo[:self.REPOST_MAX]:
+                try:
+                    msg = self.store.message(message_id)  # decided or deleted since the list was read?
+                    if msg is None or msg["status"] != PENDING:
+                        skipped += 1
+                        continue
+                    old = self.store.card(message_id)
+                    await self._post_card(message_id)
+                    new = self.store.card(message_id)
+                    if new is None or (old is not None and (new["channel"], new["ts"]) == (old["channel"], old["ts"])):
+                        failed += 1
+                        continue
+                    posted += 1
+                    done[message_id] = time.monotonic()
+                    if old is None:
+                        continue
+                    if old["reminded_at"]:  # already reminded once; don't send another at once
+                        self.db.execute("UPDATE slack_cards SET reminded_at = ? WHERE message_id = ?",
+                                        (old["reminded_at"], message_id))
+                    note = [{"type": "context", "elements": [{"type": "mrkdwn",
+                                                              "text": "This card was posted again below."}]}]
+                    try:
+                        await self.slack.update_message(old["channel"], old["ts"],
+                                                        slack_cards.card_fallback_text(msg["author_name"]), note)
+                    except Exception:
+                        log.exception("Couldn't replace the old Slack card for message %s", message_id)
+                except Exception:
+                    failed += 1
+                    log.exception("Couldn't post the card again for message %s", message_id)
+        finally:
+            self._reposting = False
+            self._repost_ended = time.monotonic()
+        return {"posted": posted, "failed": failed, "skipped": skipped, "remaining": remaining}
 
     # -------------------------------------------------------------- decisions
     async def approve(self, reviewer: Viewer, message_id: int, edited_text: str | None = None) -> Outcome:

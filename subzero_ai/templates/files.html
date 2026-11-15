@@ -94,7 +94,7 @@
               <td data-label="Age">{{ r.age }}</td>
               <td data-label="Actions">
                 <div class="inline-actions">
-                  {% if r.in_use %}<span class="pill pending" title="A Code session is using this. Stop the session first.">In use</span>{% endif %}
+                  {% if r.in_use %}<span class="pill pending" title="A Code session is using this, or someone is waiting on it. Try again in a few minutes, or stop the session first.">In use</span>{% endif %}
                   {% if r.view_url %}<a class="button small quiet" href="{{ r.view_url }}" target="_blank" rel="noopener">View</a>{% endif %}
                   {% if r.link %}<a class="button small quiet" href="{{ r.link }}">{{ 'Open session' if r.kind in ('workspace', 'sandbox') else 'Open chat' }}</a>{% endif %}
                   {% if not r.in_use %}<button class="button small reject" type="submit" name="one" value="{{ r.id }}">Delete</button>{% endif %}

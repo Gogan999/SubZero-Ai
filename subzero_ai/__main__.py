@@ -205,7 +205,7 @@ def claude_login_tool(settings: Settings, run=None) -> int:
         print("The sign-in didn't finish. Run python -m subzero_ai claude-login to try again.")
         return 1
     print("")
-    print("Signed in. Turn on \"Claude subscription (Claude Code)\" under AI providers in Settings to use it"
+    print("Signed in. Turn on \"Claude subscription\" under AI providers in Settings to use it"
           + ("." if settings_bridge_env(settings) else " (it needs AI_BACKEND=pi)."))
     return 0
 

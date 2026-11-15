@@ -15,6 +15,8 @@ from subzero_ai.db import utcnow
 from .helpers import ADMIN, MENTOR, STUDENT, Harness
 
 HTML = {"Accept": "text/html"}
+TOKEN_RE = re.compile(r'name="token" value="([^"]+)"')
+COUNT_RE = re.compile(r'name="count" value="(\d+)"')
 OLD = "2020-03-04T10:00:00+00:00"
 
 
@@ -67,12 +69,14 @@ class FilesBase(unittest.TestCase):
             "VALUES (?, ?, 'text', 'text/plain', ?, ?, ?, ?)",
             (pid, name, len(data), f"projects/{pid}-{name}", self.kim_id, OLD)).lastrowid
 
-    def session(self, status="done", owner: int | None = None, updated: str | None = None, files=True) -> int:
+    def session(self, status="done", owner: int | None = None, updated: str | None = None, files=True,
+                student=False, released=False) -> int:
         now = utcnow()
         sid = self.db.execute(
             "INSERT INTO code_sessions (title, task, status, model, repo, ref, created_by, created_at, updated_at, "
-            "engine) VALUES ('Fix the arm', 'Fix it', ?, 'anthropic/claude-sonnet-5-5', 'team/robot-code', 'main', ?, "
-            "?, ?, 'agent')", (status, owner or self.ava_id, now, updated or now)).lastrowid
+            "engine, owner_is_student, patch_released) VALUES ('Fix the arm', 'Fix it', ?, "
+            "'anthropic/claude-sonnet-5-5', 'team/robot-code', 'main', ?, ?, ?, 'agent', ?, ?)",
+            (status, owner or self.ava_id, now, updated or now, int(student), int(released))).lastrowid
         if files:
             root = self.data / "code" / str(sid)
             (root / "work").mkdir(parents=True)
@@ -102,10 +106,24 @@ class FilesBase(unittest.TestCase):
     def confirm(self, actor=None, **form):
         return (actor or self.kim).post("/files/delete", {"csrf": (actor or self.kim).csrf, **form}, headers=HTML)
 
-    def do(self, actor=None, **form):
+    def do(self, actor=None, token=True, **form):
+        """Both steps through one signed-in browser: ask (which shows the confirmation and its token), then confirm.
+        Extra fields (count, typed) replace what the confirmation page filled in. token=False skips step one."""
         actor = actor or self.kim
-        return actor.post("/files/delete/confirm", {"csrf": actor.csrf, **form}, headers=HTML,
-                          follow_redirects=False)
+        client = self.h.browser(actor)
+        selection = {k: v for k, v in form.items() if k in ("ids", "one", "mode", "kind", "days")}
+        extras = {k: v for k, v in form.items() if k not in selection}
+        if "one" in selection:
+            selection = {"ids": selection["one"]}
+        data = {"csrf": actor.csrf, **selection, "token": "", "count": "1"}
+        if token:
+            page = client.post("/files/delete", data={"csrf": actor.csrf, **selection}, headers=HTML)
+            found = TOKEN_RE.search(page.text)
+            if found:
+                data["token"] = found.group(1)
+                data["count"] = COUNT_RE.search(page.text).group(1)
+        data.update(extras)
+        return client.post("/files/delete/confirm", data=data, headers=HTML, follow_redirects=False)
 
     def audits(self):
         return [json.loads(r["details"]) for r in self.db.all(
@@ -516,6 +534,344 @@ class PathEscapeTest(FilesBase):
         (self.data / "code" / str(sid)).symlink_to(outside, target_is_directory=True)
         self.do(ids=f"w-{sid}", count="1")
         self.assertTrue((outside / "keep.txt").exists())
+
+
+class StillNeededTest(FilesBase):
+    """M-A: a finished session that someone is still waiting on is in use too."""
+
+    def step(self, sid, kind="note", tool=None, status="pending"):
+        self.db.execute("INSERT INTO code_steps (session_id, turn, kind, tool, output, status, created_at) "
+                        "VALUES (?, 0, ?, ?, 'x', ?, ?)", (sid, kind, tool, status, utcnow()))
+
+    def test_a_waiting_follow_up_protects_workspace_and_sandbox(self):
+        sid = self.session("done", student=True)
+        sb = self.sandbox(sid)
+        self.step(sid, "note")
+        items = {i.id: i for i in self.store().items()}
+        self.assertTrue(items[f"w-{sid}"].in_use and items[f"s-{sb}"].in_use)
+        self.do(ids=[f"w-{sid}", f"s-{sb}"])
+        self.assertTrue((self.data / "code" / str(sid)).is_dir())
+        self.assertEqual(self.db.one("SELECT state FROM sandbox_sessions WHERE id = ?", (sb,))["state"], "running")
+
+    def test_a_plan_waiting_for_a_decision_protects_it(self):
+        sid = self.session("done")
+        self.step(sid, "tool", "plan")
+        self.assertTrue(self.store().find(f"w-{sid}").in_use)
+
+    def test_the_older_than_sweep_skips_it(self):
+        waiting = self.session("done", updated=OLD)
+        self.step(waiting, "note")
+        free = self.session("done", updated=OLD)
+        self.do(mode="older", kind="workspace", days="30")
+        self.assertTrue((self.data / "code" / str(waiting)).is_dir())
+        self.assertFalse((self.data / "code" / str(free)).exists())
+
+    def test_answered_follow_up_no_longer_protects(self):
+        sid = self.session("done")
+        self.step(sid, "note", status="done")
+        self.assertFalse(self.store().find(f"w-{sid}").in_use)
+
+
+class SavedChangesTest(FilesBase):
+    """M-B: deleting a Code copy deletes its saved changes, and the page says so."""
+
+    def setUp(self):
+        super().setUp()
+        self.released = self.session("done", student=True, released=True, updated=OLD)
+        self.waiting = self.session("done", student=True, updated=OLD)
+        self.mine = self.session("done", owner=self.kim_id, updated=OLD)
+
+    def test_list_shows_the_state_of_the_changes(self):
+        text = self.page().text
+        self.assertIn("changes released", text)
+        self.assertIn("changes waiting for a mentor", text)
+
+    def test_confirm_page_counts_released_and_unreleased(self):
+        r = self.confirm(ids=[f"w-{self.released}", f"w-{self.waiting}", f"w-{self.mine}"])
+        self.assertIn("also deletes the changes saved with it", r.text)
+        text = " ".join(r.text.split())
+        self.assertIn("1 has changes a student can download now", text)
+        self.assertIn("1 has changes no mentor has released yet", text)
+        self.assertIn("1 has changes from a mentor's own session", text)
+
+    def test_confirm_page_for_other_kinds_has_no_such_warning(self):
+        a = self.attach()
+        self.assertNotIn("saved with it", self.confirm(ids=f"a-{a}").text)
+
+    def test_sweep_skips_unreleased_student_changes_and_says_how_many(self):
+        page = self.confirm(mode="older", kind="workspace", days="30")
+        self.assertIn("Delete 2 items?", page.text)
+        self.assertIn("1 Code copy was skipped", page.text)
+        self.do(mode="older", kind="workspace", days="30")
+        self.assertTrue((self.data / "code" / str(self.waiting)).is_dir())
+        self.assertFalse((self.data / "code" / str(self.released)).exists())
+        self.assertFalse((self.data / "code" / str(self.mine)).exists())
+
+    def test_sweep_of_only_unreleased_copies_deletes_nothing(self):
+        self.db.execute("DELETE FROM code_sessions WHERE id IN (?, ?)", (self.released, self.mine))
+        r = self.confirm(mode="older", kind="workspace", days="30")
+        self.assertIn("skipped because no mentor has released", r.text)
+        self.assertTrue((self.data / "code" / str(self.waiting)).is_dir())
+
+    def test_an_unreleased_copy_can_still_be_ticked_one_by_one(self):
+        self.do(ids=f"w-{self.waiting}")
+        self.assertFalse((self.data / "code" / str(self.waiting)).exists())
+
+
+class RaceTest(FilesBase):
+    """M-C: the folder is moved aside, the session looked at again, and only then deleted."""
+
+    def test_session_started_meanwhile_gets_its_folder_back(self):
+        sid = self.session("done")
+        store = self.store()
+        item = store.find(f"w-{sid}")
+        calls = iter([False, True])  # free at the first look, in use at the second (after the folder was moved)
+        original = files_admin.FileStore.session_in_use
+        from unittest import mock
+        with mock.patch.object(files_admin.FileStore, "session_in_use", lambda self_, s: next(calls)):
+            outcome = store.delete([item], actor_id=self.kim_id, mode="one")
+        self.assertEqual((len(outcome.deleted), outcome.in_use), (0, 1))
+        self.assertTrue((self.data / "code" / str(sid) / "work" / "Arm.java").is_file())
+        self.assertEqual([p.name for p in (self.data / "code").iterdir()], [str(sid)])
+        self.assertIsNotNone(original)
+
+    def test_folder_is_moved_aside_before_it_is_deleted(self):
+        sid = self.session("done")
+        seen = []
+        real = files_admin.FileStore.session_in_use
+
+        def watch(self_, s):
+            seen.append(sorted(p.name for p in (self.data / "code").iterdir()))
+            return real(self_, s)
+
+        from unittest import mock
+        with mock.patch.object(files_admin.FileStore, "session_in_use", watch):
+            self.store().delete(self.store().find_all([f"w-{sid}"]), actor_id=self.kim_id, mode="one")
+        self.assertTrue(seen[-1][0].startswith(".deleting-"), seen)
+
+    def test_leftover_folders_are_cleared_and_never_listed(self):
+        gone = self.session("done")
+        (self.data / "code" / str(gone)).rename(self.data / "code" / f".deleting-{gone}-abcd1234")
+        self.assertEqual(self.store().items((files_admin.WORKSPACE,)), [])
+        self.page()  # opening the page clears it
+        self.assertEqual(list((self.data / "code").iterdir()), [])
+
+    def test_leftover_of_a_session_in_use_is_put_back(self):
+        busy = self.session("running")
+        (self.data / "code" / str(busy)).rename(self.data / "code" / f".deleting-{busy}-abcd1234")
+        self.store().clear_leftovers()
+        self.assertTrue((self.data / "code" / str(busy) / "work").is_dir())
+
+    def test_other_dot_folders_are_left_alone(self):
+        (self.data / "code").mkdir(exist_ok=True)
+        keep = self.data / "code" / ".git-keep"
+        keep.mkdir()
+        self.store().clear_leftovers()
+        self.assertTrue(keep.exists())
+
+    def test_sandbox_is_looked_at_again_under_the_session_lock(self):
+        from unittest import mock
+        sid = self.session("done", files=False)
+        sb = self.sandbox(sid)
+        item = self.store().find(f"s-{sb}")
+        calls = iter([False, True])
+        with mock.patch.object(files_admin.FileStore, "_sandbox_in_use", lambda self_, row: next(calls)):
+            outcome = self.store().delete([item], actor_id=self.kim_id, mode="one")
+        self.assertEqual(outcome.in_use, 1)
+        self.assertEqual(self.db.one("SELECT state FROM sandbox_sessions WHERE id = ?", (sb,))["state"], "running")
+
+
+class LiveRunnerTest(FilesBase):
+    """m3: a finished session whose idle runner still holds its sandbox is in use."""
+
+    def test_idle_runner_protects_both(self):
+        from types import SimpleNamespace
+        sid = self.session("done")
+        sb = self.sandbox(sid)
+        self.s.code.agent._runs[sid] = SimpleNamespace(closed=False)
+        self.addCleanup(self.s.code.agent._runs.pop, sid, None)
+        self.assertTrue(all(i.in_use for i in self.store().find_all([f"w-{sid}", f"s-{sb}"])))
+        self.assertIn("Try again in a few minutes", self.page().text)
+        self.do(ids=[f"w-{sid}", f"s-{sb}"])
+        self.assertTrue((self.data / "code" / str(sid)).is_dir())
+        self.s.code.agent._runs[sid].closed = True
+        self.assertFalse(self.store().find(f"w-{sid}").in_use)
+
+
+class SizingTest(FilesBase):
+    """M-D and m4: the slow disk size is only asked for on the confirm page; one item doesn't measure everything."""
+
+    class Slow:
+        name = "hyperv"
+
+        def __init__(self):
+            self.calls = 0
+
+        def disk_bytes(self, handle):
+            self.calls += 1
+            return 5 * 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        self.backend = self.Slow()
+        patcher = mock.patch.object(self.s.sandboxes, "backend", lambda kind: self.backend)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.sid = self.session("done", files=False)
+        self.sb = self.sandbox(self.sid)
+
+    def test_listing_and_finding_never_ask_the_backend(self):
+        text = self.page().text
+        self.store().find(f"s-{self.sb}")
+        self.store().find_all([f"s-{self.sb}"])
+        self.assertEqual(self.backend.calls, 0)
+        self.assertIn("unknown", text)
+        self.assertIn("1 sandbox disk not measured", text)
+
+    def test_confirm_page_measures_only_the_chosen_disk(self):
+        r = self.confirm(ids=f"s-{self.sb}")
+        self.assertEqual(self.backend.calls, 1)
+        self.assertIn("5.0 MB", r.text)
+        self.confirm(ids=f"s-{self.sb}")  # a second look within the minute uses the saved answer
+        self.assertEqual(self.backend.calls, 1)
+
+    def test_one_workspace_view_does_not_walk_the_others(self):
+        from unittest import mock
+        first, second = self.session("done"), self.session("done")
+        with mock.patch.object(files_admin, "size_of_tree", wraps=files_admin.size_of_tree) as walk:
+            self.store().find(f"w-{first}")
+        self.assertEqual(walk.call_count, 1)
+        self.assertIsNotNone(second)
+
+    def test_older_than_filters_by_age_before_walking(self):
+        from unittest import mock
+        self.session("done", updated=OLD)
+        self.session("done")
+        with mock.patch.object(files_admin, "size_of_tree", wraps=files_admin.size_of_tree) as walk:
+            self.store().items((files_admin.WORKSPACE,), older_than=30)
+        self.assertEqual(walk.call_count, 1)
+
+
+class TokenTest(FilesBase):
+    """m1: the second step only works after the first."""
+
+    def test_confirm_without_asking_first_is_refused(self):
+        a = self.attach()
+        r = self.do(token=False, ids=f"a-{a}", count="1")
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(len(list(self.files.glob("*seed*"))), 1)
+        self.assertEqual(self.audits(), [])
+
+    def test_a_token_works_once(self):
+        a, b = self.attach("a.txt"), self.attach("b.txt")
+        actor = self.kim
+        client = self.h.browser(actor)
+        page = client.post("/files/delete", data={"csrf": actor.csrf, "ids": f"a-{a}"}, headers=HTML)
+        token = TOKEN_RE.search(page.text).group(1)
+        data = {"csrf": actor.csrf, "ids": f"a-{a}", "count": "1", "token": token}
+        self.assertEqual(client.post("/files/delete/confirm", data=data, headers=HTML, follow_redirects=False)
+                         .status_code, 303)
+        self.assertEqual(len(list(self.files.glob("*seed*"))), 1)
+        data["ids"] = f"a-{b}"
+        client.post("/files/delete/confirm", data=data, headers=HTML, follow_redirects=False)
+        self.assertEqual(len(list(self.files.glob("*seed*"))), 1)  # the old token is spent
+
+    def test_a_token_for_one_selection_does_not_unlock_another(self):
+        a, b = self.attach("a.txt"), self.attach("b.txt")
+        actor = self.kim
+        client = self.h.browser(actor)
+        page = client.post("/files/delete", data={"csrf": actor.csrf, "ids": f"a-{a}"}, headers=HTML)
+        token = TOKEN_RE.search(page.text).group(1)
+        client.post("/files/delete/confirm", headers=HTML, follow_redirects=False,
+                    data={"csrf": actor.csrf, "ids": f"a-{b}", "count": "1", "token": token})
+        client.post("/files/delete/confirm", headers=HTML, follow_redirects=False,
+                    data={"csrf": actor.csrf, "mode": "older", "kind": "attachment", "days": "1", "count": "1",
+                          "token": token})
+        self.assertEqual(len(list(self.files.glob("*seed*"))), 2)
+
+    def test_an_old_token_expires(self):
+        from unittest import mock
+        a = self.attach()
+        with mock.patch("subzero_ai.web_files.TOKEN_SECONDS", -1):
+            actor = self.kim
+            client = self.h.browser(actor)
+            page = client.post("/files/delete", data={"csrf": actor.csrf, "ids": f"a-{a}"}, headers=HTML)
+            token = TOKEN_RE.search(page.text).group(1)
+        r = client.post("/files/delete/confirm", headers=HTML, follow_redirects=False,
+                        data={"csrf": actor.csrf, "ids": f"a-{a}", "count": "1", "token": token})
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(len(list(self.files.glob("*seed*"))), 1)
+
+    def test_list_changing_after_the_question_is_refused(self):
+        a, b = self.attach("a.txt"), self.attach("b.txt")
+        actor = self.kim
+        client = self.h.browser(actor)
+        page = client.post("/files/delete", data={"csrf": actor.csrf, "mode": "older", "kind": "attachment",
+                                                  "days": "30"}, headers=HTML)
+        token = TOKEN_RE.search(page.text).group(1)
+        self.attach("c.txt")  # another old file appears
+        r = client.post("/files/delete/confirm", headers=HTML, follow_redirects=False,
+                        data={"csrf": actor.csrf, "mode": "older", "kind": "attachment", "days": "30", "count": "2",
+                              "token": token})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(len(list(self.files.glob("*seed*"))), 3)
+        self.assertIsNotNone(a and b)
+
+    def test_in_use_after_the_question_is_refused_with_a_valid_token(self):
+        sid = self.session("done")
+        actor = self.kim
+        client = self.h.browser(actor)
+        page = client.post("/files/delete", data={"csrf": actor.csrf, "ids": f"w-{sid}"}, headers=HTML)
+        token = TOKEN_RE.search(page.text).group(1)
+        self.db.execute("UPDATE code_sessions SET status = 'running' WHERE id = ?", (sid,))
+        client.post("/files/delete/confirm", headers=HTML, follow_redirects=False,
+                    data={"csrf": actor.csrf, "ids": f"w-{sid}", "count": "1", "token": token})
+        self.assertTrue((self.data / "code" / str(sid)).is_dir())
+
+
+class AuditAndHeadersTest(FilesBase):
+    def test_a_failure_partway_still_audits_what_was_deleted(self):
+        from unittest import mock
+        first = self.archive_zip("old-chats-20250101-120000.zip", b"1234")
+        second = self.archive_zip("old-chats-20250102-120000.zip", b"5678")
+        items = self.store().find_all([f"z-{first.name}", f"z-{second.name}"])
+        real = files_admin.FileStore._delete_one
+        calls = []
+
+        def flaky(self_, item, actor):
+            calls.append(item.id)
+            if len(calls) == 2:
+                raise RuntimeError("disk went away")
+            return real(self_, item, actor)
+
+        with mock.patch.object(files_admin.FileStore, "_delete_one", flaky):
+            with self.assertRaises(RuntimeError):
+                self.store().delete(items, actor_id=self.kim_id, mode="ticked")
+        audit = self.audits()
+        self.assertEqual((audit[0]["count"], audit[0]["bytes"]), (1, 4))
+
+    def test_audit_bytes_are_what_was_freed(self):
+        a = self.attach(data=b"z" * 100)
+        self.do(ids=f"a-{a}")
+        self.assertEqual(self.audits()[0]["bytes"], 100)
+
+    def test_header_names_have_no_control_characters(self):
+        aid = self.attach("evil\r\nX-Injected: 1.txt", b"hello")
+        r = self.kim.get(f"/files/view/a-{aid}")
+        self.assertEqual(r.status_code, 200)
+        value = r.headers["content-disposition"]
+        self.assertNotIn("\r", value)
+        self.assertNotIn("\n", value)
+        self.assertNotIn("x-injected", {k.lower() for k in r.headers})
+
+    def test_non_ascii_names_use_the_utf8_form(self):
+        value = files_admin.disposition("inline", "Bras été.txt")
+        self.assertIn("filename*=UTF-8''Bras%20%C3%A9t%C3%A9.txt", value)
+        self.assertIn('filename="Bras ?t?.txt"'.replace("?", "?"), value.replace("_", "?"))
+        self.assertEqual(files_admin.disposition("attachment", "a\x00b\x7f.txt"), 'attachment; filename="ab.txt"')
+        aid = self.attach("Bras été.txt", b"hello")
+        self.assertIn("filename*=UTF-8''", self.kim.get(f"/files/view/a-{aid}").headers["content-disposition"])
 
 
 if __name__ == "__main__":

@@ -408,13 +408,105 @@ class DeleteTest(Seeded):
     def test_a_failed_backup_stops_everything(self):
         with mock.patch.object(archive, "make_backup", side_effect=OSError("backups folder is gone")):
             resp = self.delete()
-        self.assertIn("The backup failed, so nothing was deleted", resp.text)
+        self.assertIn("Nothing was deleted, because the backup couldn", html.unescape(resp.text))
         self.assertEqual(self.count("conversations"), 3)
         self.assertEqual(self.count("messages"), 4)
         self.assertTrue((self.files / self.rel_text).exists())
         self.assertEqual(self.audit("old_chats_deleted_by_admin"), [])
         self.assertEqual(len(self.audit("old_chats_delete_stopped")), 1)
         self.assertEqual(archive.job_state(self.db)["state"], "failed")
+
+    def test_the_backup_includes_videos_and_is_checked(self):
+        self.delete()
+        (backup,) = list_backups(self.h.settings)
+        with zipfile.ZipFile(backup.path) as zf:
+            self.assertIn(f"files/{self.rel_video}", zf.namelist())
+            self.assertEqual(len(zf.read(f"files/{self.rel_video}")), 2048)
+        # the nightly backup still leaves videos out
+        from subzero_ai.backup import make_backup
+        plain = make_backup(self.h.settings, label="plain")
+        with zipfile.ZipFile(plain) as zf:
+            self.assertNotIn(f"files/{self.rel_video}", zf.namelist())
+
+    def test_a_backup_that_cant_be_read_back_deletes_nothing(self):
+        def corrupt(settings, **kwargs):
+            path = settings.backups_path / "subzero-20200101-000000-before-old-chats-delete.zip"
+            path.write_bytes(b"not a zip")
+            return path
+
+        def empty(settings, **kwargs):
+            path = settings.backups_path / "subzero-20200101-000001-before-old-chats-delete.zip"
+            path.write_bytes(b"")
+            return path
+
+        def no_database(settings, **kwargs):
+            path = settings.backups_path / "subzero-20200101-000002-before-old-chats-delete.zip"
+            with zipfile.ZipFile(path, "w") as zf:
+                zf.writestr("readme.txt", "x")
+            return path
+        for fake in (corrupt, empty, no_database):
+            with mock.patch.object(archive, "make_backup", fake):
+                resp = self.delete()
+            self.assertIn("Nothing was deleted", resp.text, fake.__name__)
+            self.assertEqual(self.count("conversations"), 3, fake.__name__)
+            self.assertTrue((self.files / self.rel_text).exists())
+        self.assertEqual(self.audit("old_chats_deleted_by_admin"), [])
+        self.assertEqual(len(self.audit("old_chats_delete_stopped")), 3)
+
+    def test_a_chat_made_during_the_backup_is_not_deleted(self):
+        from subzero_ai.backup import make_backup
+        made = []
+
+        def backup_then_a_new_chat(settings, **kwargs):
+            path = make_backup(settings, **kwargs)
+            made.append(self.chat(self.ava, "Made during the backup", [("user", "Hi", "approved")]))
+            return path
+        with mock.patch.object(archive, "make_backup", backup_then_a_new_chat):
+            self.delete()
+        self.assertEqual(self.count("conversations"), 2)  # the Slack chat and the new one
+        self.assertIsNotNone(self.db.one("SELECT 1 FROM conversations WHERE id = ?", (made[0],)))
+        self.assertIsNotNone(self.db.one("SELECT 1 FROM messages WHERE conversation_id = ?", (made[0],)))
+
+    def test_a_chat_that_gained_a_slack_thread_meanwhile_is_kept(self):
+        from subzero_ai.backup import make_backup
+
+        def backup_then_link(settings, **kwargs):
+            path = make_backup(settings, **kwargs)
+            self.s.store.link_slack_thread(self.web2, "D1", "9.1")
+            return path
+        with mock.patch.object(archive, "make_backup", backup_then_link):
+            self.delete()
+        self.assertIsNotNone(self.db.one("SELECT 1 FROM conversations WHERE id = ?", (self.web2,)))
+        self.assertIsNone(self.db.one("SELECT 1 FROM conversations WHERE id = ?", (self.web1,)))
+
+    def test_a_run_cut_off_before_removing_files_finishes_next_time(self):
+        with mock.patch.object(archive, "_remove_files", side_effect=RuntimeError("power cut")):
+            resp = self.delete()
+        self.assertIn("Some chats may already be deleted", resp.text)
+        self.assertIsNone(self.db.one("SELECT 1 FROM conversations WHERE id = ?", (self.web1,)))
+        self.assertTrue((self.files / self.rel_text).exists(), "left behind by the cut-off run")
+        (self.files / "unrelated.txt").write_bytes(b"keep")
+        self.delete()
+        self.assertFalse((self.files / self.rel_text).exists())
+        self.assertFalse((self.files / self.rel_video).exists())
+        self.assertTrue((self.files / "unrelated.txt").exists(), "only files recorded for that job are removed")
+        self.assertTrue((self.files / self.slack_file).exists())
+        self.assertIsNone(self.db.get_kv(archive.ORPHANS_KEY))
+
+    def test_an_archive_cant_be_deleted_while_a_job_runs(self):
+        self.make_archive()
+        (path,) = self.archives()
+        archive.start_job(self.db, "archive", "Coach")
+        resp = self.admin.post(f"/settings/archives/{path.name}/delete", {}, headers=HTML, follow_redirects=True)
+        self.assertIn("Wait for it to finish", resp.text)
+        self.assertTrue(path.exists())
+
+    def test_the_summary_is_not_counted_on_every_page(self):
+        archive._SUMMARY_CACHE.clear()
+        with mock.patch.object(archive, "summarize", wraps=archive.summarize) as counted:
+            self.admin.get("/settings")
+            self.admin.get("/settings")
+        self.assertEqual(counted.call_count, 1)
 
     def test_old_chats_rows_and_files_are_removed(self):
         self.delete()

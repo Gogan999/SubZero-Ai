@@ -193,6 +193,7 @@
     const delays = { fast: 2500, slow: 6000 };
     let timer = 0;
     let busy = false;
+    let stopped = false; // the session is gone (or no longer ours): stop asking
     const live = () => codeRegion.querySelector("[data-code-live]");
     const remember = (root) => root.querySelectorAll("[data-key]").forEach((el) => drawn.set(el, el.outerHTML));
 
@@ -215,11 +216,14 @@
         if (!old) {
           drawn.set(fresh, html);
           wanted.push(fresh);
-        } else if (drawn.get(old) === html || hasUserState(old)) {
+        } else if (drawn.get(old) === html) {
           wanted.push(old);
         } else if (fresh.hasAttribute("data-morph") && old.hasAttribute("data-morph")) {
+          // A list of steps: go through its items one by one, so a note someone is typing in doesn't freeze the rest
           morph(old, fresh);
           drawn.set(old, html);
+          wanted.push(old);
+        } else if (hasUserState(old)) {
           wanted.push(old);
         } else {
           carryOpen(old, fresh);
@@ -248,18 +252,21 @@
     function schedule() {
       clearTimeout(timer);
       const mode = live()?.dataset.poll;
-      if (!mode || mode === "off") return;
+      if (stopped || !mode || mode === "off") return;
       const base = delays[mode] || 6000;
       timer = setTimeout(refresh, document.hidden ? Math.max(base * 6, 20000) : base);
     }
 
     async function refresh() {
-      if (busy) return;
+      if (busy || stopped) return;
       busy = true;
       clearTimeout(timer);
       try {
         const res = await fetch(codeRegion.dataset.url, { credentials: "same-origin", headers: { Accept: "text/html" } });
-        if (res.status === 404 || res.status === 403) return; // the session is gone: stop asking
+        if (res.status === 404 || res.status === 403) {
+          stopped = true;
+          return;
+        }
         if (!res.ok) throw new Error("bad answer");
         const fresh = new DOMParser().parseFromString(await res.text(), "text/html").querySelector("[data-code-live]");
         if (!fresh) throw new Error("not a session page");
@@ -280,7 +287,8 @@
     }
 
     remember(live());
-    scroller.scrollTop = scroller.scrollHeight;
+    // A session that is still working opens at its newest step. A finished one opens at the top, under its title.
+    if (live().dataset.poll === "fast") scroller.scrollTop = scroller.scrollHeight;
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && live()?.dataset.poll !== "off") refresh();
     });

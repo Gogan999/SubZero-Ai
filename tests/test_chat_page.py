@@ -6,6 +6,8 @@ from __future__ import annotations
 import re
 import unittest
 
+from subzero_ai.claude import FakeClaude, StreamEvent
+
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 NOTE = "Chats have moved to Slack. Message the bot there."
@@ -254,3 +256,39 @@ class PagesForEveryRoleTest(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200, f"{who} {path}")
                 self.assertNotIn("You're chatting with an AI", resp.text, "no chat disclaimer on every page")
                 self.assertEqual(len(re.findall(r'class="sidebar"', resp.text)), 1)
+
+
+class MentorRetryTest(unittest.TestCase):
+    """A reply that failed can be tried again by a mentor from the read-only chat page, without new approval."""
+
+    def tearDown(self):
+        self.h.close()
+
+    def test_a_mentor_retries_a_failed_reply_from_the_chat_page(self):
+        class Flaky(FakeClaude):
+            failures = 1
+
+            async def stream(self, **kwargs):
+                if self.failures:
+                    self.failures -= 1
+                    self.calls.append(kwargs)
+                    yield StreamEvent("error", error="Overloaded")
+                    return
+                async for event in super().stream(**kwargs):
+                    yield event
+
+        self.h = Harness(claude=Flaky(delay=0), code_student_access=True)
+        kim = self.h.login(MENTOR)
+        mid = self.h.slack_dm("Help with swerve offsets", user=STUDENT).message_id
+        kim.post(f"/m/{mid}/approve")
+        self.h.idle()
+        reply = self.h.reply_to(mid)
+        self.assertEqual(reply["status"], "error")
+        page = kim.get(f"/c/{reply['conversation_id']}", headers=HTML).text
+        self.assertIn(f"/m/{mid}/retry", page)
+        self.assertIn("Overloaded", page)
+        resp = kim.post(f"/m/{mid}/retry")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.h.idle()
+        self.assertEqual(self.h.reply_to(mid)["status"], "complete")
+        self.assertNotIn(f"/m/{mid}/retry", kim.get(f"/c/{reply['conversation_id']}", headers=HTML).text)

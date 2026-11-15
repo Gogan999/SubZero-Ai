@@ -47,6 +47,10 @@ Build` has made the plain base disk and the sandbox network is set up. It calls 
 Running it again when the image is current ("current" means the disk's `.tools.json` matches `TOOLS_VERSION`, the Node.js
 pin, the runner version and the SDK version) prints "Nothing to do" and finishes at once. `--force` builds again.
 
+Note: the builder's proxy login (a token) is part of the ssh command line while the build runs, so another local
+administrator on the mini PC could see it in the process list during the run. It is valid only for that run and is
+forgotten at the end.
+
 Why the app must be stopped: the builder's proxy listens on `10.77.0.1:3128`, the same place the app's proxy does, and the
 firewall rules allow only that port. `prepare-sandbox-image.cmd` stops the service first and starts it again at the end,
 whatever happens. Running it from a console while the app runs is refused with a plain message. It is also refused while

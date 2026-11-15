@@ -10,6 +10,7 @@ import re
 import tempfile
 import time
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -128,7 +129,7 @@ class HomeTest(PagesTest):
         self.assertNotIn("needs the sandbox", mentor)
         admin = self.coach.get("/code").text
         self.assertIn("needs the sandbox", admin)
-        self.assertIn('href="/settings"', admin)
+        self.assertIn('href="/settings#tab-code"', admin)
 
     def test_no_repository_is_a_plain_line_with_a_settings_link_for_admins(self):
         self.h.services.settings.connector_github_repo = ""
@@ -391,6 +392,101 @@ class SessionStateTest(PagesTest):
         self.assertEqual(self.code.get(sid)["patch_released"], 0)
 
 
+class ReleaseAgainTest(PagesTest):
+    def test_a_follow_up_run_needs_a_new_release(self):
+        sid, _ = self.ask(self.ava, "Make notes.")
+        self.approve(sid)
+        self.kim.post(f"/code/{sid}/release", {})
+        self.assertEqual(self.code.get(sid)["patch_released"], 1)
+        self.assertEqual(self.ava.get(f"/code/{sid}/changes.patch").status_code, 200)
+        self.assertIn("AGENT_NOTES.md", self.page(self.ava, sid))
+        self.ava.post(f"/code/{sid}/follow-up", {"text": "Also add a second note."})
+        step = next(st for st in self.code.steps(sid) if st["kind"] == "note" and st["status"] == "pending")
+        self.kim.post(f"/code/steps/{step['id']}/approve-follow-up", {"note": ""})
+        self.h.idle()
+        self.assertEqual(self.code.get(sid)["status"], "done")
+        self.assertEqual(self.code.get(sid)["patch_released"], 0, "new work, new release")
+        blocked = self.ava.get(f"/code/{sid}/changes.patch")
+        self.assertEqual(blocked.status_code, 403)
+        page = self.page(self.ava, sid)
+        self.assertIn("A mentor needs to look at the new changes.", page)
+        self.assertNotIn("Download patch", page)
+        self.assertNotIn("diff-file", page)
+        self.assertNotIn("+- Also add a second note.", self.ava.get(f"/code/{sid}/steps").text)
+        self.assertIn("Release to student", self.page(self.kim, sid))
+        self.kim.post(f"/code/{sid}/release", {})
+        self.assertEqual(self.ava.get(f"/code/{sid}/changes.patch").status_code, 200)
+        self.assertIn("Download patch", self.page(self.ava, sid))
+
+    def test_a_mentor_follow_up_on_a_released_session_also_resets_it(self):
+        sid, _ = self.ask(self.ava, "Make notes.")
+        self.approve(sid)
+        self.kim.post(f"/code/{sid}/release", {})
+        self.kim.post(f"/code/{sid}/follow-up", {"text": "One more thing."})
+        self.h.idle()
+        self.assertEqual(self.code.get(sid)["patch_released"], 0)
+
+    def test_a_classic_follow_up_resets_the_release_too(self):
+        self.h.services.settings.code_engine = "classic"
+        sid = self.make_session(self.ava, status="done", engine="classic")
+        self.db.execute("UPDATE code_sessions SET patch_released = 1, transcript = ? WHERE id = ?",
+                        ('[{"role": "user", "content": "x"}]', sid))
+        (self.code.workspace(sid).root / "work").mkdir(parents=True)
+        from subzero_ai.store import Viewer
+        mentor = self.h.services.store.user(self.user_id(self.kim))
+        with unittest.mock.patch.object(self.code, "tasks"):
+            self.code.follow_up(Viewer(id=mentor["id"], slack_user_id=mentor["slack_user_id"], name="Kim",
+                                       role="mentor"), sid, "Again.")
+        self.assertEqual(self.code.get(sid)["patch_released"], 0)
+
+
+class HiddenBodiesTest(PagesTest):
+    STEPS = [
+        {"tool": "Write", "tool_input": {"file_path": "NOTES.md", "content": "line one\nsecret body\n"}},
+        {"tool": "Edit", "tool_input": {"file_path": "Arm.java", "old_string": "kP = 1", "new_string": "kP = 2 // tuned"}},
+    ]
+
+    def build(self) -> int:
+        sid = self.make_session(self.ava, status="done")
+        for step in self.STEPS:
+            self.add_step(sid, **step)
+        (self.code.workspace(sid).root / "work").mkdir(parents=True)
+        return sid
+
+    def test_a_student_sees_names_and_counts_until_release(self):
+        sid = self.build()
+        for html_text in (self.page(self.ava, sid), self.ava.get(f"/code/{sid}/steps").text):
+            self.assertIn("Wrote NOTES.md", html_text)
+            self.assertIn("2 lines", html_text)
+            self.assertIn("Edited Arm.java", html_text)
+            self.assertIn("2 lines changed", html_text)
+            self.assertNotIn("secret body", html_text)
+            self.assertNotIn("kP = 2", html_text)
+        self.kim.post(f"/code/{sid}/release", {})
+        after = self.page(self.ava, sid)
+        self.assertIn("secret body", after)
+        self.assertIn("kP = 2 // tuned", after)
+
+    def test_a_mentor_always_sees_everything(self):
+        sid = self.build()
+        page = self.page(self.kim, sid)
+        self.assertIn("secret body", page)
+        self.assertIn("kP = 2 // tuned", page)
+        self.assertNotIn("looks at the changes before you can read them", page)
+
+    def test_big_bodies_are_cut_for_everyone(self):
+        sid = self.make_session(self.kim, status="done")
+        body = "".join(f"row {i}\n" for i in range(5000))
+        self.add_step(sid, tool="Write", tool_input={"file_path": "big.txt", "content": body})
+        self.add_step(sid, tool="Edit", tool_input={"file_path": "big.txt", "old_string": "a\n" * 600, "new_string": "b"})
+        page = self.page(self.kim, sid)
+        self.assertIn("5,000 lines", page)
+        self.assertIn("(and 4,800 more lines)", page)
+        self.assertNotIn("row 4999", page)
+        self.assertIn("more lines", page)
+        self.assertLess(len(page), 120_000)
+
+
 class DiffPanelTest(PagesTest):
     PATCH = (
         "diff --git a/src/Arm.java b/src/Arm.java\nindex 1..2 100644\n--- a/src/Arm.java\n+++ b/src/Arm.java\n"
@@ -626,6 +722,12 @@ class AboutAndProfileTest(PagesTest):
         self.assertNotIn("Approved today", page)
 
 
+class AuditInputTest(PagesTest):
+    def test_odd_numbers_in_the_address_are_harmless(self):
+        for query in ("who=%D9%A1%D9%A2", "who=" + "9" * 40, "page=" + "9" * 40, "page=%D9%A1", "page=-3", "who=%C2%B2"):
+            self.assertEqual(self.coach.get(f"/audit?{query}").status_code, 200, query)
+
+
 class MentorListFallbackTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -691,6 +793,25 @@ class MentorListFallbackTest(unittest.TestCase):
         self.slack.members = {"UMENTOR2"}
         self.assertEqual(self.run_async(d.role_for("UMENTOR1", force=True)), "student")
         self.assertIsNone(d.stale_warning())
+
+    def test_a_list_in_memory_expires_after_a_week_too(self):
+        d = self.directory()
+        self.assertEqual(self.run_async(d.role_for("UMENTOR1")), "mentor")
+        self.broken()
+        d.invalidate()
+        d._saved_at = datetime.now(timezone.utc) - timedelta(days=8)
+        self.db.set_kv(MENTOR_LIST_KEY, json.dumps({"ids": ["UMENTOR1"], "at": d._saved_at.isoformat()}))
+        self.assertEqual(self.run_async(d.role_for("UMENTOR1")), "student")
+        self.assertEqual(self.run_async(d.role_for("UADMIN")), "admin")
+        self.assertIn("only admins can act as mentors", d.stale_warning())
+
+    def test_a_saved_time_in_the_future_is_rejected(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(timespec="seconds")
+        self.db.set_kv(MENTOR_LIST_KEY, json.dumps({"ids": ["UMENTOR1"], "at": future}))
+        self.broken()
+        d = self.directory()
+        self.assertEqual(self.run_async(d.role_for("UMENTOR1")), "student")
+        self.assertIsNotNone(d.stale_warning())
 
     def test_a_broken_saved_list_is_ignored(self):
         self.db.set_kv(MENTOR_LIST_KEY, "not json")

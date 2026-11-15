@@ -237,7 +237,7 @@ audit log. The Overview shows a shorter warning while the subscription is the ch
 The Overview counts the messages still waiting for a mentor and how long the oldest has waited. **Post the cards again**
 posts a new approval card in the review channel for each of them (the same card as the first time; the buttons check
 who taps them, so who may approve doesn't change). The old card is replaced by a short note, and the new card takes
-over from then on. It is written to the audit log as `cards_reposted`. Reminders already sent aren't sent again.
+over from then on. One press posts at most 40 cards (press again for the rest), and a second press while one is running, or within 10 seconds, does nothing. A message decided meanwhile is skipped. It is written to the audit log as `cards_reposted`. Reminders already sent aren't sent again.
 
 ## Old website chats (History tab)
 
@@ -255,12 +255,13 @@ and files there are, their total file size and the date range. Only admins can u
   the background, with progress on the page, because Cloudflare cuts long requests. The finished file is listed with
   its size, a download link and a Delete button (asks first). Audit: `old_chats_archived`, `old_chats_archive_downloaded`,
   `old_chats_archive_deleted`. Archives are not backups and are never deleted by the nightly clean-up.
-- **Delete old website chats** needs the word DELETE typed in capital letters. It makes a normal backup first
-  (`subzero-<date>-<time>-before-old-chats-delete.zip`) and stops if that fails. Then it deletes every old chat with its
+- **Delete old website chats** needs the word DELETE typed in capital letters. It picks the chats once, then makes a backup that includes videos
+  (`subzero-<date>-<time>-before-old-chats-delete.zip`), reads it back (opens, passes the zip check, has the database,
+  not empty) and stops if anything is wrong. It deletes exactly the chats it picked (a chat that gained a Slack thread
+  meanwhile is kept). If the app stops partway, running it again finishes and removes left-over files. Then it deletes every old chat with its
   messages, file rows and files, the files of old projects, and the share-link rows of those chats. The `projects` and
   `shares` tables stay. A review card in Slack that was still waiting for one of these chats is changed to say it was
-  deleted by an admin (a card that can't be changed is skipped). Backups leave out videos, so build an archive with
-  videos first if you want to keep them. Running it again finds nothing and does nothing. Audit:
+  deleted by an admin (a card that can't be changed is skipped). The Files page (`/files`) can list and delete old files one by one. Running it again finds nothing and does nothing. Audit:
   `old_chats_deleted_by_admin` with the counts and bytes (`old_chats_delete_stopped` if the backup failed).
 
 ## Connected accounts

@@ -346,7 +346,7 @@
 
   <section class="panel" id="bridge" aria-labelledby="bridge-title">
     <h2 id="bridge-title">Claude subscription <span class="pill {{ 'ok' if bridge.signed_in else 'bad' if bridge.on else 'plain' }}">{{ 'Signed in' if bridge.signed_in else 'Not signed in' }}</span></h2>
-    <p class="field-hint">Answers with one person's Claude Pro or Max plan through Claude Code, instead of an API key. Replies count against that plan's limits, so keep an API-key model set up too. Anthropic's terms generally don't allow sharing a claude.ai login inside another product without their approval, so read them before you turn this on.</p>
+    <p class="field-hint">Answers with one person's Claude Pro or Max plan through its sign-in program, instead of an API key. Replies count against that plan's limits, so keep an API-key model set up too. Anthropic's terms generally don't allow sharing a claude.ai login inside another product without their approval, so read them before you turn this on.</p>
     {% if bridge.needs_pi %}<p class="field-hint"><span class="pill unknown">Needs the AI helper</span> It only works when <a href="#env-engine">AI engine</a> is set to the AI helper.</p>{% endif %}
     {% if bridge.signed_in %}
     <p class="field-hint">{% if bridge.on %}Signed in and turned on. Claude subscription models can be picked like any other model.{% else %}Signed in, but turned off. Tick Claude subscription under <a href="#ai-providers">AI providers</a> to use it.{% endif %}</p>
@@ -365,7 +365,7 @@
       <div class="field">
         <label for="bridge-code">Code from the Claude page</label>
         <input id="bridge-code" name="code" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="bridge-code-hint">
-        <p class="field-hint" id="bridge-code-hint">The code works once, for about 10 minutes. It's passed to Claude Code on the server PC and never saved here.{% if bridge.by %} Started by {{ bridge.by }}.{% endif %}</p>
+        <p class="field-hint" id="bridge-code-hint">The code works once, for about 10 minutes. It's passed to the Claude sign-in program on the server PC and never saved here.{% if bridge.by %} Started by {{ bridge.by }}.{% endif %}</p>
       </div>
       <div class="form-actions">
         <button class="button primary" type="submit">Finish signing in</button>
@@ -373,7 +373,7 @@
       </div>
     </form>
     {% elif not bridge.found %}
-    <p class="field-hint">The Claude Code program that comes with the AI helper isn't installed on the server PC. Install the newest SubZero AI zip, then come back here.</p>
+    <p class="field-hint">The Claude sign-in program that comes with the AI helper isn't installed on the server PC. Install the newest SubZero AI zip, then come back here.</p>
     {% else %}
     <p class="field-hint">Press Sign in to get a sign-in link. You open it on any device, sign in, and paste back the code Claude shows. Nothing needs to be done on the server PC.</p>
     <form method="post" action="/settings/bridge/sign-in" class="form-actions">
@@ -528,7 +528,7 @@
     {% else %}
     <p class="field-hint">No backups yet.</p>
     {% endif %}
-    <p class="field-hint">Backups are saved in <span class="mono">{{ backup_folder }}</span>. To put one back, run restore.cmd in the SubZero AI folder on the server PC. Backups leave out videos.</p>
+    <p class="field-hint">Backups are saved in <span class="mono">{{ backup_folder }}</span>. To put one back, run restore.cmd in the SubZero AI folder on the server PC. The nightly backups leave out videos.</p>
     <form method="post" action="/settings/backup" class="form-actions">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="button" type="submit">Back up now</button>
@@ -537,7 +537,7 @@
 
   <section class="panel" id="old-chats" aria-labelledby="old-chats-title">
     <h2 id="old-chats-title">Old website chats</h2>
-    <p class="field-hint">Before chat moved to Slack, people also chatted on the website. Those chats, their files, old projects and old share links are still stored here. Chats in Slack are never touched by anything on this panel.</p>
+    <p class="field-hint">Before chat moved to Slack, people also chatted on the website. Those chats, their files, old projects and old share links are still stored here. The <a href="/files">Files page</a> lists and deletes old files one by one. Chats in Slack are never touched by anything on this panel.</p>
     {% set job = archive.job %}
     {% if job %}
     <div class="job {{ job.state }}" role="status" {% if job.running %}data-archive-progress{% endif %}>
@@ -602,7 +602,7 @@
 
     {% if archive.chats or archive.project_files %}
     <h3>Delete old website chats</h3>
-    <p class="field-hint">Deletes all {{ archive.chats }} old website chats with their messages and files, and the files of old projects. A backup is made first, and nothing is deleted if it fails. Chats in Slack, their review cards and their files are not touched. Any review card still waiting for one of these chats is marked as deleted by an admin in Slack. Download an archive first if you want to keep a readable copy. This can't be undone, except by restoring the backup.</p>
+    <p class="field-hint">Deletes all {{ archive.chats }} old website chats with their messages and files, and the files of old projects. A backup is made first (videos included, so it can be large), checked, and nothing is deleted if it fails or can't be read back. Chats in Slack, their review cards and their files are not touched. Any review card still waiting for one of these chats is marked as deleted by an admin in Slack. Download an archive first if you want to keep a readable copy. This can't be undone, except by restoring the backup.</p>
     <form method="post" action="/settings/archive/delete-old" novalidate>
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="field">

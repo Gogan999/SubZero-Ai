@@ -16,7 +16,7 @@ from subzero_ai.code_runner import build_system_prompt
 from subzero_ai.config import Settings
 from subzero_ai.db import MIGRATIONS, Database
 
-from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, CodeStudentTest, FakeResponse, FakeWeb, Harness, repo_zip
+from .helpers import ADMIN, CodeStudentTest, Harness
 
 API = "https://api.github.com/repos/team/robot-code/zipball"
 

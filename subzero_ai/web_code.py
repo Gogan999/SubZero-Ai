@@ -33,6 +33,8 @@ LIVE = ("preparing", "running")
 STUDENT_SHOWN_CHARS = 6000  # a student sees at most this much of each step's output; the rest is cut off
 SIDEBAR_SESSIONS = 25  # sessions listed in the sidebar
 SHOWN_LINES, SHOWN_CHARS = 12, 1500  # an output longer than this is cut with "Show more"
+MAX_REST_CHARS = 20_000  # the most a "Show more" holds; the rest of a long output isn't sent to the page
+MAX_BODY_LINES = 200  # the most lines of a written file or an edit a step carries (the diff panel has the rest)
 NEEDS_LABELS = {"request": "Student request", "follow_up": "Student follow-up", "plan": "Plan to approve",
                 "step": "Step to approve"}
 FRIENDLY_FAILED = "Claude couldn't finish this task."
@@ -60,7 +62,10 @@ def short_output(text: str) -> tuple[str, str]:
     if len(lines) <= SHOWN_LINES and len(text) <= SHOWN_CHARS:
         return text, ""
     head = "".join(lines[:SHOWN_LINES])[:SHOWN_CHARS]
-    return head, text[len(head):]
+    rest = text[len(head):]
+    if len(rest) > MAX_REST_CHARS:
+        rest = rest[:MAX_REST_CHARS] + f"\n(and {len(rest) - MAX_REST_CHARS:,} more characters not shown)"
+    return head, rest
 
 
 def _json_text(data: Any) -> str:
@@ -71,7 +76,9 @@ def _json_text(data: Any) -> str:
 
 
 def step_view(s: Services, row, *, student_session: bool = False, shown: int | None = None,
-              mentor: bool = True) -> dict[str, Any]:
+              mentor: bool = True, hide_bodies: bool = False) -> dict[str, Any]:
+    """`hide_bodies`: show only a file name and a line count for written and edited files (a student, before a mentor
+    releases the changes)."""
     try:
         args = json.loads(row["input"] or "{}")
     except ValueError:
@@ -87,7 +94,7 @@ def step_view(s: Services, row, *, student_session: bool = False, shown: int | N
             "html": None, "label": "", "detail": "", "diff": None, "command": None, "runs_changes": [],
             "plan": None, "plan_html": None, "tasks": None, "parent": "", "tool_use_id": row["tool_use_id"] or "",
             "shape": "classic", "children": [], "lines": None, "content": None, "head": "", "rest": "",
-            "person": False, "mentor_only": False}
+            "person": False, "mentor_only": False, "hidden": False}
     view["head"], view["rest"] = short_output(output)
     if row["kind"] == "text":
         view["html"] = markdown_html(output)
@@ -126,7 +133,19 @@ def step_view(s: Services, row, *, student_session: bool = False, shown: int | N
         view["command"] = _arg(args, "command")
     else:
         _engine_view(view, tool, args, done)
+    if hide_bodies:
+        _hide_bodies(view)
     return view
+
+
+def _hide_bodies(view: dict[str, Any]) -> None:
+    """Take the content out of a Write or Edit step (and a classic file change): the name and a line count stay."""
+    if view["shape"] == "edit":
+        view.update(lines=None, output="", head="", rest="", hidden=True, detail=view["detail"] or "Some lines changed")
+    elif view["shape"] == "write":
+        view.update(content=None, output="", head="", rest="", hidden=True, detail=view["detail"] or "A file")
+    elif view["diff"] is not None:
+        view.update(diff=None, output="", head="", rest="", hidden=True)
 
 
 def _engine_view(view: dict[str, Any], tool: str, args: dict, done: bool) -> None:
@@ -155,10 +174,13 @@ def _engine_view(view: dict[str, Any], tool: str, args: dict, done: bool) -> Non
         view["shape"] = "write"
         view["label"] = f"Wrote {path or 'a file'}"
         content = _arg(args, "content") or _arg(args, "new_source")
+        count = len(content.splitlines())
+        view["detail"] = f"{count:,} line{'s' if count != 1 else ''}" if content else ""
         if content:
+            lines = content.splitlines(keepends=True)
+            if count > MAX_BODY_LINES:
+                content = "".join(lines[:MAX_BODY_LINES]) + f"\n(and {count - MAX_BODY_LINES:,} more lines)"
             view["content"] = content
-            count = len(content.splitlines())
-            view["detail"] = f"{count:,} line{'s' if count != 1 else ''}"
             view["head"], view["rest"] = short_output(content)
     elif tool in ("Edit", "MultiEdit"):
         view["shape"] = "edit"
@@ -167,7 +189,10 @@ def _engine_view(view: dict[str, Any], tool: str, args: dict, done: bool) -> Non
         lines: list[tuple[str, str]] = []
         for edit in edits:
             lines += edit_lines(_arg(edit, "old_string"), _arg(edit, "new_string"))
-        view["lines"] = lines[:400] or None
+        view["detail"] = f"{len(lines):,} line{'s' if len(lines) != 1 else ''} changed"
+        if len(lines) > MAX_BODY_LINES:
+            lines = lines[:MAX_BODY_LINES] + [("meta", f"... and {len(lines) - MAX_BODY_LINES:,} more lines")]
+        view["lines"] = lines or None
     elif tool in ("Glob", "Grep", "LS"):
         view["label"] = f"Searched for {_arg(args, 'pattern') or _arg(args, 'path') or 'files'}"
     elif tool in ("Agent", "Task"):
@@ -389,11 +414,12 @@ def _session_context(s: Services, row, viewer: Viewer) -> dict[str, Any]:
     mentor = viewer.is_mentor
     student_session = bool(row["owner_is_student"])
     shown = None if mentor else STUDENT_SHOWN_CHARS
+    released = bool(row["patch_released"])
     # A note whose tool is "mentor" (the new engine's details about a failure) is for mentors only
-    steps = [step_view(s, r, student_session=student_session, shown=shown, mentor=mentor)
+    steps = [step_view(s, r, student_session=student_session, shown=shown, mentor=mentor,
+                       hide_bodies=not mentor and not released)
              for r in s.code.steps(row["id"]) if mentor or r["tool"] != "mentor"]
     workspace = s.code.workspace(row["id"])
-    released = bool(row["patch_released"])
     ready = workspace.ready() and row["status"] not in LIVE
     all_changes = workspace.changes() if ready else []
     patch_problem = s.code.agent.patch_problem(row["id"]) if _col(row, "engine", "classic") == "agent" else ""
@@ -442,6 +468,9 @@ def _session_context(s: Services, row, viewer: Viewer) -> dict[str, Any]:
             "queue_note": queue_note, "plan_waiting": plan is not None, "what_next": _what_next(
                 row, mentor, student_session),
             "waiting_for_changes": student_session and bool(all_changes) and not released and not mentor,
+            "changes_before": bool(s.db.one("SELECT 1 FROM audit_log WHERE action = 'code_patch_released' AND "
+                                            "target_id = ?", (row["id"],))) if (student_session and not mentor
+                                                                                and not released) else False,
             "no_changes": ready and not all_changes and row["status"] == "done",
             "can_release": (mentor and student_session and ready and not released and bool(changes)
                             and not patch_problem),

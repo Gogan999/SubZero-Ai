@@ -34,7 +34,7 @@ HTML = {"Accept": "text/html"}
 class ModelIdTest(unittest.TestCase):
     def test_provider_is_known_and_labelled(self):
         self.assertIn("claude-bridge", PROVIDERS)
-        self.assertEqual(saved_settings.PROVIDER_LABELS["claude-bridge"], "Claude subscription (Claude Code)")
+        self.assertEqual(saved_settings.PROVIDER_LABELS["claude-bridge"], "Claude subscription")
         self.assertIn("claude-bridge", saved_settings.PROVIDER_HELP)
 
     def test_bridge_id_is_not_rewritten_as_an_anthropic_id(self):
@@ -303,7 +303,7 @@ class AdminPageTest(unittest.TestCase):
     def test_checkbox_and_help_are_shown(self):
         _, _, admin = self.make("pi")
         page = admin.get("/settings").text
-        self.assertIn("Claude subscription (Claude Code)", page)
+        self.assertIn("Claude subscription", page)
         self.assertIn("Sign in once under Claude subscription", page)
         self.assertIn("hard-problem fallback", page)
 

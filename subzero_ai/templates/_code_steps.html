@@ -35,7 +35,7 @@
     {% if session.status == 'preparing' %}<p class="code-state" role="status">{{ queue_note or 'Starting your sandbox. This can take a minute.' }}</p>{% endif %}
     {% if plan_waiting and not mentor %}<p class="code-state" role="status">A mentor is reading Claude's plan.</p>{% endif %}
     {% if follow_up_waiting and not mentor %}<p class="code-state" role="status">Waiting for a mentor to approve your follow-up. Claude doesn't see it until a mentor approves it.</p>{% endif %}
-    {% if waiting_for_changes %}<p class="code-state" role="status">A mentor is looking at your changes. You can read and download them once a mentor releases them.</p>{% endif %}
+    {% if waiting_for_changes %}<p class="code-state" role="status">{% if changes_before %}A mentor needs to look at the new changes. You can read and download them once a mentor releases them again.{% else %}A mentor is looking at your changes. You can read and download them once a mentor releases them.{% endif %}</p>{% endif %}
     {% if no_changes %}<p class="code-state" role="status">Claude finished without changing any files.</p>{% endif %}
     {% if what_next %}
     <div class="code-ended" role="status">

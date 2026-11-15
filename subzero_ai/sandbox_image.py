@@ -555,7 +555,8 @@ def provision_image(settings: Settings, db: Database, *, force: bool = False, sa
                                "", str(log_path))
     except Exception as exc:
         reason = runner.clean_text(str(exc) or type(exc).__name__)
-        log.exception("Preparing the sandbox image failed")
+        # No traceback: it could hold the ssh command line
+        log.error("Preparing the sandbox image failed (%s): %s", type(exc).__name__, reason)
         runner.say(f"Stopped while {run.stage}: {reason}")
         _audit_failure(db, run.stage, reason)
         return ProvisionResult("failed", f"The sandbox image wasn't prepared: {reason} The old base disk is still in use.",

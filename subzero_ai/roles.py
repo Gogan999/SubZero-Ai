@@ -129,11 +129,18 @@ class Directory:
             at = datetime.fromisoformat(data["at"])
         except (ValueError, KeyError, TypeError):
             return None
-        return ids, at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        if at > datetime.now(timezone.utc) + timedelta(minutes=5):
+            return None  # a time in the future can't be trusted (the clock was wrong, or the row was edited)
+        return ids, at
 
     def _use_last_known(self) -> None:
         """Slack couldn't be read. A list already in memory stays. With none (just after start-up), use the saved list
         if it is under a week old. Either way, say so (stale_warning)."""
+        if self._have_list and self._saved_at is not None and (
+                datetime.now(timezone.utc) - self._saved_at > MENTOR_LIST_MAX_AGE):
+            log.warning("The mentor list in memory is older than %s days, so it isn't used", MENTOR_LIST_MAX_AGE.days)
+            self._mentors, self._have_list, self._using_saved = set(), False, False
         if self._have_list:
             when = self._saved_at
             since = self._when(when) if when else "earlier"

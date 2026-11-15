@@ -19,6 +19,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import time
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ from typing import Any
 from urllib.parse import quote
 
 from . import __version__, slack_cards
-from .backup import VIDEO_SUFFIXES, make_backup
+from .backup import DB_NAME, VIDEO_SUFFIXES, make_backup
 from .config import Settings
 from .db import Database, utcnow
 
@@ -46,15 +47,24 @@ Progress = Callable[[int, int, str], None]
 
 
 # --------------------------------------------------------------------------- what counts as old
-def _select_old(conn: sqlite3.Connection, now: datetime | None = None) -> None:
+def _select_old(conn: sqlite3.Connection, now: datetime | None = None, ids: list[int] | None = None) -> None:
     """Make two temporary tables on this connection: _old_chats (conversations with no Slack thread, at least
-    MIN_AGE_MINUTES old) and _old_projects (projects that no remaining chat uses)."""
+    MIN_AGE_MINUTES old; or, given `ids`, just those of them that still exist and still have no Slack thread) and
+    _old_projects (projects that no remaining chat uses)."""
     cutoff = ((now or datetime.now(timezone.utc)) - timedelta(minutes=MIN_AGE_MINUTES)).isoformat(timespec="seconds")
     conn.execute("DROP TABLE IF EXISTS temp._old_chats")
     conn.execute("DROP TABLE IF EXISTS temp._old_projects")
-    conn.execute("CREATE TEMP TABLE _old_chats AS SELECT c.id AS id FROM conversations c "
-                 "LEFT JOIN slack_threads t ON t.conversation_id = c.id "
-                 "WHERE t.conversation_id IS NULL AND c.created_at <= ?", (cutoff,))
+    if ids is None:
+        conn.execute("CREATE TEMP TABLE _old_chats AS SELECT c.id AS id FROM conversations c "
+                     "LEFT JOIN slack_threads t ON t.conversation_id = c.id "
+                     "WHERE t.conversation_id IS NULL AND c.created_at <= ?", (cutoff,))
+    else:
+        conn.execute("CREATE TEMP TABLE _old_chats (id INTEGER PRIMARY KEY)")
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            conn.execute("INSERT OR IGNORE INTO _old_chats SELECT c.id FROM conversations c "
+                         "LEFT JOIN slack_threads t ON t.conversation_id = c.id WHERE t.conversation_id IS NULL "
+                         f"AND c.id IN ({','.join('?' * len(chunk))})", chunk)
     conn.execute("CREATE TEMP TABLE _old_projects AS SELECT p.id AS id FROM projects p WHERE NOT EXISTS ("
                  "SELECT 1 FROM conversations c WHERE c.project_id = p.id AND c.id NOT IN (SELECT id FROM _old_chats))")
 
@@ -100,6 +110,26 @@ def summarize(db: Database, *, now: datetime | None = None) -> Summary:
             projects=one("SELECT COUNT(*) AS n FROM _old_projects")["n"], project_files=project["n"],
             project_bytes=project["bytes"],
             shares=one("SELECT COUNT(*) AS n FROM shares WHERE conversation_id IN (SELECT id FROM _old_chats)")["n"])
+
+
+_SUMMARY_CACHE: dict[str, tuple[float, Summary]] = {}
+
+
+def summarize_cached(db: Database, max_age: float = 60.0) -> Summary:
+    """summarize(), reused for a minute, so drawing the Settings page doesn't count every file each time."""
+    key = str(db.path)
+    hit = _SUMMARY_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < max_age:
+        return hit[1]
+    summary = summarize(db)
+    _SUMMARY_CACHE[key] = (time.monotonic(), summary)
+    return summary
+
+
+def old_chat_ids(db: Database, *, now: datetime | None = None) -> list[int]:
+    with db.connect() as conn:
+        _select_old(conn, now)
+        return [r["id"] for r in conn.execute("SELECT id FROM _old_chats ORDER BY id")]
 
 
 # --------------------------------------------------------------------------- archives on disk
@@ -427,15 +457,37 @@ def _remove_files(files_dir: Path, rows: list[tuple[str, int]]) -> tuple[int, in
     return removed, freed
 
 
+ORPHANS_KEY = "old_chats_files_to_remove"
+
+
+def _remove_leftovers(settings: Settings, db: Database) -> int:
+    """Remove files a delete recorded but didn't finish removing (the app stopped after the database was changed).
+    Only paths that job recorded, only inside the files folder. Returns how many files were removed."""
+    raw = db.get_kv(ORPHANS_KEY)
+    if not raw:
+        return 0
+    try:
+        paths = [str(p) for p in json.loads(raw)]
+    except ValueError:
+        paths = []
+    removed, _ = _remove_files(settings.data_dir / "files", [(p, 0) for p in paths])
+    db.delete_kv(ORPHANS_KEY)
+    return removed
+
+
 def delete_old_chats_now(settings: Settings, db: Database, *, actor_id: int | None, backup: str = "",
-                         progress: Progress | None = None, now: datetime | None = None) -> dict[str, Any]:
+                         progress: Progress | None = None, now: datetime | None = None,
+                         ids: list[int] | None = None) -> dict[str, Any]:
     """Delete every old website chat with its messages, attachment rows and files, and the files of old projects.
     The `projects` and `shares` tables stay (their rows for deleted chats go with the chats). Returns the counts and
-    the Slack review cards that were still open, so the caller can mark them. A second run finds nothing."""
+    the Slack review cards that were still open, so the caller can mark them. A second run finds nothing.
+    With `ids`, only those chats are deleted (and only if they still have no Slack thread): chats made since the
+    list was picked are left alone. The files to remove are written down in the same transaction, so a run that is
+    cut off before removing them can finish the job next time."""
     progress = progress or (lambda done, total, text: None)
     files_dir = settings.data_dir / "files"
     with db.transaction() as conn:
-        _select_old(conn, now)
+        _select_old(conn, now, ids)
         chats = conn.execute("SELECT COUNT(*) AS n FROM _old_chats").fetchone()["n"]
         project_files = conn.execute("SELECT path, size FROM project_files WHERE project_id IN "
                                      "(SELECT id FROM _old_projects)").fetchall()
@@ -455,12 +507,15 @@ def delete_old_chats_now(settings: Settings, db: Database, *, actor_id: int | No
             "WHERE m.status = 'pending' AND c.id IN (SELECT id FROM _old_chats)")]
         conn.execute("DELETE FROM conversations WHERE id IN (SELECT id FROM _old_chats)")  # messages, files rows,
         conn.execute("DELETE FROM project_files WHERE project_id IN (SELECT id FROM _old_projects)")  # cards, shares
+        conn.execute("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (ORPHANS_KEY, json.dumps([r["path"] for r in attachments + project_files])))
         total_bytes = sum(r["size"] for r in attachments) + sum(r["size"] for r in project_files)
         details = {"chats": chats, "messages": messages, "files": len(attachments), "project_files": len(project_files),
                    "shares": shares, "bytes": total_bytes, "open_cards": len(cards), "backup": backup}
         db.audit("old_chats_deleted_by_admin", actor_id=actor_id, details=details, conn=conn)
     progress(0, 1, "Deleting the files")
     _remove_files(files_dir, [(r["path"], r["size"]) for r in attachments + project_files])
+    db.delete_kv(ORPHANS_KEY)
     return {**details, "cards": cards}
 
 
@@ -497,6 +552,7 @@ def start_job(db: Database, kind: str, by: str) -> dict[str, Any] | None:
     job = {"kind": kind, "state": "running", "step": "Starting", "done": 0, "total": 1, "boot": _BOOT,
            "started_at": utcnow(), "finished_at": "", "by": by, "message": "", "result": {}}
     _save_job(db, job)
+    _SUMMARY_CACHE.pop(str(db.path), None)
     return job
 
 
@@ -510,6 +566,7 @@ def _progress_for(db: Database, job: dict[str, Any]) -> Progress:
 def _finish(db: Database, job: dict[str, Any], state: str, message: str, result: dict[str, Any] | None = None) -> None:
     job.update(state=state, message=message, result=result or {}, finished_at=utcnow(), done=job["total"])
     _save_job(db, job)
+    _SUMMARY_CACHE.pop(str(db.path), None)
 
 
 async def run_archive_job(settings: Settings, db: Database, job: dict[str, Any], *, actor_id: int,
@@ -534,38 +591,62 @@ async def run_archive_job(settings: Settings, db: Database, job: dict[str, Any],
         _finish(db, job, "failed", "The archive couldn't be made. Check the backups folder, then try again.")
 
 
+def verify_backup_zip(path: Path) -> str:
+    """'' if the backup can be trusted (it opens, every file in it reads cleanly, it has the database, it isn't empty),
+    else a short reason."""
+    try:
+        if path.stat().st_size <= 0:
+            return "the backup file is empty"
+        with zipfile.ZipFile(path) as zf:
+            if zf.testzip() is not None:
+                return "the backup file is damaged"
+            if DB_NAME not in zf.namelist():
+                return "the backup has no database in it"
+    except (OSError, zipfile.BadZipFile) as exc:
+        return f"the backup can't be read ({type(exc).__name__})"
+    return ""
+
+
 async def run_delete_job(settings: Settings, db: Database, slack: Any, job: dict[str, Any], *, actor_id: int,
                          admin_slack_id: str | None) -> None:
-    """Back up, delete the old chats, then mark their open Slack cards. Never raises. If the backup fails nothing is
-    deleted."""
+    """Pick the chats once, back up (videos included) and check the backup, delete exactly those chats, then mark
+    their open Slack cards. Never raises. If the backup fails or can't be read back, nothing is deleted."""
     try:
+        leftovers = await asyncio.to_thread(_remove_leftovers, settings, db)
+        ids = await asyncio.to_thread(old_chat_ids, db)
         summary = await asyncio.to_thread(summarize, db)
-        if not summary.chats and not summary.project_files:
-            _finish(db, job, "done", "There were no old website chats to delete.", {"chats": 0})
+        if not ids and not summary.project_files:
+            _finish(db, job, "done", "There were no old website chats to delete."
+                    + (f" Removed {leftovers} leftover files from an earlier run." if leftovers else ""),
+                    {"chats": 0, "leftover_files": leftovers})
             return
         report = _progress_for(db, job)
-        report(0, 3, "Making a backup first")
+        report(0, 3, "Making a backup first (videos included)")
         try:
-            backup = (await asyncio.to_thread(make_backup, settings, label="before-old-chats-delete")).name
+            path = await asyncio.to_thread(make_backup, settings, label="before-old-chats-delete",
+                                           include_videos=True)
+            problem = await asyncio.to_thread(verify_backup_zip, path)
         except Exception as exc:
             log.exception("The backup before deleting old chats failed")
-            db.audit("old_chats_delete_stopped", actor_id=actor_id, details={"reason": "backup failed",
-                                                                            "error": str(exc)[:200]})
-            _finish(db, job, "failed", "The backup failed, so nothing was deleted. Fix the backups folder, then try "
+            path, problem = None, f"the backup couldn't be made ({type(exc).__name__})"
+        if problem:
+            db.audit("old_chats_delete_stopped", actor_id=actor_id, details={"reason": problem})
+            _finish(db, job, "failed", f"Nothing was deleted, because {problem}. Fix the backups folder, then try "
                                        "again.")
             return
         report(1, 3, "Deleting the chats and their files")
-        result = await asyncio.to_thread(delete_old_chats_now, settings, db, actor_id=actor_id, backup=backup,
-                                         progress=report)
+        result = await asyncio.to_thread(delete_old_chats_now, settings, db, actor_id=actor_id, backup=path.name,
+                                         progress=report, ids=ids)
         report(2, 3, "Marking the review cards in Slack")
         marked = await _mark_cards(slack, result.pop("cards"), admin_slack_id)
         result["cards_marked"] = marked
-        _finish(db, job, "done", f"Deleted {result['chats']} old website chats. The backup {backup} was made first.",
-                result)
+        _finish(db, job, "done", f"Deleted {result['chats']} old website chats. The backup {path.name} was made "
+                                 "first, with videos.", result)
     except Exception:
         log.exception("Couldn't delete the old website chats")
-        _finish(db, job, "failed", "Deleting stopped because of an error. Run it again to finish; chats already "
-                                   "deleted stay deleted.")
+        _finish(db, job, "failed", "Deleting stopped because of an error. Some chats may already be deleted. Run it "
+                                   "again: it finishes the job, removes any files left behind, and skips anything "
+                                   "already done.")
 
 
 async def _mark_cards(slack: Any, cards: list[dict[str, Any]], admin_slack_id: str | None) -> int:

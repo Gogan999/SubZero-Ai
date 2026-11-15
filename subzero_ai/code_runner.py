@@ -898,7 +898,8 @@ class CodeRunner:
         else:
             self.db.execute("UPDATE code_steps SET status = 'done', reviewed_by = ?, review_note = NULL WHERE id = ?",
                             (actor_id, step_id))
-        self._set(session_id, status="running", transcript=json.dumps(transcript), error=None)
+        # New work means new changes: a mentor has to release them again (D84)
+        self._set(session_id, status="running", transcript=json.dumps(transcript), error=None, patch_released=0)
         self.db.audit("code_follow_up", actor_id=actor_id, target_type="code", target_id=session_id,
                       details={"text": text})
         self.tasks.spawn(self._run(session_id), name=f"code-{session_id}")

@@ -186,9 +186,7 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .pill.unknown { background: var(--muted-bg); color: var(--ink-2); }
 .pill.plain { background: var(--frost); color: var(--ink); font-variant-numeric: tabular-nums; }
 
-/* A chat fills the window exactly: the messages scroll inside .thread-scroll and the composer stays at the bottom,
-   so the page itself never grows. The scroller spans the whole column (its scrollbar sits at the window's edge) and
-   pads its content in to the same 780px reading width. */
+/* The head of the mentors' read-only chat page */
 .thread-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: .5rem 1rem; padding-bottom: .75rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--rule); }
 .back { margin: 0 0 .75rem; font-size: .9rem; }
 .thread-title { min-width: 0; }
@@ -519,7 +517,7 @@ body.code-view .main-col > main { overflow: hidden; }
 .diff-body .add, .code-diff .add { background: var(--approved-bg); }
 .diff-body .del, .code-diff .del { background: var(--rejected-bg); }
 .diff-body .hunk, .code-diff .hunk { color: var(--held); }
-.diff-body .meta { color: var(--ink-2); }
+.diff-body .meta, .code-diff .meta { color: var(--ink-2); }
 .diff-body { margin: 0; padding: .4rem 0; overflow: auto; max-height: 32rem; font-family: var(--mono); font-size: .82rem; line-height: 1.45; }
 .diff-cut { margin: 0; padding: .4rem .75rem; border-top: 1px solid var(--rule); }
 

@@ -94,6 +94,7 @@
   {% if st.lines %}
   <details class="code-output"{% if st.lines|length <= 12 %} open{% endif %}><summary>The change</summary>
     <pre class="code-diff"><code>{% for css, text in st.lines %}<span class="{{ css }}">{{ text }}</span>{% endfor %}</code></pre></details>
+  {% elif st.hidden %}<p class="code-reason">{{ st.detail }}. A mentor looks at the changes before you can read them.</p>
   {% endif %}
   {% if st.status == 'error' and st.output %}<details class="code-output"><summary>Details</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
 </li>
@@ -101,7 +102,8 @@
 {% elif st.shape == 'write' %}
 <li class="code-step tool {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
   <p class="code-label">{{ st.label }} {{ pills(st) }}</p>
-  {% if st.content %}<details class="code-output"><summary>The file{% if st.detail %} ({{ st.detail }}){% endif %}</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
+  {% if st.content %}<details class="code-output"><summary>The file{% if st.detail %} ({{ st.detail }}){% endif %}</summary>{{ more(st.head, st.rest) }}</details>
+  {% elif st.hidden %}<p class="code-reason">{{ st.detail }}. A mentor looks at the changes before you can read them.</p>{% endif %}
 </li>
 
 {% elif st.shape == 'todo' %}

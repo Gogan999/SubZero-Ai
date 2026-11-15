@@ -525,7 +525,8 @@ async def audit_page(request: Request, viewer: Viewer) -> Response:
     q = request.query_params
     actor, action = q.get("who", "").strip(), q.get("what", "").strip()
     since, until = _date_arg(q.get("from")), _date_arg(q.get("to"))
-    number = max(1, int(q["page"])) if q.get("page", "").isdigit() else 1
+    raw_page = q.get("page", "")
+    number = min(max(1, int(raw_page)), 100_000) if raw_page.isascii() and raw_page.isdecimal() else 1
     rows, total = s.store.audit_search(actor=actor, action=action, since=since, until=until, limit=AUDIT_PAGE,
                                        offset=(number - 1) * AUDIT_PAGE)
     entries = []

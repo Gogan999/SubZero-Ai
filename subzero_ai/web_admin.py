@@ -337,7 +337,7 @@ def _date(s: Services, iso: str) -> str:
 
 def archive_context(s: Services) -> dict[str, Any]:
     """The Old website chats box in History: how many there are, the running job, and the archives made."""
-    summary = archive.summarize(s.db)
+    summary = archive.summarize_cached(s.db)
     job = archive.job_state(s.db)
     if job:
         job["running"] = job.get("state") == "running"
@@ -908,7 +908,7 @@ async def bridge_sign_in(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     cli = claude_cli_path(s.settings.pi_gateway_script or None)
     if cli is None:
-        flash(request, "Couldn't find the Claude Code program that comes with the AI helper. Install the newest "
+        flash(request, "Couldn't find the Claude sign-in program that comes with the AI helper. Install the newest "
                        f"SubZero AI zip, then try again. ({BRIDGE_WHERE}.)")
         return RedirectResponse("/settings#bridge", status_code=303)
     try:
@@ -1065,13 +1065,21 @@ async def post_cards_again(request: Request, viewer: Viewer) -> Response:
                        f"{where}")
         return RedirectResponse("/settings#waiting", status_code=303)
     result = await s.approvals.repost_cards()
+    if result.get("busy"):
+        flash(request, f"The cards are being posted, or were just posted. Wait a few seconds. {where}")
+        return RedirectResponse("/settings#waiting", status_code=303)
     s.db.audit("cards_reposted", actor_id=viewer.id, details=result)
-    if not result["posted"] and not result["failed"]:
+    if not any(result.values()):
         flash(request, f"No messages are waiting, so no cards were posted. {where}")
     else:
         text = f"Posted {result['posted']} card{'s' if result['posted'] != 1 else ''} again."
         if result["failed"]:
             text += f" {result['failed']} couldn't be posted. Check that the app is in the review channel."
+        if result["skipped"]:
+            text += f" {result['skipped']} had just been decided, so no card was posted."
+        if result["remaining"]:
+            text += (f" That is the most for one press. {result['remaining']} more are still waiting: press the "
+                     "button again in a few seconds.")
         flash(request, f"{text} {where}")
     return RedirectResponse("/settings#waiting", status_code=303)
 
@@ -1141,7 +1149,10 @@ async def archive_remove(request: Request, viewer: Viewer) -> Response:
     """Delete one archive file."""
     s = services(request)
     path = archive.archive_path(s.settings, request.path_params["name"])
-    if path is None:
+    if archive.job_running(s.db):
+        flash(request, f"An archive or delete is running. Wait for it to finish before deleting an archive. "
+                       f"({ARCHIVE_WHERE}.)")
+    elif path is None:
         flash(request, f"There's no archive with that name. ({ARCHIVE_WHERE}.)")
     else:
         size = path.stat().st_size

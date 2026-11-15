@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from subzero_ai.db import utcnow
 from subzero_ai import model_check, saved_settings, server_settings, web_admin
 from subzero_ai.config import parse_env_file
 from subzero_ai.pi_client import bridge_credentials_path
@@ -605,7 +606,8 @@ class OverviewTest(Base):
         new_card = self.h.services.store.card(first)
         self.assertNotEqual(new_card["ts"], old_card["ts"])  # the message now follows the new card
         self.assertTrue(any(u["ts"] == old_card["ts"] for u in self.h.slack.updates))  # the old one says so
-        self.assertEqual(self.audit("cards_reposted"), [{"posted": 1, "failed": 0}])
+        self.assertEqual(self.audit("cards_reposted"),
+                         [{"posted": 1, "failed": 0, "skipped": 0, "remaining": 0}])
         # Who may approve hasn't changed: a student can't approve, and the card's buttons are the usual ones
         self.h.slack_tap("approve", first, user="UKID0002")
         self.assertEqual(self.h.message(first)["status"], "pending")
@@ -632,7 +634,78 @@ class OverviewTest(Base):
         resp = self.post("/settings/repost-cards", {})
         self.assertIn("1 couldn't be posted", html.unescape(resp.text))
         self.assertEqual(self.h.services.store.card(first)["ts"], old["ts"])
-        self.assertEqual(self.audit("cards_reposted"), [{"posted": 0, "failed": 1}])
+        self.assertEqual(self.audit("cards_reposted"),
+                         [{"posted": 0, "failed": 1, "skipped": 0, "remaining": 0}])
+
+    def repost(self):
+        return self.h.call(self.h.services.approvals.repost_cards)
+
+    def test_a_second_press_posts_nothing(self):
+        self.waiting(2)
+        posts = len(self.h.slack.posts)
+        self.assertEqual(self.repost()["posted"], 2)
+        self.assertEqual(len(self.h.slack.posts), posts + 2)
+        again = self.repost()  # a double-click, or a press just after
+        self.assertTrue(again["busy"])
+        self.assertEqual(len(self.h.slack.posts), posts + 2)
+        resp = self.post("/settings/repost-cards", {})
+        self.assertIn("Wait a few seconds", resp.text)
+        self.assertEqual(len(self.audit("cards_reposted")), 0, "the busy press isn't a repost")
+
+    def test_the_press_is_not_run_twice_at_once(self):
+        self.waiting(1)
+        approvals = self.h.services.approvals
+        approvals._reposting = True
+        self.assertTrue(self.repost()["busy"])
+        approvals._reposting = False
+
+    def test_a_message_decided_or_deleted_mid_run_is_skipped(self):
+        first, second, third = self.waiting(3)
+        approvals = self.h.services.approvals
+        real = approvals._post_card
+        calls = []
+
+        async def post(message_id):
+            calls.append(message_id)
+            if message_id == first:  # while the first card goes out, a mentor decides the second and the third is deleted
+                self.h.services.db.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (second,))
+                self.h.services.db.execute("DELETE FROM conversations WHERE id = (SELECT conversation_id FROM "
+                                           "messages WHERE id = ?)", (third,))
+            await real(message_id)
+        approvals._post_card = post
+        result = self.repost()
+        self.assertEqual(calls, [first])
+        self.assertEqual((result["posted"], result["skipped"], result["failed"]), (1, 2, 0))
+
+    def test_one_failure_does_not_end_the_run(self):
+        first, second = self.waiting(2)
+        approvals = self.h.services.approvals
+        real = approvals._post_card
+
+        async def post(message_id):
+            if message_id == first:
+                raise RuntimeError("boom")
+            await real(message_id)
+        approvals._post_card = post
+        result = self.repost()
+        self.assertEqual((result["posted"], result["failed"]), (1, 1))
+
+    def test_a_long_list_is_posted_in_batches(self):
+        approvals = self.h.services.approvals
+        approvals.REPOST_MAX, approvals.REPOST_COOLDOWN = 2, 0
+        self.waiting(2)
+        user = self.h.services.store.user_by_slack_id("UKID0001")
+        for i in range(2):
+            cid = self.h.services.db.execute(
+                "INSERT INTO conversations (owner_id, title, visibility, model, created_at, updated_at) "
+                "VALUES (?, 't', 'team', 'm', 'now', 'now')", (user["id"],)).lastrowid
+            self.h.services.db.execute(
+                "INSERT INTO messages (conversation_id, author_id, role, content, status, created_at, updated_at) "
+                "VALUES (?, ?, 'user', 'x', 'pending', ?, ?)", (cid, user["id"], utcnow(), utcnow()))
+        first = self.repost()
+        self.assertEqual((first["posted"], first["remaining"]), (2, 2))
+        second = self.repost()  # carries on with the rest instead of posting the first two again
+        self.assertEqual((second["posted"], second["remaining"]), (2, 0))
 
     def test_update_notice_says_what_to_do_on_the_server_pc(self):
         self.h.services.db.set_kv("latest_release", json.dumps({"version": "99.0.0", "url": "https://example.com/r",
