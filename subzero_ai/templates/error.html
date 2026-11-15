@@ -4,6 +4,7 @@
 <section class="page narrow">
   <h1>{{ title }}</h1>
   <p class="lede">{{ detail }}</p>
-  <p><a class="button" href="/chats">Back to chats</a></p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  <p><a class="button" href="/code">Go to Code</a></p>
 </section>
 {% endblock %}

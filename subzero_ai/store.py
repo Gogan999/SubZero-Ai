@@ -50,12 +50,9 @@ class Viewer:
 
 
 class Store:
-    def __init__(self, db: Database, *, timezone_name: str = "America/Chicago",
-                 show_pending_to_team: bool = False, show_rejected_to_team: bool = False):
+    def __init__(self, db: Database, *, timezone_name: str = "America/Chicago"):
         self.db = db
         self.tz = ZoneInfo(timezone_name)
-        self.show_pending_to_team = show_pending_to_team
-        self.show_rejected_to_team = show_rejected_to_team
 
     # ------------------------------------------------------------------ users
     def upsert_user(self, *, slack_user_id: str, name: str, role: str, team_id: str | None = None,
@@ -89,15 +86,8 @@ class Store:
     def set_user_role(self, user_id: int, role: str) -> None:
         self.db.execute("UPDATE users SET role = ? WHERE id = ? AND role != ?", (role, user_id, role))
 
-    def save_preferences(self, user_id: int, *, theme: str | None = None, notify_dm: bool | None = None,
-                         default_subteam: str | None | bool = False) -> None:
-        """Change any of the given preferences. default_subteam=None clears it; False leaves it alone."""
-        if theme is not None:
-            self.db.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, user_id))
-        if notify_dm is not None:
-            self.db.execute("UPDATE users SET notify_dm = ? WHERE id = ?", (int(notify_dm), user_id))
-        if default_subteam is not False:
-            self.db.execute("UPDATE users SET default_subteam = ? WHERE id = ?", (default_subteam, user_id))
+    def save_preferences(self, user_id: int, *, theme: str) -> None:
+        self.db.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, user_id))
 
     def deactivate_user(self, user_id: int) -> None:
         self.db.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
@@ -136,59 +126,11 @@ class Store:
         conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (utcnow(), conversation_id))
 
     def can_view_conversation(self, viewer: Viewer, conv: sqlite3.Row) -> bool:
-        if viewer.is_mentor or conv["owner_id"] == viewer.id:
-            return True
-        if conv["visibility"] != "team":
-            return False
-        # Other students only see a conversation once something in it has been approved.
-        row = self.db.one(
-            "SELECT 1 FROM messages WHERE conversation_id = ? AND role = 'user' AND status IN ('approved','edited','auto','grace') LIMIT 1",
-            (conv["id"],),
-        )
-        return row is not None
+        """Chats are read on the website by mentors and admins only. Students use Slack."""
+        return viewer.is_mentor
 
     def set_model(self, conversation_id: int, model: str) -> None:
         self.db.execute("UPDATE conversations SET model = ? WHERE id = ?", (model, conversation_id))
-
-    def list_conversations(self, viewer: Viewer, *, scope: str = "team", query: str = "",
-                           subteam: str | None = None, owner_id: int | None = None,
-                           limit: int = 200) -> list[sqlite3.Row]:
-        params: list = []
-        where = []
-        if subteam:
-            where.append("c.subteam = ?")
-            params.append(subteam)
-        if owner_id is not None:
-            where.append("c.owner_id = ?")
-            params.append(owner_id)
-        if scope == "mine":
-            where.append("c.owner_id = ?")
-            params.append(viewer.id)
-        if not viewer.is_mentor:
-            where.append(
-                "(c.owner_id = ? OR (c.visibility = 'team' AND EXISTS (SELECT 1 FROM messages m2 WHERE "
-                "m2.conversation_id = c.id AND m2.role = 'user' AND m2.status IN ('approved','edited','auto','grace'))))"
-            )
-            params.append(viewer.id)
-        if query:
-            where.append(
-                "(c.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM messages m3 WHERE m3.conversation_id = c.id AND "
-                "m3.content LIKE ? ESCAPE '\\' AND (m3.role = 'assistant' OR m3.status IN ('approved','edited','auto','grace') OR c.owner_id = ?)))"
-            )
-            # Search for what was typed: % and _ are wildcards in LIKE, so escape them.
-            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            like = f"%{escaped}%"
-            params += [like, like, viewer.id]
-        sql = (
-            "SELECT c.*, u.name AS owner_name, u.avatar_url AS owner_avatar, "
-            "(SELECT COUNT(*) FROM messages p WHERE p.conversation_id = c.id AND p.status = 'pending') AS pending_count, "
-            "(SELECT content FROM messages f WHERE f.conversation_id = c.id AND f.role = 'user' ORDER BY f.id LIMIT 1) AS first_text "
-            "FROM conversations c JOIN users u ON u.id = c.owner_id "
-            + ("WHERE " + " AND ".join(where) if where else "")
-            + " ORDER BY c.updated_at DESC LIMIT ?"
-        )
-        params.append(limit)
-        return self.db.all(sql, tuple(params))
 
     # --------------------------------------------------------------- messages
     def add_message(self, conn: sqlite3.Connection, *, conversation_id: int, author_id: int | None,
@@ -221,25 +163,6 @@ class Store:
             "WHERE m.conversation_id = ? ORDER BY m.id",
             (conversation_id,),
         )
-
-    def can_view_message(self, viewer: Viewer, conv: sqlite3.Row, msg: sqlite3.Row) -> bool:
-        if not self.can_view_conversation(viewer, conv):
-            return False
-        if viewer.is_mentor or conv["owner_id"] == viewer.id:
-            return msg["status"] != WITHDRAWN or msg["author_id"] == viewer.id or viewer.is_mentor
-        if msg["role"] == "assistant":
-            return True
-        status = msg["status"]
-        if status in SENT_TO_CLAUDE:
-            return True
-        if status == PENDING:
-            return self.show_pending_to_team
-        if status == REJECTED:
-            return self.show_rejected_to_team
-        return False
-
-    def visible_messages(self, viewer: Viewer, conv: sqlite3.Row) -> list[sqlite3.Row]:
-        return [m for m in self.messages(conv["id"]) if self.can_view_message(viewer, conv, m)]
 
     def pending_messages(self) -> list[sqlite3.Row]:
         return self.db.all(
@@ -275,14 +198,6 @@ class Store:
             "AND reviewed_at >= ?) OR (status = 'grace' AND created_at >= ?))",
             (user_id, since, since),
         )
-        return row["n"]
-
-    def web_searches_today(self) -> int:
-        """Web searches the whole team's replies have used since local midnight."""
-        local_midnight = datetime.now(self.tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        since = local_midnight.astimezone(timezone.utc).isoformat(timespec="seconds")
-        row = self.db.one("SELECT COALESCE(SUM(web_searches), 0) AS n FROM messages WHERE role = 'assistant' "
-                          "AND created_at >= ?", (since,))
         return row["n"]
 
     def window_open(self, conversation_id: int, minutes: int) -> bool:
@@ -331,22 +246,6 @@ class Store:
         return self.db.one(
             "SELECT * FROM messages WHERE reply_to = ? ORDER BY id DESC LIMIT 1", (user_message_id,)
         )
-
-    def last_context_tokens(self, conversation_id: int) -> int:
-        """How many tokens Claude read for the latest reply: roughly the size of the whole chat."""
-        row = self.db.one(
-            "SELECT COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0) AS n FROM messages "
-            "WHERE conversation_id = ? AND role = 'assistant' AND status = 'complete' ORDER BY id DESC LIMIT 1",
-            (conversation_id,),
-        )
-        return row["n"] if row else 0
-
-    def has_completed_reply(self, conversation_id: int) -> int:
-        row = self.db.one(
-            "SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND role = 'assistant' AND status = 'complete'",
-            (conversation_id,),
-        )
-        return row["n"]
 
     # ------------------------------------------------------------ slack cards
     def save_card(self, message_id: int, channel: str, ts: str) -> None:

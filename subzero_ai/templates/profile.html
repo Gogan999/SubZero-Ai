@@ -28,23 +28,6 @@
     <form method="post" action="/profile">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="fields">
-        <div class="field">
-          <label for="default-subteam">Your subteam</label>
-          <select id="default-subteam" name="default_subteam" aria-describedby="default-subteam-hint">
-            <option value="">None</option>
-            {% for st in subteams %}<option {% if st == row.default_subteam %}selected{% endif %}>{{ st }}</option>{% endfor %}
-          </select>
-          <p class="field-hint" id="default-subteam-hint">New chats you start are tagged with it, so the team can filter by subteam on the Chats page.</p>
-        </div>
-        {% if slack_on %}
-        <div class="field check">
-          <input type="checkbox" id="notify-dm" name="notify_dm" value="1" {% if row.notify_dm %}checked{% endif %} aria-describedby="notify-dm-hint">
-          <label for="notify-dm">Slack messages when a mentor reviews my message</label>
-          <p class="field-hint" id="notify-dm-hint">The Slack app tells you when a message is approved or not approved. You'll still see it here either way.</p>
-        </div>
-        {% else %}
-        <input type="hidden" name="notify_dm" value="{{ '1' if row.notify_dm else '0' }}">
-        {% endif %}
         <fieldset class="field">
           <legend>Appearance</legend>
           {% for value, label in (('system', 'Match this device'), ('light', 'Light'), ('dark', 'Dark')) %}

@@ -1,18 +1,14 @@
-"""The web app: pages, JSON actions for the chat UI, live updates, and startup/shutdown."""
+"""The web app: sign-in, the mentor Review page and read-only chat page, live updates, and startup/shutdown."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import re
 import secrets
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from starlette.applications import Starlette
@@ -21,7 +17,6 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import (
     FileResponse,
-    HTMLResponse,
     JSONResponse,
     PlainTextResponse,
     RedirectResponse,
@@ -30,62 +25,49 @@ from starlette.responses import (
 )
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
-from starlette.templating import Jinja2Templates
 
-from . import __version__, maintenance, saved_settings, setup_flow, slack_cards
-from .approvals import ApprovalService, Outcome
+from . import __version__, saved_settings, setup_flow
+from .approvals import ApprovalService
 from .attachments import Attachments, size_label
-from .bridge_login import BridgeLogin
 from .auth import LoginError, SlackLogin, profile_from_claims
-from .ai_backend import Capabilities, capabilities_for, make_client, resolve_backend
-from .claude import ClaudeClient
+from .ai_backend import make_client
 from .code_runner import CodeRunner
 from .egress_proxy import EgressProxy, TokenStore
 from .sandbox import SandboxManager, reap_sandboxes, watch_sandbox_disks
-from .config import Settings, load_settings, normalize_model_id
+from .config import Settings, load_settings
 from .connectors import GitHub
 from .db import Database
 from .generation import ReplyRunner
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
-# MODEL_LABELS and model_label stay importable from here (tests and older code use them)
-from .model_choices import model_block, model_label, option_label, selectable_models
 from .pricing import cost_usd, usage_line
 from .render import markdown_html, plain_html, pygments_css
-from .roles import DEV_USERS, RECOVERY_USER, Directory, is_excluded_account
+from .roles import DEV_USERS, Directory, is_excluded_account
 from .screener import Screener
 from .slack_api import FakeSlack, SlackWebApi
 from .slack_dm import SlackDMs
 from .slack_handlers import SlackInteractions
 from .socket_mode import SocketModeClient, WebsocketsTransport
-# Moved to web_common.py; every name stays importable from here (tests and older code use them)
-from .web_common import (  # noqa: F401
-    CSP,
+from .web_common import (
     HERE,
-    RECENTS,
     SAFE_NEXT,
-    BodyTooBig,
     LimitBody,
     SecurityHeaders,
     Services,
     _finish_login,
-    _health_alerts,
     _load_model_names,
     check_csrf,
-    csrf_token,
     current_viewer,
     dev_login_allowed,
     error_page,
     fmt_time,
     is_local_request,
     json_error,
-    log,
     page,
     render,
     services,
     short_text,
-    templates,
     waited,
 )
 from .store import (
@@ -107,28 +89,13 @@ from .store import (
 
 log = logging.getLogger("subzero.web")
 
-def mentor_chat_model(s: Services, raw: object) -> tuple[str, str]:
-    """The model a mentor picked for a new chat, or the default. A pick that isn't in the list for new chats (or
-    that fails a check now) gives the default and a plain note saying why."""
-    default = normalize_model_id(s.settings.model_default)
-    model = normalize_model_id(str(raw or "").strip())
-    if not model:
-        return default, ""
-    if model in {option["id"] for option in selectable_models(s, purpose="chat")}:
-        return model, ""
-    problem = model_block(s.settings, s.db, model) or "It isn't on the list of models for new chats."
-    return default, (f"{model_label(model, s.model_names)} can't be used for this chat. {problem} "
-                     f"This chat uses {model_label(default, s.model_names)} instead.")
-
-
 def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     db = Database(settings.db_path)
     saved_settings.load_into(settings, db)
     if not setup_flow.setup_complete(db) and setup_flow.config_is_complete(settings):
         # Set up by hand in config.env (versions before 0.4 did this): lock the setup page.
         setup_flow.mark_setup_complete(db, actor="config.env was already complete")
-    store = Store(db, timezone_name=settings.timezone, show_pending_to_team=settings.show_pending_to_team,
-                  show_rejected_to_team=settings.show_rejected_to_team)
+    store = Store(db, timezone_name=settings.timezone)
     if slack is None and settings.slack_enabled:
         slack = SlackWebApi(settings.slack_bot_token)
     if claude is None:
@@ -185,7 +152,7 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
         "author_name": m["author_name"], "author_avatar": m["author_avatar"],
         "author_is_mentor": m["author_role"] in ("mentor", "admin"),
         "reviewer_name": m["reviewer_name"], "note": m["review_note"], "error": m["error"],
-        "reply_to": m["reply_to"], "can_review": False, "can_withdraw": False, "can_retry": False,
+        "reply_to": m["reply_to"], "can_review": False, "can_retry": False,
         "original": None, "tag": None, "tag_kind": None, "files": [], "sources": [], "searches": m["web_searches"] or 0,
     }
     if m["role"] == "assistant":
@@ -219,7 +186,6 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
     if status == PENDING:
         view["tag"], view["tag_kind"] = "Waiting for a mentor", "pending"
         view["can_review"] = viewer.is_mentor and not is_author
-        view["can_withdraw"] = is_author
     elif status == APPROVED:
         view["tag"], view["tag_kind"] = f"Approved by {reviewer}", "approved"
     elif status == EDITED:
@@ -247,49 +213,16 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
     return view
 
 
-def conversation_list(s: Services, viewer: Viewer, scope: str, query: str, subteam: str | None = None,
-                      owner_id: int | None = None, limit: int = 200):
-    rows = s.store.list_conversations(viewer, scope=scope, query=query, subteam=subteam, owner_id=owner_id,
-                                      limit=limit)
-    items = []
-    for c in rows:
-        own = c["owner_id"] == viewer.id
-        title = c["title"]
-        if not title:
-            title = short_text(c["first_text"] or "New chat") if (own or viewer.is_mentor) else "New chat"
-        items.append({"id": c["id"], "title": title, "owner": c["owner_name"], "subteam": c["subteam"],
-                      "private": c["visibility"] == "private", "pending": c["pending_count"] if (own or viewer.is_mentor) else 0,
-                      "updated": fmt_time(s.store, c["updated_at"])})
-    return items
-
-
-def list_context(s: Services, viewer: Viewer, request: Request) -> dict[str, Any]:
-    """The Chats page list with the filters from the query string (search, subteam, and who started the chat)."""
-    params = request.query_params
-    scope = "mine" if params.get("scope") == "mine" else "team"
-    query = (params.get("q") or "").strip()[:100]
-    subteam = params.get("subteam") if params.get("subteam") in s.settings.subteams else None
-    owner = None
-    if (params.get("owner") or "").isdigit():
-        row = s.store.user(int(params["owner"]))
-        if row is not None:
-            owner = {"id": row["id"], "name": row["name"]}
-    return {
-        "items": conversation_list(s, viewer, scope, query, subteam, owner["id"] if owner else None),
-        "scope": scope, "query": query, "subteams": s.settings.subteams, "subteam_filter": subteam, "owner_filter": owner,
-    }
-
-
 # --------------------------------------------------------------------------- pages
 async def home(request: Request) -> Response:
     viewer = await current_viewer(request)
-    return RedirectResponse("/chats" if viewer else "/login", status_code=303)
+    return RedirectResponse("/code" if viewer else "/login", status_code=303)
 
 
 async def login_page(request: Request) -> Response:
     viewer = await current_viewer(request)
     if viewer:
-        return RedirectResponse("/chats", status_code=303)
+        return RedirectResponse("/code", status_code=303)
     error = request.session.pop("login_error", None)
     s = services(request)
     return render(request, "login.html", None, error=error, slack_ready=s.settings.slack_login_enabled,
@@ -391,53 +324,31 @@ async def logout(request: Request) -> Response:
     return RedirectResponse("/login", status_code=303)
 
 
-def greeting(s: Services, viewer: Viewer) -> str:
-    hour = datetime.now(s.store.tz).hour
-    part = "morning" if 4 <= hour < 12 else "afternoon" if hour < 18 else "evening"
-    return f"Good {part}, {viewer.name.split()[0]}"
+CHATS_MOVED = "Chats have moved to Slack. Message the bot there."
 
 
-@page()
-async def chats(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    if any(key in request.query_params for key in ("q", "scope", "subteam", "owner")):
-        # The chat list and its filters moved to the Chats page; keep old links working
-        return RedirectResponse(f"/recents?{request.url.query}", status_code=303)
-    model_options = ([(o["id"], option_label(o)) for o in selectable_models(s, purpose="chat")]
-                     if viewer.is_mentor else [])
-    return render(request, "chats.html", viewer, current_id=None, subteams=s.settings.subteams,
-                  greeting=greeting(s, viewer), model_name=model_label(s.settings.model_default, s.model_names),
-                  model_options=model_options, model_default_id=normalize_model_id(s.settings.model_default))
-
-
-@page()
-async def recents_page(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    return render(request, "recents.html", viewer, flash=request.session.pop("flash", None),
-                  **list_context(s, viewer, request))
+async def moved_to_code(request: Request) -> Response:
+    """The old chat, project and artifact addresses: the website is for Code now, and chatting happens in Slack."""
+    request.session["flash"] = CHATS_MOVED
+    return RedirectResponse("/code", status_code=303)
 
 
 # --------------------------------------------------------------------------- profile
 @page()
 async def profile_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
-    row = s.store.user(viewer.id)
     needs_review = (not viewer.is_mentor) or s.settings.mentors_need_approval
     usage = None
     if needs_review and not viewer.is_mentor:
         usage = {"approved": s.store.count_approved_today(viewer.id), "daily": s.settings.limit_approved_per_day,
                  "waiting": s.store.count_pending_for(viewer.id), "max_waiting": s.settings.limit_pending_per_student}
-    return render(request, "profile.html", viewer, row=row, subteams=s.settings.subteams, usage=usage,
-                  slack_on=s.slack is not None, flash=request.session.pop("flash", None))
+    return render(request, "profile.html", viewer, usage=usage, flash=request.session.pop("flash", None))
 
 
 @page()
 async def profile_save(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
-    subteam = str(form.get("default_subteam") or "")
-    s.store.save_preferences(viewer.id, notify_dm=form.get("notify_dm") == "1",
-                             default_subteam=subteam if subteam in s.settings.subteams else None)
     theme = str(form.get("theme") or "")
     if theme in THEMES:
         s.store.save_preferences(viewer.id, theme=theme)
@@ -456,160 +367,33 @@ async def theme_save(request: Request, viewer: Viewer) -> Response:
     s.store.save_preferences(viewer.id, theme=theme)
     if "application/json" in request.headers.get("accept", ""):
         return JSONResponse({"ok": True})
-    back = str(form.get("next") or "/chats")
-    return RedirectResponse(back if SAFE_NEXT.fullmatch(back) else "/chats", status_code=303)
+    back = str(form.get("next") or "/code")
+    return RedirectResponse(back if SAFE_NEXT.fullmatch(back) else "/code", status_code=303)
 
 
 @page()
 async def conversation_page(request: Request, viewer: Viewer) -> Response:
+    """A chat, read-only, for mentors and admins. Students chat in Slack and get no chat pages, so they are sent to
+    Code (and nothing about the chat is looked up for them)."""
+    if not viewer.is_mentor:
+        return await moved_to_code(request)
     s = services(request)
     conv = s.store.conversation(request.path_params["cid"])
     if conv is None or not s.store.can_view_conversation(viewer, conv):
-        return error_page(request, viewer, 404, "Chat not found",
-                          "This chat doesn't exist, or it's private to the student and mentors.")
-    visible = s.store.visible_messages(viewer, conv)
+        return error_page(request, viewer, 404, "Chat not found", "This chat doesn't exist, or it was deleted.")
     last_id = s.store.last_message_id(conv["id"])
     files = s.attachments.for_conversation(conv["id"])
-    messages = [message_view(s, viewer, conv, m, last_id, files.get(m["id"], [])) for m in visible]
-    long_chat = s.store.last_context_tokens(conv["id"]) >= s.settings.long_chat_tokens
-    own = conv["owner_id"] == viewer.id
-    needs_review = (not viewer.is_mentor) or s.settings.mentors_need_approval
-    waiting = own and needs_review and s.store.conversation_has_pending(conv["id"])
-    replying = s.store.conversation_is_replying(conv["id"])
-    if needs_review and own and not waiting and s.approvals.window_applies(viewer, conv["id"]):
-        needs_review = False  # a mentor approved this chat a few minutes ago, so the next message goes straight on
-    if waiting:
-        hint = "Waiting for a mentor to review your last message"
-    elif replying:
-        hint = "Claude is replying…"
-    else:
-        hint = "Ask a follow-up"
+    messages = [message_view(s, viewer, conv, m, last_id, files.get(m["id"], []))
+                for m in s.store.messages(conv["id"])]
+    if request.query_params.get("thread"):
+        # The page asks for just the messages when it refreshes itself
+        return render(request, "_thread.html", viewer, messages=messages)
     title = conv["title"]
     if not title:
-        first = next((m for m in visible if m["role"] == "user"), None)
-        title = short_text(first["content"]) if first and (own or viewer.is_mentor) else "New chat"
-    models = []
-    if viewer.is_mentor:
-        models = [(o["id"], option_label(o)) for o in selectable_models(s, purpose="chat")]
-        if normalize_model_id(conv["model"]) not in {value for value, _ in models}:
-            models.append((conv["model"], f"{model_label(conv['model'], s.model_names)} (not allowed now)"))
-    return render(request, "conversation.html", viewer, conv=conv, messages=messages, own=own, title=title,
-                  can_send=own, waiting=waiting, replying=replying, composer_hint=hint, needs_review=needs_review,
-                  model_options=models, model_name=model_label(conv["model"], s.model_names), current_id=conv["id"],
-                  long_chat=long_chat, flash=request.session.pop("flash", None))
-
-
-@page()
-async def message_partial(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    conv = s.store.conversation(request.path_params["cid"])
-    msg = s.store.message(request.path_params["mid"])
-    if conv is None or msg is None or msg["conversation_id"] != conv["id"] or not s.store.can_view_message(viewer, conv, msg):
-        return Response(status_code=204)
-    view = message_view(s, viewer, conv, msg, s.store.last_message_id(conv["id"]))
-    return render(request, "_message.html", viewer, m=view, conv=conv)
-
-
-@page(require="mentor")
-async def set_model(request: Request, viewer: Viewer) -> Response:
-    """Mentors can move a conversation to any model in the list for new chats (see model_choices)."""
-    s = services(request)
-    conv = s.store.conversation(request.path_params["cid"])
-    if conv is None:
-        return error_page(request, viewer, 404, "Chat not found", "This chat doesn't exist.")
-    form = await request.form()
-    model = normalize_model_id(form.get("model", ""))
-    if model not in {option["id"] for option in selectable_models(s, purpose="chat")}:
-        return JSONResponse({"ok": False, "error": "Pick one of the listed models."}, status_code=400)
-    if model != normalize_model_id(conv["model"]):
-        s.store.set_model(conv["id"], model)
-        s.db.audit("model_changed", actor_id=viewer.id, target_type="conversation", target_id=conv["id"],
-                   details={"from": conv["model"], "to": model})
-    if "application/json" in request.headers.get("accept", ""):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(f"/c/{conv['id']}", status_code=303)
-
-
-@page(require="admin")
-async def delete_chat(request: Request, viewer: Viewer) -> Response:
-    """Admins (only) can delete a chat for good: its messages, files and share links go, the audit log keeps who
-    deleted it and what it was called, and any review cards still waiting in Slack lose their buttons."""
-    s = services(request)
-    cid = request.path_params["cid"]
-    # Review cards for messages still waiting; read them before the delete takes them away
-    cards = s.db.all("SELECT sc.channel, sc.ts, u.name AS author_name FROM slack_cards sc "
-                     "JOIN messages m ON m.id = sc.message_id LEFT JOIN users u ON u.id = m.author_id "
-                     "WHERE m.conversation_id = ? AND m.status = 'pending'", (cid,))
-    deleted = maintenance.delete_chat(s.db, s.attachments.files_dir, cid, actor_id=viewer.id)
-    if deleted is None:
-        return error_page(request, viewer, 404, "Chat not found", "This chat doesn't exist, or it was already deleted.")
-    # Anyone with the chat open is sent back to their chat list; the review queue drops its messages
-    s.broker.publish(f"conv:{cid}", {"type": "visibility"})
-    s.broker.publish("queue", {"type": "queue"})
-    if cards and s.slack is not None:
-        s.tasks.spawn(_mark_cards_deleted(s, cards, viewer, deleted["title"]), name=f"chat-deleted-{cid}")
-    request.session["flash"] = f"Deleted the chat “{deleted['title'] or 'New chat'}”."
-    return RedirectResponse("/recents", status_code=303)
-
-
-async def _mark_cards_deleted(s: Services, cards, viewer: Viewer, title: str | None) -> None:
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    for card in cards:
-        name = card["author_name"] or "A student"
-        slack_id = viewer.slack_user_id if viewer.slack_user_id[:1] in ("U", "W") else None  # not test sign-ins
-        blocks = slack_cards.deleted_card(student_name=name, title=title, admin_slack_id=slack_id, deleted_at=now)
-        try:
-            await s.slack.update_message(card["channel"], card["ts"], slack_cards.card_fallback_text(name, "deleted"),
-                                         blocks)
-        except Exception:
-            log.exception("Couldn't update a Slack card after deleting a chat")
-
-
-UPLOAD_REFUSED = "Files can't be attached any more. Paste the part you need into your message instead."
-
-
-async def _refuse_upload(form) -> bool:
-    """True when the request carries a file. Files aren't accepted any more; the temporary copies are deleted."""
-    found = any(hasattr(value, "read") and getattr(value, "filename", "") for _, value in form.multi_items())
-    if found:
-        await form.close()
-    return found
-
-
-@page()
-async def new_chat(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    form = await request.form()
-    subteam = form.get("subteam") if form.get("subteam") in s.settings.subteams else None
-    if subteam is None:
-        # The new-chat page has no subteam picker; the person's default from Profile and preferences fills it in
-        default = s.store.user(viewer.id)["default_subteam"]
-        subteam = default if default in s.settings.subteams else None
-    if await _refuse_upload(form):
-        return JSONResponse({"ok": False, "error": UPLOAD_REFUSED, "code": "invalid"}, status_code=400)
-    # Only mentors pick the model. A student's "model" field is ignored: the chat gets the default model.
-    chat_model, note = s.settings.model_default, ""
-    if viewer.is_mentor:
-        chat_model, note = mentor_chat_model(s, form.get("model"))
-    outcome = await s.approvals.submit(viewer, str(form.get("text", "")), subteam=subteam,
-                                       model=chat_model if viewer.is_mentor else None)
-    if not outcome.ok:
-        return json_error(outcome)
-    if note:
-        request.session["flash"] = note
-    return JSONResponse({"ok": True, "url": f"/c/{outcome.conversation_id}", "message_id": outcome.message_id})
-
-
-@page()
-async def send_message(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    form = await request.form()
-    if await _refuse_upload(form):
-        return JSONResponse({"ok": False, "error": UPLOAD_REFUSED, "code": "invalid"}, status_code=400)
-    outcome = await s.approvals.submit(viewer, str(form.get("text", "")), conversation_id=request.path_params["cid"])
-    if not outcome.ok:
-        return json_error(outcome)
-    return JSONResponse({"ok": True, "message_id": outcome.message_id})
+        first = next((m for m in messages if m["role"] == "user"), None)
+        title = short_text(first["raw"]) if first else "New chat"
+    return render(request, "conversation.html", viewer, conv=conv, messages=messages, title=title,
+                  flash=request.session.pop("flash", None))
 
 
 def _review_action(kind: str):
@@ -689,12 +473,12 @@ async def link_gone(request: Request) -> Response:
 
 @page()
 async def attachment_file(request: Request, viewer: Viewer) -> Response:
-    """An attached file, for anyone who can see the message it belongs to."""
+    """An old attached file, for mentors and admins (students have no chat pages, so no files either)."""
     s = services(request)
     row = s.attachments.get(request.path_params["aid"])
     msg = s.store.message(row["message_id"]) if row is not None else None
     conv = s.store.conversation(msg["conversation_id"]) if msg is not None else None
-    if conv is None or not s.store.can_view_message(viewer, conv, msg):
+    if conv is None or not s.store.can_view_conversation(viewer, conv):
         return PlainTextResponse("Not found", status_code=404)
     try:
         path = s.attachments.path(row)
@@ -785,23 +569,6 @@ def _event_stream(request: Request, topic: str, check: Callable[[dict], str]) ->
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@page()
-async def conversation_events(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    cid = request.path_params["cid"]
-    conv = s.store.conversation(cid)
-    if conv is None or not s.store.can_view_conversation(viewer, conv):
-        return Response(status_code=404)
-
-    def check(event: dict) -> str:
-        if event["type"] == "visibility":
-            fresh = s.store.conversation(cid)
-            return "send" if fresh and s.store.can_view_conversation(viewer, fresh) else "gone"
-        return "send"
-
-    return _event_stream(request, f"conv:{cid}", check)
-
-
 @page(require="mentor")
 async def queue_events(request: Request, viewer: Viewer) -> Response:
     return _event_stream(request, "queue", lambda event: "send")
@@ -828,12 +595,11 @@ async def _every(seconds: float, job: Callable[[], Awaitable[Any]], stop: asynci
 def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                socket_connect: Callable[[str], Awaitable[Any]] | None = None,
                background: bool = True) -> Starlette:
-    from .web_admin import admin_routes, apply_live
+    from .web_admin import admin_routes
     from .web_code import code_routes
 
     settings = settings or load_settings()
     s = build_services(settings, slack=slack, claude=claude)
-    apply_live(s)
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
@@ -900,18 +666,16 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/auth/slack/callback", auth_callback),
         Route("/auth/dev", dev_login, methods=["GET", "POST"]),
         Route("/logout", logout, methods=["POST"]),
-        Route("/chats", chats),
-        Route("/chats/new", new_chat, methods=["POST"]),
-        Route("/recents", recents_page),
+        Route("/chats", moved_to_code),
+        Route("/recents", moved_to_code),
+        Route("/projects", moved_to_code),
+        Route("/projects/{rest:path}", moved_to_code),
+        Route("/artifacts", moved_to_code),
+        Route("/artifacts/{rest:path}", moved_to_code),
         Route("/profile", profile_page),
         Route("/profile", profile_save, methods=["POST"]),
         Route("/profile/theme", theme_save, methods=["POST"]),
         Route("/c/{cid:int}", conversation_page),
-        Route("/c/{cid:int}/messages", send_message, methods=["POST"]),
-        Route("/c/{cid:int}/m/{mid:int}", message_partial),
-        Route("/c/{cid:int}/events", conversation_events),
-        Route("/c/{cid:int}/model", set_model, methods=["POST"]),
-        Route("/c/{cid:int}/delete", delete_chat, methods=["POST"]),
         Route("/s/{token:str}", link_gone),
         Route("/s/{token:str}/x/{mid:int}/{n:int}", link_gone),
         Route("/files/{aid:int}", attachment_file),

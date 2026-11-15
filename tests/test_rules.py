@@ -831,8 +831,7 @@ class Rule11EverythingIsAudited(CodeStudentTest):
 
     def test_a_setting_change_is_logged_with_before_and_after(self):
         resp = self.coach.post("/settings/limits", {
-            "limit_pending_per_student": "1", "limit_approved_per_day": "25", "reminder_minutes": "120",
-            "show_pending_to_team": "1"}, headers=HTML)
+            "limit_pending_per_student": "1", "limit_approved_per_day": "25", "reminder_minutes": "120"}, headers=HTML)
         self.assertEqual(resp.status_code, 200)
         entries = self.h.services.db.all("SELECT * FROM audit_log WHERE action = 'setting_changed'")
         by_setting = {json.loads(e["details"])["setting"]: e for e in entries}

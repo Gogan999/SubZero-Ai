@@ -259,8 +259,7 @@ class ValidationTest(DbTestCase):
 
     def claude_form(self, **kw):
         base = {"model_default": "anthropic/old", "model_hard": "anthropic/old", "model_titles": "anthropic/t",
-                "effort_default": "medium", "effort_high": "high", "max_tokens_chat": "8000",
-                "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "effort_default": "medium", "max_tokens_chat": "8000"}
         base.update(kw)
         return saved_settings.validate("claude", base, settings=self.settings(), db=self.db)
 
@@ -452,9 +451,8 @@ class AdminRouteTest(unittest.TestCase):
         self.assertIn("Failed", page)
         self.assertIn("Raises a MENTOR ALERT", page)
         form = {"model_default": "anthropic/weak", "model_hard": self.h.settings.model_hard,
-                "model_titles": self.h.settings.model_titles, "effort_default": "medium", "effort_high": "high",
-                "max_tokens_chat": "8000", "long_chat_tokens": "150000",
-                "web_search_daily_limit": "50"}
+                "model_titles": self.h.settings.model_titles, "effort_default": "medium",
+                "max_tokens_chat": "8000"}
         resp = self.coach.post("/settings/claude", form, headers={"Accept": "text/html"})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("didn&#39;t pass the safety check", resp.text)

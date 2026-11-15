@@ -37,9 +37,6 @@
   <p class="tag {{ m.tag_kind }}">{{ m.tag }}</p>
   {% if m.note and m.status == 'rejected' %}<p class="tag-reason">Reason: {{ m.note }}</p>{% endif %}
   {% endif %}
-  {% if m.can_withdraw %}
-  <div class="actions"><button class="button small quiet" type="button" data-action="/m/{{ m.id }}/withdraw" data-confirm="Withdraw this message? Mentors won't review it.">Withdraw</button></div>
-  {% endif %}
   {% if m.can_review %}
   {% include "_review_controls.html" %}
   {% endif %}

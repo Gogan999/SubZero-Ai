@@ -87,13 +87,6 @@ class Actor:
             headers["X-CSRF-Token"] = self.csrf
         return self._send("POST", path, data=data or {}, headers=headers, **kwargs)
 
-    # Shortcuts for the chat API
-    def new_chat(self, text: str, subteam: str = "Programming"):
-        return self.post("/chats/new", {"text": text, "subteam": subteam})
-
-    def send(self, conversation_id: int, text: str):
-        return self.post(f"/c/{conversation_id}/messages", {"text": text})
-
     @property
     def user(self):
         return self.h.services.store.user_by_slack_id(self.slack_user_id)
@@ -130,13 +123,24 @@ class Harness:
 
     def login(self, slack_user_id: str) -> Actor:
         self.client.cookies.clear()
-        resp = self.client.post("/auth/dev", data={"user": slack_user_id})
-        assert resp.status_code == 200, resp.text
+        resp = self.client.post("/auth/dev", data={"user": slack_user_id}, follow_redirects=False)
+        assert resp.status_code == 303 and resp.headers["location"] == "/code", resp.text
+        # Sign-in lands on /code, which a student can't open until student Code access is on, so ask for /about
+        # (every signed-in person can read it) to get the page's CSRF token
+        about = self.client.get("/about")
+        assert about.status_code == 200, about.text
         cookie = self.client.cookies.get("subzero_session")
-        match = CSRF_RE.search(resp.text)
+        match = CSRF_RE.search(about.text)
         assert cookie and match, "sign-in didn't return a session"
         self.client.cookies.clear()
         return Actor(self, slack_user_id, cookie, match.group(1))
+
+    def browser(self, actor: "Actor") -> TestClient:
+        """The test client signed in as this person with a real cookie jar, so a one-time note set by one page
+        (the session's flash) reaches the next page, as it does in a browser."""
+        self.client.cookies.clear()
+        self.client.cookies.set("subzero_session", actor.cookie)
+        return self.client
 
     def idle(self) -> None:
         """Wait for background jobs (Claude replies, Slack posts) to finish."""

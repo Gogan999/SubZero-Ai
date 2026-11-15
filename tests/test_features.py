@@ -19,12 +19,10 @@ class FeatureTest(unittest.TestCase):
     def tearDown(self):
         self.h.close()
 
-    def start(self, text, actor=None, **data):
-        resp = (actor or self.ava).post("/chats/new", {"text": text, **data})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        body = resp.json()
-        self.h.idle()
-        return body["message_id"], int(body["url"].rsplit("/", 1)[1])
+    def start(self, text, actor=None):
+        """A person messages the bot in Slack; returns (message id, chat id)."""
+        sent = self.h.slack_dm(text, user=(actor or self.ava).slack_user_id)
+        return sent.message_id, sent.conversation_id
 
     def approve(self, message_id):
         resp = self.kim.post(f"/m/{message_id}/approve")
@@ -38,44 +36,48 @@ if __name__ == "__main__":
 
 class ProfileTest(FeatureTest):
     def test_appearance_is_saved_and_drawn_on_the_page(self):
-        page = self.ava.get("/chats").text
+        page = self.ava.get("/about").text
         self.assertIn('<html lang="en">', page)
         self.assertIn('content="light dark"', page)
         self.assertIn('action="/profile/theme"', page)
         self.assertEqual(self.ava.post("/profile/theme", {"theme": "dark"}).json(), {"ok": True})
-        page = self.ava.get("/chats").text
+        page = self.ava.get("/about").text
         self.assertIn('<html lang="en" data-theme="dark">', page)
         self.assertIn('<meta name="color-scheme" content="dark">', page)
         self.assertIn('value="dark" aria-pressed="true"', page)
-        self.assertNotIn("data-theme", self.ben.get("/chats").text.split("<head>")[0], "it's per person")
+        self.assertNotIn("data-theme", self.ben.get("/about").text.split("<head>")[0], "it's per person")
         self.assertEqual(self.ava.post("/profile/theme", {"theme": "neon"}).status_code, 400)
         resp = self.ava.post("/profile/theme", {"theme": "light", "next": "/profile"},
                              headers={"Accept": "text/html"}, follow_redirects=False)
         self.assertEqual(resp.headers["location"], "/profile")
         resp = self.ava.post("/profile/theme", {"theme": "light", "next": "//evil.example"},
                              headers={"Accept": "text/html"}, follow_redirects=False)
-        self.assertEqual(resp.headers["location"], "/chats")
+        self.assertEqual(resp.headers["location"], "/code")
         css = self.ava.get("/assets/code.css").text
         self.assertIn(':root[data-theme="dark"] .code pre', css)
 
-    def test_preferences(self):
+    def test_profile_is_appearance_only(self):
         page = self.ava.get("/profile").text
         self.assertIn("Approved today", page, "students see how many messages they have left")
         self.assertNotIn("Approved today", self.kim.get("/profile").text)
-        self.ava.post("/profile", {"default_subteam": "Programming", "theme": "system", "notify_dm": "1"})
-        mid, cid = self.start("How do I tune a flywheel?")
-        self.assertEqual(self.h.services.store.conversation(cid)["subteam"], "Programming")
+        for gone in ("default_subteam", "notify_dm", "subteam", "Slack messages when a mentor"):
+            self.assertNotIn(gone, page)
+        self.assertIn('name="theme"', page)
+        resp = self.ava.post("/profile", {"theme": "dark", "default_subteam": "Programming", "notify_dm": "0"},
+                             follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        user = self.ava.user
+        self.assertEqual(user["theme"], "dark")
+        # The old preferences can't be changed any more: the "DM me when a mentor decides" setting keeps its default
+        self.assertEqual((user["default_subteam"], user["notify_dm"]), (None, 1))
 
+    def test_the_slack_decision_dm_still_goes_out_for_a_message_with_no_thread(self):
+        mid, _ = self.start("How do I tune a flywheel?")
+        self.h.services.db.execute("DELETE FROM slack_dm_messages WHERE message_id = ?", (mid,))
         dms = len(self.h.slack.dms)
         self.approve(mid)
         self.assertEqual(len(self.h.slack.dms), dms + 1)
-        self.ava.post("/profile", {"default_subteam": "Not a subteam"})  # notify_dm unchecked
-        user = self.ava.user
-        self.assertEqual((user["default_subteam"], user["notify_dm"]), (None, 0))
-        mid, _ = self.start("And a shooter?")
-        dms = len(self.h.slack.dms)
-        self.approve(mid)
-        self.assertEqual(len(self.h.slack.dms), dms, "no Slack message once turned off")
+        self.assertNotIn("http", self.h.slack.dms[-1]["text"])
 
 
 class RepliesWithoutToolsTest(FeatureTest):
@@ -87,14 +89,6 @@ class RepliesWithoutToolsTest(FeatureTest):
         self.approve(mid)
         call = self.call()
         self.assertEqual((call["web_searches"], call["effort"], call["system_extra"]), (0, "medium", None))
-
-    def test_old_tool_fields_in_a_request_are_ignored(self):
-        mid, _ = self.start("What is a PID loop?", search="1", research="1", think="1", style="concise", explainer="1")
-        self.assertEqual(self.h.message(mid)["options"], None)
-        self.approve(mid)
-        call = self.call()
-        self.assertEqual((call["web_searches"], call["effort"], call["system_extra"]), (0, "medium", None))
-        self.assertNotIn("Asked for", self.kim.get("/queue").text)
 
     def test_stream_parser_reads_searches_and_sources(self):
         from subzero_ai.claude import ClaudeClient, parse_sse

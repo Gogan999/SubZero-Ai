@@ -294,7 +294,7 @@ class JudgeTest(Base):
         s = self.h.settings
         return {"ai_providers": list(s.ai_providers), "model_default": s.model_default, "model_hard": s.model_hard,
                 "model_titles": s.model_titles, "model_check_judge": judge, "effort_default": "medium",
-                "effort_high": "high", "max_tokens_chat": "8000", "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "max_tokens_chat": "8000"}
 
     def test_judge_must_be_claude(self):
         resp = self.post("/settings/claude", self.form("openai/gpt-x"))

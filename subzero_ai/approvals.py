@@ -369,7 +369,7 @@ class ApprovalService:
             except Exception:
                 log.exception("Couldn't post the decision for message %s in Slack", message_id)
         if outcome in (APPROVED, EDITED, REJECTED) and self.slack is not None and msg["author_notify_dm"]:
-            text = slack_cards.dm_text(outcome, title=conv["title"], link=link, mentor_name=msg["reviewer_name"],
+            text = slack_cards.dm_text(outcome, title=conv["title"], mentor_name=msg["reviewer_name"],
                                        reason=msg["review_note"])
             try:
                 await self.slack.dm(msg["author_slack_id"], text)

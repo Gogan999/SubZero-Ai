@@ -1,4 +1,4 @@
-// SubZero AI browser script: sending messages, mentor actions, and live updates.
+// SubZero AI browser script: mentor review actions, the read-only chat page, Code and Settings.
 (() => {
   "use strict";
 
@@ -36,17 +36,12 @@
     }
   }
 
-  function autosize(textarea) {
-    textarea.style.height = "auto";
-    textarea.style.height = Math.min(textarea.scrollHeight + 2, window.innerHeight * 0.4) + "px";
-  }
-
   // On phones the sidebar opens over the page from the menu button in the slim top bar.
   function setSidebar(open) {
     document.body.classList.toggle("sidebar-open", open);
     // The page behind the full-screen panel can't be seen, so take it out of Tab order and screen readers
     document.querySelector(".main-col")?.toggleAttribute("inert", open);
-    if (open) document.querySelector("#sidebar .side-new")?.focus();
+    if (open) document.querySelector("#sidebar nav a")?.focus();
     document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
       button.setAttribute("aria-expanded", String(open));
       const label = open ? button.dataset.closeLabel : button.dataset.openLabel;
@@ -173,51 +168,7 @@
       showError(form, "");
       form.hidden = true;
       afterAction(form);
-      return;
     }
-
-    if (form.matches("[data-new-chat]")) {
-      event.preventDefault();
-      const button = form.querySelector('[type="submit"]');
-      button.disabled = true;
-      const result = await post("/chats/new", new FormData(form));
-      if (!result.ok) {
-        button.disabled = false;
-        return showError(form, result.error);
-      }
-      window.location.href = result.url;
-      return;
-    }
-
-    if (form.matches("[data-composer]")) {
-      event.preventDefault();
-      const textarea = form.querySelector("textarea");
-      const button = form.querySelector('[type="submit"]');
-      if (!textarea.value.trim()) return;
-      button.disabled = true;
-      const result = await post(form.dataset.url, new FormData(form));
-      button.disabled = false;
-      if (!result.ok) return showError(form, result.error);
-      showError(form, "");
-      textarea.value = "";
-      autosize(textarea);
-      if (result.message_id) refreshMessage(result.message_id);
-    }
-  });
-
-  // Enter sends, Shift+Enter adds a line (on devices with a keyboard and mouse).
-  document.addEventListener("keydown", (event) => {
-    const textarea = event.target;
-    if (!(textarea instanceof HTMLTextAreaElement)) return;
-    const form = textarea.closest("[data-composer], [data-new-chat]");
-    if (!form || event.key !== "Enter" || event.shiftKey || event.isComposing) return;
-    if (!window.matchMedia("(pointer: fine)").matches) return;
-    event.preventDefault();
-    form.requestSubmit();
-  });
-
-  document.addEventListener("input", (event) => {
-    if (event.target.matches?.(".composer textarea")) autosize(event.target);
   });
 
   // Code sessions: redraw the steps every few seconds while Claude works, and stop once it waits or finishes
@@ -236,11 +187,6 @@
   }
   pollCode();
 
-  // Filters and the model picker apply as soon as they change.
-  document.addEventListener("change", (event) => {
-    if (event.target.matches?.("[data-autosubmit]")) event.target.form?.requestSubmit();
-  });
-
   // A model dropdown's "Other (type a model id)" choice shows the box for typing an id.
   document.addEventListener("change", (event) => {
     const pick = event.target.matches?.("[data-model-pick]") ? event.target : null;
@@ -255,131 +201,39 @@
       refreshQueue();
       return;
     }
-    const message = element.closest("[data-message]");
-    if (message) refreshMessage(message.dataset.message);
+    if (chatPage) refreshChat();
   }
 
-  // ------------------------------------------------------- live conversation
-  const threadCol = document.querySelector("[data-conversation]");
+  // ------------------------------------------------------- read-only chat
+  // The mentor's chat page: the whole chat, with review buttons on a waiting message. It looks for changes every few
+  // seconds, and at once when the Review queue changes. It leaves the page alone while a mentor is typing an edit.
+  const chatPage = document.querySelector("[data-readonly-chat]");
   const thread = document.querySelector("[data-thread]");
-  const conversationId = threadCol?.dataset.conversation;
-  const buffers = new Map(); // reply id -> [{seq, text}] that arrived before the reply was on the page
+  let chatHtml = null;
 
-  // A chat's messages scroll inside their own box (the composer stays put); other pages scroll the window.
-  const scroller = document.querySelector("[data-scroller]");
-
-  function nearBottom() {
-    if (scroller) return scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 240;
-    return window.innerHeight + window.scrollY >= document.body.scrollHeight - 240;
-  }
-
-  function toBottom() {
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    else window.scrollTo({ top: document.body.scrollHeight });
-  }
-
-  function scrollDown(wasNear) {
-    if (wasNear) toBottom();
-  }
-
-  function appendChunk(body, seq, text) {
-    const have = Number(body.dataset.seq || 0);
-    if (seq < have) return true; // already shown
-    if (seq > have) return false; // missed something; caller refetches
-    body.append(document.createTextNode(text));
-    body.dataset.seq = String(have + 1);
-    return true;
-  }
-
-  function flushBuffer(id) {
-    const node = document.getElementById("m" + id);
-    const body = node?.querySelector("[data-stream]");
-    const chunks = buffers.get(String(id));
-    if (!body || !chunks) return;
-    buffers.delete(String(id));
-    chunks.sort((a, b) => a.seq - b.seq).forEach((chunk) => appendChunk(body, chunk.seq, chunk.text));
-  }
-
-  async function refreshMessage(id) {
-    if (!thread || !conversationId) return;
-    const wasNear = nearBottom();
+  async function refreshChat() {
+    if (!chatPage || !thread) return;
+    if (thread.querySelector(".inline-form:not([hidden])")) return; // don't wipe a reason or edit someone is typing
     let res;
     try {
-      res = await fetch(`/c/${conversationId}/m/${id}`, { credentials: "same-origin" });
+      res = await fetch(`/c/${chatPage.dataset.readonlyChat}?thread=1`, { credentials: "same-origin" });
     } catch {
-      return;
-    }
-    const existing = document.getElementById("m" + id);
-    if (res.status === 204) {
-      existing?.remove();
-      updateComposerLock();
-      return;
+      return; // try again on the next round
     }
     if (!res.ok) return;
-    const template = document.createElement("template");
-    template.innerHTML = (await res.text()).trim();
-    const node = template.content.firstElementChild;
-    if (!node) return;
-    const fresh = document.getElementById("m" + id);
-    if (fresh) fresh.replaceWith(node);
-    else thread.appendChild(node);
-    flushBuffer(id);
-    updateComposerLock();
-    scrollDown(wasNear);
+    const html = (await res.text()).trim();
+    if (chatHtml === null) chatHtml = thread.innerHTML.trim();
+    if (html === chatHtml) return;
+    chatHtml = html;
+    thread.innerHTML = html;
   }
 
-  // One message at a time: a student waits for review, and everyone waits for Claude to finish replying.
-  function updateComposerLock() {
-    const composer = document.querySelector("[data-composer]");
-    if (!composer || !thread) return;
-    const textarea = composer.querySelector("textarea");
-    const button = composer.querySelector('[type="submit"]');
-    const waiting = composer.hasAttribute("data-needs-review")
-      && !!thread.querySelector('.msg.person[data-status="pending"]');
-    const replying = !!thread.querySelector('.msg.claude[data-status="streaming"]');
-    textarea.disabled = waiting; // drafting is fine while Claude replies
-    button.disabled = waiting || replying;
-    textarea.placeholder = waiting ? "Waiting for a mentor to review your last message"
-      : replying ? "Claude is replying…" : "Ask a follow-up";
-  }
-
-  if (thread && conversationId) {
-    const events = new EventSource(`/c/${conversationId}/events`);
-    events.addEventListener("changed", (e) => refreshMessage(JSON.parse(e.data).id));
-    events.addEventListener("done", (e) => refreshMessage(JSON.parse(e.data).id));
-    events.addEventListener("delta", (e) => {
-      const data = JSON.parse(e.data);
-      const body = document.getElementById("m" + data.id)?.querySelector("[data-stream]");
-      if (!body) {
-        const list = buffers.get(String(data.id)) || [];
-        list.push({ seq: data.seq, text: data.text });
-        buffers.set(String(data.id), list);
-        return;
-      }
-      const wasNear = nearBottom();
-      if (!appendChunk(body, data.seq, data.text)) refreshMessage(data.id);
-      scrollDown(wasNear);
-    });
-    events.addEventListener("searching", (e) => {
-      const data = JSON.parse(e.data);
-      const typing = document.getElementById("m" + data.id)?.querySelector(".typing");
-      if (typing) typing.textContent = `Searching the web for “${data.query}”…`;
-    });
-    events.addEventListener("title", (e) => {
-      const title = JSON.parse(e.data).title;
-      const heading = document.querySelector("[data-title]");
-      if (heading) heading.textContent = title;
-    });
-    events.addEventListener("visibility", () => window.location.reload());
-    // Leaving already (say, an admin's Delete chat form): let that page load instead of jumping to New chat
-    let leaving = false;
-    window.addEventListener("beforeunload", () => { leaving = true; });
-    events.addEventListener("gone", () => {
-      events.close();
-      if (!leaving) window.location.href = "/chats";
-    });
-    updateComposerLock();
-    toBottom();
+  if (chatPage && thread) {
+    const events = new EventSource("/queue/events");
+    events.addEventListener("queue", refreshChat);
+    setInterval(() => {
+      if (!document.hidden) refreshChat();
+    }, 4000);
   }
 
   // ------------------------------------------------------------ live queue

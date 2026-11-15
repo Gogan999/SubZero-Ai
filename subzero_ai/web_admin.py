@@ -55,12 +55,6 @@ log = logging.getLogger("subzero.admin")
 CHANNEL_RE = server_settings.CHANNEL_RE
 
 
-def apply_live(s: Services) -> None:
-    """Hand changed settings to the parts of the app that keep their own copy."""
-    s.store.show_pending_to_team = s.settings.show_pending_to_team
-    s.store.show_rejected_to_team = s.settings.show_rejected_to_team
-
-
 def flash(request: Request, text: str) -> None:
     request.session["flash"] = text
 
@@ -342,7 +336,6 @@ async def save_section(request: Request, viewer: Viewer) -> Response:
                       flash="Some settings need fixing. They're marked below.",
                       **settings_context(s, errors, submitted))
     changed = saved_settings.save(s.db, s.settings, values, viewer.id)
-    apply_live(s)
     if "ai_providers" in changed:
         use_new_bridge(s)
         refresh_model_names(s)

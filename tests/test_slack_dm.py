@@ -82,8 +82,8 @@ class DirectMessageFlowTest(DMTestBase):
         notes = self.thread_posts(ts)
         self.assertEqual(len(notes), 1)
         self.assertIn("A mentor will check this before the AI answers", notes[0]["text"])
-        self.assertIn("also on the website", notes[0]["text"])
-        self.assertIn("/c/", notes[0]["text"])
+        self.assertNotIn("website", notes[0]["text"].lower())
+        self.assertNotIn("http", notes[0]["text"])
         self.assertNotIn("SubZero Robotics", notes[0]["text"])
 
         self.tap("approve", mid)
@@ -119,7 +119,7 @@ class DirectMessageFlowTest(DMTestBase):
         self.assertEqual(self.h.message(second)["conversation_id"], self.h.message(first)["conversation_id"])
         self.assertEqual(self.h.message(second)["status"], "pending")
         notes = [p["text"] for p in self.thread_posts(ts)]
-        self.assertEqual(sum("also on the website" in n for n in notes), 1, "the website line comes only once")
+        self.assertFalse([n for n in notes if "website" in n.lower() or "http" in n], "no website link for students")
         self.tap("approve", second)
         self.assertEqual(self.h.reply_to(second)["status"], "complete")
         self.assertEqual(sum(p["text"] == "Thinking…" for p in self.thread_posts(ts)), 2)
@@ -170,13 +170,16 @@ class DirectMessageFlowTest(DMTestBase):
         self.assertTrue(any("edited your message" in p["text"] for p in self.thread_posts(ts)))
         self.assertEqual(self.h.reply_to(mid)["status"], "complete")
 
-    def test_website_message_still_gets_the_usual_dm(self):
-        ava = self.h.login("DEV-student-ava")
-        mid = ava.new_chat("A website question").json()["message_id"]
-        self.h.idle()
+    def test_a_message_with_no_slack_thread_still_gets_the_usual_dm_without_a_website_link(self):
+        # An old waiting message from before the website chat was removed has no thread to answer in
+        ts = self.send("A question", user="DEV-student-ava")
+        mid = self.message_for(ts)
+        self.h.services.db.execute("DELETE FROM slack_dm_messages WHERE message_id = ?", (mid,))
         self.tap("approve", mid)
         self.assertEqual(self.slack.dms[-1]["user"], "DEV-student-ava")
-        self.assertFalse([p for p in self.slack.posts if p["channel"] == DM])
+        self.assertIn("approved your message", self.slack.dms[-1]["text"])
+        self.assertNotIn("http", self.slack.dms[-1]["text"])
+        self.assertIn("thread with the bot", self.slack.dms[-1]["text"])
 
     def test_mentor_alert_hides_chat_and_alert_text_has_no_marker(self):
         ts = self.send("ALERT-TEST I feel awful")
@@ -201,7 +204,7 @@ class DirectMessageFlowTest(DMTestBase):
         self.assertFalse(any("A mentor will check" in p["text"] for p in self.thread_posts(ts)))
         self.assertEqual(self.thread_posts(ts)[0]["text"], "Thinking…")
 
-    def test_failed_reply_says_so_and_links_to_the_website(self):
+    def test_failed_reply_says_so_and_tells_the_student_to_send_it_again_here(self):
         ts = self.send("ERROR-TEST please")
         mid = self.message_for(ts)
         self.tap("approve", mid)
@@ -209,7 +212,9 @@ class DirectMessageFlowTest(DMTestBase):
         placeholder = self.thread_posts(ts)[1]["ts"]
         final = [u for u in self.slack.updates if u["ts"] == placeholder][-1]["text"]
         self.assertIn("couldn't finish that reply", final)
-        self.assertIn("http://localhost:8787/c/", final)
+        self.assertIn("Send your message again here.", final)
+        self.assertNotIn("http", final)
+        self.assertNotIn("website", final.lower())
 
     def test_a_reply_with_an_explainer_fence_posts_as_code_without_a_website_link(self):
         page = "<!doctype html><html><body><script>go()</script></body></html>"
@@ -245,9 +250,8 @@ class DirectMessageFlowTest(DMTestBase):
 
         self.h.services.runner.on_reply = boom
         self.h.services.runner.on_reply_done = boom
-        ava = self.h.login("DEV-student-ava")
-        mid = ava.new_chat("A website question").json()["message_id"]
-        self.h.idle()
+        ts = self.send("A question")
+        mid = self.message_for(ts)
         self.tap("approve", mid)
         self.assertEqual(self.h.reply_to(mid)["status"], "complete")
 
@@ -459,14 +463,13 @@ class RefusalsTest(DMTestBase):
         self.h.settings.slack_dms_enabled = False
         ts = self.send()
         self.assertEqual(self.thread_posts(ts)[0]["text"],
-                         "Messaging the bot is turned off. Use the website: http://localhost:8787/")
+                         "Messaging the bot is turned off right now. Ask a mentor.")
         self.assertIsNone(self.h.services.db.one("SELECT 1 FROM messages"))
 
     def test_files_are_refused(self):
         ts = self.send("Look at this", subtype="file_share", files=[{"id": "F1"}])
         self.assertEqual(self.thread_posts(ts)[0]["text"],
-                         "I can't take files in Slack yet. Attach them on the website instead: "
-                         "http://localhost:8787/")
+                         "I can't take files yet. Paste the part you need as text.")
         ts2 = self.send("", files=[{"id": "F2"}])
         self.assertIn("can't take files", self.thread_posts(ts2)[0]["text"])
         self.assertIsNone(self.h.services.db.one("SELECT 1 FROM messages"))

@@ -61,23 +61,6 @@ class ContextTest(unittest.TestCase):
                          [{"role": "user", "content": "first\n\nsecond\n\n[1 attached file not shown]"}])
 
 
-class SearchTest(unittest.TestCase):
-    def test_wildcards_are_searched_literally(self):
-        h = Harness()
-        try:
-            ava = h.login(STUDENT)
-            ava.new_chat("Tuning kP_2 on the arm")
-            ava.new_chat("Tuning kPx2 on the arm")
-            h.idle()
-            # Only the page's list, not the sidebar's Recents, which shows all of Ava's chats
-            listing = ava.get("/recents?q=kP_2&scope=mine").text.split('id="main"', 1)[1]
-            self.assertIn("Tuning kP_2", listing)
-            self.assertNotIn("Tuning kPx2", listing)
-            self.assertIn("Tuning kPx2", ava.get("/recents?q=kP&scope=mine").text.split('id="main"', 1)[1])
-        finally:
-            h.close()
-
-
 class MigrationTest(unittest.TestCase):
     def test_a_version_1_database_upgrades_in_place(self):
         tmp = Path(tempfile.mkdtemp(prefix="subzero-mig-"))
@@ -106,13 +89,6 @@ class Milestone3FlowTest(unittest.TestCase):
     def tearDown(self):
         self.h.close()
 
-    def send_with(self, actor, data, files=None, cid=None):
-        url = f"/c/{cid}/messages" if cid else "/chats/new"
-        payload = {"text": "Can you review this?", "subteam": "Programming", **data}
-        resp = actor.post(url, payload, files=files or [])
-        self.h.idle()
-        return resp
-
     def last_stream(self):
         """The latest reply request (title requests are skipped)."""
         return [c for c in self.h.claude.calls if c.get("kind") != "complete"][-1]
@@ -124,80 +100,53 @@ class Milestone3FlowTest(unittest.TestCase):
 
     # ----------------------------------------------------------- replies
     def test_everyday_questions_stay_at_default_effort(self):
-        resp = self.send_with(self.ava, {"text": "What is a PID loop?"})
-        self.approve(resp.json()["message_id"])
+        sent = self.h.slack_dm("What is a PID loop?", user=STUDENT)
+        self.approve(sent.message_id)
         call = self.last_stream()
         self.assertEqual((call["max_tokens"], call["effort"], call["system_extra"]), (8000, "medium", None))
 
     # ------------------------------------------------- old attachments and projects
     def test_a_chat_with_old_attachment_and_project_rows_still_gets_a_reply(self):
-        resp = self.send_with(self.ava, {"text": "Review my arm code"})
-        mid = resp.json()["message_id"]
-        cid = int(resp.json()["url"].rsplit("/", 1)[1])
+        sent = self.h.slack_dm("Review my arm code", user=STUDENT)
+        mid, cid = sent.message_id, sent.conversation_id
         self.approve(mid)
         # Rows from 0.10: a file on the first message, and the chat inside a project (with a missing file)
         self.h.add_old_attachment(mid)
         self.h.add_old_attachment(mid, "shot.png", png_bytes(), "image")
         pid = self.h.add_old_project(cid)
-        follow = self.ava.post(f"/c/{cid}/messages", {"text": "Now the intake"})
-        self.assertEqual(follow.status_code, 200, follow.text)
-        self.h.idle()
-        self.approve(follow.json()["message_id"])
+        follow = self.h.slack_dm("Now the intake", user=STUDENT, thread_ts=sent.thread_ts).message_id
+        self.approve(follow)
         call = self.last_stream()
-        self.assertEqual(self.h.reply_to(follow.json()["message_id"])["status"], "complete")
+        self.assertEqual(self.h.reply_to(follow)["status"], "complete")
         first = call["messages"][0]["content"]
         self.assertEqual(first, "Review my arm code\n\n[2 attached files not shown]")
         self.assertNotIn("metric units", str(call), "a project's instructions are not sent any more")
         self.assertIsNone(call["system_extra"])
         self.assertEqual(self.h.services.store.conversation(cid)["project_id"], pid, "the old row is left alone")
-        self.assertEqual(self.ava.get(f"/c/{cid}").status_code, 200)
+        self.assertEqual(self.kim.get(f"/c/{cid}").status_code, 200)
         self.assertEqual(self.kim.get("/queue").status_code, 200)
 
-    def test_old_files_open_only_for_people_who_can_see_the_message(self):
-        resp = self.send_with(self.ava, {"text": "Review this"})
-        mid = resp.json()["message_id"]
+    def test_old_files_open_only_for_mentors_and_admins(self):
+        mid = self.h.slack_dm("Review this", user=STUDENT).message_id
         aid = self.h.add_old_attachment(mid)
-        self.assertEqual(self.ben.get(f"/files/{aid}").status_code, 404)  # still waiting for review
-        mine = self.ava.get(f"/files/{aid}")
+        for who in (self.ava, self.ben):  # students have no chat pages, so no files either, even their own
+            self.assertEqual(who.get(f"/files/{aid}").status_code, 404, who.slack_user_id)
+        mine = self.kim.get(f"/files/{aid}")
         self.assertEqual(mine.status_code, 200)
         self.assertEqual(mine.headers["content-type"], "text/plain; charset=utf-8")
         self.assertIn("sandbox", mine.headers["content-security-policy"])
         self.assertEqual(mine.headers["x-content-type-options"], "nosniff")
-        self.assertEqual(self.kim.get(f"/files/{aid}").status_code, 200)
         self.approve(mid)
-        self.assertEqual(self.ben.get(f"/files/{aid}").status_code, 200)
-        self.assertIn("attachment", self.ben.get(f"/files/{aid}?download=1").headers["content-disposition"])
-        self.assertEqual(self.ben.get("/files/99999").status_code, 404)
+        self.assertEqual(self.ben.get(f"/files/{aid}").status_code, 404)
+        self.assertIn("attachment", self.kim.get(f"/files/{aid}?download=1").headers["content-disposition"])
+        self.assertEqual(self.kim.get("/files/99999").status_code, 404)
         cid = self.h.message(mid)["conversation_id"]
         self.assertIn(f'href="/files/{aid}"', self.kim.get(f"/c/{cid}").text)
 
-    def test_uploads_are_refused_with_a_plain_message(self):
-        files = [("files", ("Arm.java", b"class Arm {}", "text/plain"))]
-        resp = self.ava.post("/chats/new", {"text": "Review this"}, files=files)
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("Files can't be attached any more", resp.json()["error"])
-        self.assertEqual(self.h.services.db.one("SELECT COUNT(*) FROM messages")[0], 0)
-        resp = self.ava.post("/chats/new", {"text": "Question"})
-        cid = int(resp.json()["url"].rsplit("/", 1)[1])
-        resp = self.ava.post(f"/c/{cid}/messages", {"text": "Review this"}, files=files)
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(self.h.services.db.one("SELECT COUNT(*) FROM attachments")[0], 0)
-
     def test_oversized_requests_are_refused_early(self):
-        resp = self.ava.post("/chats/new", {"text": "hi"}, headers={"Content-Length": str(200 * 1024 * 1024)})
+        resp = self.ava.post("/profile", {"theme": "dark"}, headers={"Content-Length": str(200 * 1024 * 1024)})
         self.assertEqual(resp.status_code, 413)
 
-    # ------------------------------------------------------------ long chats
-    def test_long_chats_suggest_a_fresh_start(self):
-        resp = self.send_with(self.ava, {"text": "Question"})
-        mid = resp.json()["message_id"]
-        cid = int(resp.json()["url"].rsplit("/", 1)[1])
-        self.approve(mid)
-        self.assertNotIn("This chat has gotten long", self.ava.get(f"/c/{cid}").text)
-        self.h.services.db.execute("UPDATE messages SET input_tokens = 2000, cache_read_tokens = 149000 "
-                                   "WHERE role = 'assistant'")
-        self.assertIn("This chat has gotten long", self.ava.get(f"/c/{cid}").text)
-        self.assertNotIn("This chat has gotten long", self.ben.get(f"/c/{cid}").text)
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,10 +44,7 @@ from .store import Store, Viewer
 log = logging.getLogger("subzero.web")
 HERE = Path(__file__).parent
 
-# How many of a person's own chats the sidebar lists before "All chats"
-RECENTS = 25
-
-SAFE_NEXT = re.compile(r"/(?:chats|recents|code(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:code(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -180,14 +177,14 @@ def dev_login_allowed(request: Request) -> bool:
 
 
 def _finish_login(request: Request, s: Services, user) -> Response:
-    target = request.session.pop("next", None) or "/chats"
+    target = request.session.pop("next", None) or "/code"
     request.session.clear()
     request.session["uid"] = user["id"]
     request.session["csrf"] = secrets.token_urlsafe(24)
     s.db.audit("signed_in", actor_id=user["id"], target_type="user", target_id=user["id"])
     # Only return to the app's own pages ("/\evil.example" would otherwise leave the site in some browsers).
     if not SAFE_NEXT.fullmatch(target):
-        target = "/chats"
+        target = "/code"
     return RedirectResponse(target, status_code=303)
 
 
@@ -249,7 +246,6 @@ def waited(iso: str) -> str:
 
 
 def render(request: Request, name: str, viewer: Viewer | None, status_code: int = 200, **context) -> HTMLResponse:
-    from .web import conversation_list  # late import: the chat pages live in web.py, which imports this module
     s = services(request)
     base = {
         "viewer": viewer,
@@ -262,9 +258,6 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         "setting_alert": viewer is not None and viewer.is_admin and any(
             row.get("alert") for row in _health_alerts(s)),
         "path": request.url.path,
-        # The sidebar's Recents: the viewer's own chats, looked up only when a page draws the sidebar
-        "recents": (lambda: conversation_list(s, viewer, "mine", "", limit=RECENTS + 1)) if viewer else list,
-        "recents_shown": RECENTS,
     }
     base.update(context)
     return templates.TemplateResponse(request, name, base, status_code=status_code)
@@ -276,7 +269,9 @@ def _health_alerts(s: Services) -> list[dict[str, str]]:
 
 
 def error_page(request: Request, viewer: Viewer | None, code: int, title: str, detail: str) -> HTMLResponse:
-    return render(request, "error.html", viewer, status_code=code, title=title, detail=detail)
+    # A one-time note (like "Chats have moved to Slack") waiting in the session shows here if no page took it
+    return render(request, "error.html", viewer, status_code=code, title=title, detail=detail,
+                  flash=request.session.pop("flash", None))
 
 
 # --------------------------------------------------------------------------- middleware

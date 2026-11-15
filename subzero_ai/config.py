@@ -91,18 +91,13 @@ class Settings:
     model_hard: str = "anthropic/claude-opus-5-5"  # mentors can switch a conversation to this for hard problems
     model_titles: str = "anthropic/claude-haiku-5-5"
     effort_default: str = "medium"
-    effort_high: str = "high"  # kept for old settings; replies use effort_default
     max_tokens_chat: int = 8000
-    long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
     ai_backend: str = "anthropic"  # anthropic, pi, or fake (FAKE_CLAUDE=1 also means fake)
     pi_node: str = ""  # path to Node.js for the pi backend; empty means the install's node\node.exe, else "node"
     pi_gateway_script: str = ""  # empty means pi_gateway/gateway.mjs next to the subzero_ai folder
     pi_request_timeout: int = 300  # seconds for a whole pi request
     pi_idle_timeout: int = 120  # longest quiet gap in a pi reply, in seconds
-    # Web search costs extra for each search, so the whole team shares a daily limit
-    web_search_enabled: bool = True
-    web_search_daily_limit: int = 50
 
     # Slack
     slack_bot_token: str = field(default="", repr=False)
@@ -120,8 +115,6 @@ class Settings:
     limit_pending_per_student: int = 3
     limit_approved_per_day: int = 25
     reminder_minutes: int = 120
-    show_pending_to_team: bool = False
-    show_rejected_to_team: bool = False
     # After a mentor approves a message in a chat, the student's next messages in that chat go straight to
     # Claude for this many minutes. Each one sent restarts the clock. 0 turns the window off.
     approval_window_minutes: int = 5
@@ -174,8 +167,6 @@ class Settings:
     code_student_daily_sessions: int = 3  # a student's requests (new sessions and follow-ups) in 24 hours
     code_student_max_turns: int = 40  # Claude replies per run in a student's session
     code_student_command_timeout: int = 600  # seconds a command in a student's sandbox may run
-
-    subteams: tuple[str, ...] = ("Programming", "Fab and design", "Business and outreach")
 
     # Data kept on the mini PC
     retention_days: int = 730  # delete chats with no activity for this long (two seasons); 0 keeps them forever

@@ -1,5 +1,6 @@
-"""The approval loop end to end, through the web app: the behavior in the plan's
-"Roles and approval workflow" section and the milestone 1 and 2 acceptance tests."""
+"""The approval loop end to end: students message the bot in Slack, mentors decide on the Slack card or on the
+website's Review page and read-only chat page. The behavior in the plan's "Roles and approval workflow" section and
+the milestone 1 and 2 acceptance tests."""
 
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from pathlib import Path
 from subzero_ai.claude import FakeClaude, StreamEvent
 
 from .backends import RecordingClaudeClient, RecordingPiClient, add_variants
-from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness, pass_model_check
+from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
 
 class FlowTest(unittest.TestCase):
@@ -23,17 +24,26 @@ class FlowTest(unittest.TestCase):
         self.ava = self.h.login(STUDENT)
         self.ben = self.h.login(STUDENT_2)
         self.kim = self.h.login(MENTOR)
+        self.threads: dict[int, object] = {}  # chat id -> the Slack message that started it
 
     def tearDown(self):
         self.h.close()
 
     # ---------------------------------------------------------------- helpers
     def start(self, text="Why does our arm drift down when the robot is disabled?", actor=None):
-        resp = (actor or self.ava).new_chat(text)
-        self.assertEqual(resp.status_code, 200, resp.text)
-        body = resp.json()
-        self.h.idle()
-        return body["message_id"], int(body["url"].rsplit("/", 1)[1])
+        """The person messages the bot in Slack, which starts a chat; returns (message id, chat id)."""
+        sent = self.h.slack_dm(text, user=(actor or self.ava).slack_user_id)
+        self.assertIsNotNone(sent.message_id, "the message was saved")
+        self.threads[sent.conversation_id] = sent
+        return sent.message_id, sent.conversation_id
+
+    def say(self, cid, text, actor=None):
+        """A follow-up in the chat's Slack thread. Returns what the app did (message_id is None if it refused)."""
+        first = self.threads[cid]
+        return self.h.slack_dm(text, user=(actor or self.ava).slack_user_id, thread_ts=first.thread_ts)
+
+    def thread_text(self, sent) -> str:
+        return "\n".join(p["text"] for p in self.h.slack_thread(sent))
 
     def card_for(self, message_id):
         for post in self.h.slack.posts:
@@ -58,24 +68,32 @@ class FlowTest(unittest.TestCase):
         buttons = [e["action_id"] for e in card["blocks"][-1]["elements"]]
         self.assertEqual(buttons, ["approve", "edit", "reject", "handle_private"])
         self.assertIn("Ava (student)", json.dumps(card["blocks"]))
-        self.assertIn(f"http://localhost:8787/c/{cid}", json.dumps(card["blocks"]))
-        # The student sees it marked as waiting, with a way to withdraw it
-        page = self.ava.get(f"/c/{cid}").text
+        # Mentors can open the whole chat on the website; the student's own DMs have no website link
+        self.assertIn(f"<http://localhost:8787/c/{cid}|Open the whole chat>", json.dumps(card["blocks"]))
+        self.assertNotIn("http", self.thread_text(self.threads[cid]))
+        # A mentor sees it marked as waiting, with the review buttons
+        page = self.kim.get(f"/c/{cid}").text
         self.assertIn("Waiting for a mentor", page)
-        self.assertIn(f"/m/{mid}/withdraw", page)
-        self.assertIn("Send for review", page)
+        self.assertIn(f"/m/{mid}/approve", page)
 
     def test_one_waiting_message_per_chat(self):
         mid, cid = self.start()
-        resp = self.ava.send(cid, "One more thing")
-        self.assertEqual(resp.status_code, 429)
-        self.assertIn("still waiting", resp.json()["error"])
+        sent = self.say(cid, "One more thing")
+        self.assertIsNone(sent.message_id)
+        self.assertIn("still waiting", self.thread_text(sent))
 
-    def test_pending_messages_are_hidden_from_other_students(self):
+    def test_students_never_get_chat_pages_or_chat_text(self):
         mid, cid = self.start("Something I want a mentor to see first")
-        self.assertEqual(self.ben.get(f"/c/{cid}").status_code, 404)
-        self.assertNotIn(f"/c/{cid}", self.ben.get("/recents").text)
-        self.assertEqual(self.ben.get(f"/c/{cid}/m/{mid}").status_code, 204)
+        self.approve(mid)
+        for who in (self.ava, self.ben):  # the owner too
+            for path in (f"/c/{cid}", f"/c/{cid}?thread=1", "/chats", "/recents", f"/c/{cid}/m/{mid}",
+                         f"/c/{cid}/events"):
+                resp = who.get(path, follow_redirects=False)
+                self.assertNotIn("Something I want a mentor", resp.text, f"{who.slack_user_id} {path}")
+                self.assertNotIn("FIRST Robotics", resp.text)
+        for who in (self.ava, self.ben):
+            resp = who.get(f"/c/{cid}", follow_redirects=False)
+            self.assertEqual((resp.status_code, resp.headers["location"]), (303, "/code"), who.slack_user_id)
         # Mentors see everything
         self.assertIn("Something I want a mentor to see first", self.kim.get(f"/c/{cid}").text)
 
@@ -92,12 +110,13 @@ class FlowTest(unittest.TestCase):
         self.assertIn(f'href="/c/{cid}#m{mid}"', page)
         self.assertIn(f'href="/c/{cid}"', page)
 
-    def test_empty_and_huge_messages_are_refused(self):
-        self.assertEqual(self.ava.new_chat("   ").status_code, 400)
-        self.assertEqual(self.ava.new_chat("x" * 20001).status_code, 400)
+    def test_huge_messages_are_refused(self):
+        sent = self.h.slack_dm("x" * 20001, user=STUDENT)
+        self.assertIsNone(sent.message_id)
+        self.assertIn("20,000 characters", self.thread_text(sent))
 
     # ---------------------------------------------------------------- approve
-    def test_approve_runs_claude_updates_card_and_dms_student(self):
+    def test_approve_runs_claude_updates_card_and_answers_in_the_students_thread(self):
         mid, cid = self.start("How do I tune the arm's feedforward?")
         resp = self.approve(mid)
         self.assertEqual(resp.status_code, 200, resp.text)
@@ -115,22 +134,26 @@ class FlowTest(unittest.TestCase):
         self.assertNotIn("Ava", json.dumps(call["messages"]))
         self.assertEqual(call["effort"], "medium")
         # The card now says who approved it, with no buttons left
-        update = self.h.slack.updates[-1]
+        update = [u for u in self.h.slack.updates if u["channel"] == "CAPPROVALS"][-1]
         text = json.dumps(update["blocks"])
         self.assertIn("Approved by <@DEV-mentor-kim>", text)
         self.assertFalse(any(b["type"] == "actions" for b in update["blocks"]))
-        # The student gets a DM with a link
-        dm = self.h.slack.dms[-1]
-        self.assertEqual(dm["user"], STUDENT)
-        self.assertIn("Mentor Kim approved your message", dm["text"])
-        self.assertIn(f"/c/{cid}", dm["text"])
+        # The student is not sent a separate DM: the answer arrives in their thread with the bot
+        self.assertEqual(self.h.slack.dms, [])
+        thread = self.h.slack_thread(self.threads[cid])
+        self.assertEqual(thread[1]["text"], "Thinking…")
+        final = [u for u in self.h.slack.updates if u["ts"] == thread[1]["ts"]][-1]["text"]
+        self.assertIn("You asked:", final)
+        self.assertNotIn("http", final)
         # The chat gets a title, and the reply renders as Markdown with a copy button
         conv = self.h.services.store.conversation(cid)
         self.assertTrue(conv["title"])
-        page = self.ava.get(f"/c/{cid}").text
+        page = self.kim.get(f"/c/{cid}").text
         self.assertIn("Approved by Mentor Kim", page)
         self.assertIn('class="code"', page)
         self.assertIn("data-copy", page)
+        self.assertNotIn("<form", page.split('id="main"', 1)[1].replace('<form class="inline-form"', ""),
+                         "a read-only page: the only forms are the review forms")
 
     def test_second_mentor_cannot_act_on_a_handled_message(self):
         mid, _ = self.start()
@@ -143,26 +166,10 @@ class FlowTest(unittest.TestCase):
         self.h.idle()
         self.assertEqual(len(self.h.claude.calls), 2, "one reply and one title, no second reply")
 
-    def test_whole_team_sees_approved_chats(self):
-        mid, cid = self.start("Which bearing should the intake use?")
-        self.approve(mid)
-        page = self.ben.get(f"/c/{cid}")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("Which bearing should the intake use?", page.text)
-        self.assertIn("You're reading Ava (student)'s chat", page.text)
-        self.assertNotIn("data-composer", page.text, "only the owner can add to a chat")
-        self.assertIn(f"/c/{cid}", self.ben.get("/recents").text)
-        # Other students can't add to it
-        resp = self.ben.send(cid, "Me too")
-        self.assertEqual(resp.status_code, 403)
-
     def test_follow_up_needs_its_own_approval_and_carries_context(self):
         mid, cid = self.start("First question")
         self.approve(mid)
-        resp = self.ava.send(cid, "Follow-up question")
-        self.assertEqual(resp.status_code, 200)
-        follow = resp.json()["message_id"]
-        self.h.idle()
+        follow = self.say(cid, "Follow-up question").message_id
         self.assertEqual(self.h.message(follow)["status"], "pending")
         card = self.card_for(follow)
         self.assertIn("Replying to Claude", json.dumps(card["blocks"]))
@@ -186,11 +193,12 @@ class FlowTest(unittest.TestCase):
         details = json.loads(audit["details"])
         self.assertEqual(details["before"], "pls write my whole auto for me")
         self.assertIn("two-piece", details["after"])
-        # The team sees the edited version; the student can still see what they sent
-        self.assertIn("Edited by Mentor Kim", self.ben.get(f"/c/{cid}").text)
-        self.assertNotIn("pls write my whole auto", self.ben.get(f"/c/{cid}").text)
-        self.assertIn("pls write my whole auto", self.ava.get(f"/c/{cid}").text)
-        self.assertIn("edited and approved", self.h.slack.dms[-1]["text"])
+        # Mentors see the edited version and, folded away, what the student sent; the student is told in their thread
+        page = self.kim.get(f"/c/{cid}").text
+        self.assertIn("Edited by Mentor Kim", page)
+        self.assertIn("Show what was originally sent", page)
+        self.assertIn("pls write my whole auto", page)
+        self.assertIn("A mentor edited your message before the AI saw it.", self.thread_text(self.threads[cid]))
 
     def test_edit_with_same_text_counts_as_approve(self):
         mid, _ = self.start("Same text")
@@ -213,39 +221,21 @@ class FlowTest(unittest.TestCase):
         msg = self.h.message(mid)
         self.assertEqual(msg["status"], "rejected")
         self.assertEqual(self.h.claude.calls, [])
-        self.assertIn("Reason: This tool is for team work", self.h.slack.dms[-1]["text"])
+        self.assertIn("A mentor didn't approve this: This tool is for team work", self.thread_text(self.threads[cid]))
+        self.assertEqual(self.h.slack.dms, [], "the reason goes in the student's own thread, not a DM")
         self.assertIn("Rejected by <@DEV-mentor-kim>", json.dumps(self.h.slack.updates[-1]["blocks"]))
-        page = self.ava.get(f"/c/{cid}").text
+        page = self.kim.get(f"/c/{cid}").text
         self.assertIn("Not approved by Mentor Kim", page)
         self.assertIn("This tool is for team work", page)
         # The student can send a revised message right away
-        self.assertEqual(self.ava.send(cid, "How do I document our robot's design for the award?").status_code, 200)
-        # Other students don't see rejected messages by default
-        self.assertEqual(self.ben.get(f"/c/{cid}").status_code, 404)
-
-    def test_rejected_messages_can_be_shown_to_the_team(self):
-        self.h.close()
-        self.h = Harness(show_rejected_to_team=True)
-        ava, ben, kim = self.h.login(STUDENT), self.h.login(STUDENT_2), self.h.login(MENTOR)
-        first = ava.new_chat("Good question").json()
-        self.h.idle()
-        kim.post(f"/m/{first['message_id']}/approve")
-        self.h.idle()
-        cid = int(first["url"].rsplit("/", 1)[1])
-        second = ava.send(cid, "Off-topic question").json()["message_id"]
-        self.h.idle()
-        kim.post(f"/m/{second}/reject", {"reason": "Keep it to robot work"})
-        self.h.idle()
-        page = ben.get(f"/c/{cid}").text
-        self.assertIn("Off-topic question", page)
-        self.assertIn("Keep it to robot work", page)
+        revised = self.say(cid, "How do I document our robot's design for the award?")
+        self.assertIsNotNone(revised.message_id)
 
     # ------------------------------------------------------- handle privately
     def test_handle_privately_hides_chat_and_sends_nothing_to_claude(self):
         first, cid = self.start("Question about the drivetrain")
         self.approve(first)
-        follow = self.ava.send(cid, "Something personal").json()["message_id"]
-        self.h.idle()
+        follow = self.say(cid, "Something personal").message_id
         dms_before = len(self.h.slack.dms)
         resp = self.kim.post(f"/m/{follow}/hold")
         self.assertEqual(resp.status_code, 200)
@@ -255,13 +245,11 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(len(self.h.slack.dms), dms_before, "Handle privately sends no DM")
         self.assertIsNone(self.h.reply_to(follow))
         self.assertIn("Held privately by <@DEV-mentor-kim>", json.dumps(self.h.slack.updates[-1]["blocks"]))
-        # The whole chat disappears for other students, even the earlier approved part
-        self.assertEqual(self.ben.get(f"/c/{cid}").status_code, 404)
-        self.assertNotIn(f"/c/{cid}", self.ben.get("/recents").text)
-        student_page = self.ava.get(f"/c/{cid}").text
-        self.assertIn("A mentor will follow up with you directly", student_page)
-        self.assertIn("Private: only you and mentors can see this chat", student_page)
-        self.assertIn("Handled privately by Mentor Kim", self.kim.get(f"/c/{cid}").text)
+        # Nobody but mentors can open the chat, and the student is never told the reason in a web page
+        self.assertEqual(self.ben.get(f"/c/{cid}", follow_redirects=False).status_code, 303)
+        kim_page = self.kim.get(f"/c/{cid}").text
+        self.assertIn("Handled privately by Mentor Kim", kim_page)
+        self.assertIn("Private: only Ava (student) and mentors can see this chat", kim_page)
 
     # -------------------------------------------------------------- withdraw
     def test_student_can_withdraw_own_pending_message(self):
@@ -286,19 +274,17 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.h.message(mid)["status"], "pending")
 
     def test_mentor_messages_go_straight_to_claude(self):
-        resp = self.kim.new_chat("Explain PID to a new programmer")
-        self.h.idle()
-        mid = resp.json()["message_id"]
+        mid, _ = self.start("Explain PID to a new programmer", actor=self.kim)
         self.assertEqual(self.h.message(mid)["status"], "auto")
         self.assertEqual(self.h.reply_to(mid)["status"], "complete")
-        self.assertEqual(self.h.slack.posts, [], "no approval card for a mentor's own message")
+        self.assertEqual([p for p in self.h.slack.posts if p["channel"] == "CAPPROVALS"], [],
+                         "no approval card for a mentor's own message")
         audit = self.h.services.db.one("SELECT details FROM audit_log WHERE action = 'message_sent'")
         self.assertEqual(json.loads(audit["details"])["status"], "auto")
 
     def test_mentors_can_be_required_to_get_approval(self):
         self.h.settings.mentors_need_approval = True
-        mid = self.kim.new_chat("A mentor question").json()["message_id"]
-        self.h.idle()
+        mid, _ = self.start("A mentor question", actor=self.kim)
         self.assertEqual(self.h.message(mid)["status"], "pending")
         resp = self.kim.post(f"/m/{mid}/approve")
         self.assertEqual(resp.status_code, 403)
@@ -327,19 +313,18 @@ class FlowTest(unittest.TestCase):
     # ---------------------------------------------------------------- limits
     def test_pending_limit_blocks_a_fourth_waiting_message(self):
         for i in range(3):
-            self.assertEqual(self.ava.new_chat(f"Question {i}").status_code, 200)
-        resp = self.ava.new_chat("Question 4")
-        self.assertEqual(resp.status_code, 429)
-        self.assertIn("3 messages waiting", resp.json()["error"])
-        self.h.idle()
+            self.start(f"Question {i}")
+        sent = self.h.slack_dm("Question 4", user=STUDENT)
+        self.assertIsNone(sent.message_id)
+        self.assertIn("3 messages waiting", self.thread_text(sent))
 
     def test_daily_limit(self):
         self.h.settings.limit_approved_per_day = 1
         mid, cid = self.start()
         self.approve(mid)
-        resp = self.ava.send(cid, "Another")
-        self.assertEqual(resp.status_code, 429)
-        self.assertIn("today's limit of 1", resp.json()["error"])
+        sent = self.say(cid, "Another")
+        self.assertIsNone(sent.message_id)
+        self.assertIn("today's limit of 1", self.thread_text(sent))
 
     def test_cannot_send_while_claude_is_replying(self):
         mid, cid = self.start()
@@ -347,14 +332,12 @@ class FlowTest(unittest.TestCase):
         # Pretend the reply is still streaming
         reply = self.h.reply_to(mid)
         self.h.services.db.execute("UPDATE messages SET status = 'streaming' WHERE id = ?", (reply["id"],))
-        resp = self.ava.send(cid, "Next")
-        self.assertEqual(resp.status_code, 429)
-        self.assertIn("finish replying", resp.json()["error"])
+        sent = self.say(cid, "Next")
+        self.assertIsNone(sent.message_id)
+        self.assertIn("finish replying", self.thread_text(sent))
 
     # ------------------------------------------------------------- security
     def test_post_without_csrf_token_is_refused(self):
-        resp = self.ava.post("/chats/new", {"text": "hi"}, csrf=False)
-        self.assertEqual(resp.status_code, 403)
         mid, _ = self.start()
         resp = self.kim.post(f"/m/{mid}/approve", csrf=False)
         self.assertEqual(resp.status_code, 403)
@@ -362,14 +345,15 @@ class FlowTest(unittest.TestCase):
 
     def test_signed_out_requests(self):
         self.h.client.cookies.clear()
-        resp = self.h.client.get("/chats", follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(resp.headers["location"], "/login")
-        resp = self.h.client.post("/chats/new", data={"text": "hi"})
+        for path in ("/queue", "/code", "/c/1"):
+            resp = self.h.client.get(path, follow_redirects=False)
+            self.assertEqual((resp.status_code, resp.headers["location"]), (303, "/login"), path)
+        resp = self.h.client.post("/m/1/approve", data={})
         self.assertEqual(resp.status_code, 401)
 
     def test_message_text_is_escaped(self):
-        mid, cid = self.start('<script>alert("x")</script><img src=x onerror=alert(1)>')
+        # Slack sends < and > escaped, so this is what the student typed
+        mid, cid = self.start('&lt;script&gt;alert("x")&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;')
         page = self.kim.get(f"/c/{cid}").text
         self.assertNotIn("<script>alert", page)
         self.assertNotIn("<img src=x", page)
@@ -382,31 +366,28 @@ class FlowTest(unittest.TestCase):
         self.h.close()
         self.h = Harness(claude=HtmlClaude(delay=0))
         kim = self.h.login(MENTOR)
-        cid = int(kim.new_chat("hello").json()["url"].rsplit("/", 1)[1])
-        self.h.idle()
+        cid = self.h.slack_dm("hello", user=MENTOR).conversation_id
         page = kim.get(f"/c/{cid}").text
         self.assertNotIn("<script>alert(1)", page)
         self.assertNotIn('href="javascript:', page)
 
     def test_sidebar_links(self):
         mid, cid = self.start("My own question")
-        page = self.ava.get("/chats").text
-        self.assertIn('href="/recents"', page)
-        self.assertIn(f'href="/c/{cid}"', page, "the sidebar's Recents lists the student's own chats")
-        self.assertIn("1 waiting", page)
-        for path in ("/projects", "/artifacts"):  # removed in 0.11 (F3b turns these into redirects)
-            self.assertNotIn(f'href="{path}"', page)
-            self.assertEqual(self.ava.get(path).status_code, 404)
-        self.assertNotIn('href="/code"', page, "Code is for mentors")
-        self.assertIn('href="/code"', self.kim.get("/chats").text)
+        page = self.ava.get("/about").text
+        for gone in ('href="/chats"', 'href="/recents"', f'href="/c/{cid}"', "New chat", "Recents", "My own question"):
+            self.assertNotIn(gone, page, "students have no chat pages or lists")
         self.assertNotIn('href="/queue"', page, "students don't get mentor tools")
-        self.assertIn('href="/queue"', self.kim.get("/chats").text)
-        # Old chat-list links still work
-        resp = self.ava.get("/chats?scope=mine", follow_redirects=False)
-        self.assertEqual(resp.headers["location"], "/recents?scope=mine")
+        kim_page = self.kim.get("/about").text
+        self.assertIn('href="/queue"', kim_page)
+        self.assertIn('href="/code"', kim_page)
+        self.assertRegex(kim_page, r'Review\s*<span class="count"[^>]*>1</span>')
+        for gone in ('href="/chats"', 'href="/recents"', "New chat", "Recents"):
+            self.assertNotIn(gone, kim_page)
+        for path in ("/projects", "/artifacts"):
+            self.assertEqual(self.ava.get(path, follow_redirects=False).status_code, 303)
 
     def test_security_headers(self):
-        resp = self.ava.get("/chats")
+        resp = self.ava.get("/about")
         self.assertIn("script-src 'self'", resp.headers["content-security-policy"])
         self.assertEqual(resp.headers["x-frame-options"], "DENY")
         self.assertEqual(resp.headers["x-content-type-options"], "nosniff")
@@ -456,47 +437,6 @@ class FlowTest(unittest.TestCase):
         data = base64.b64encode(json.dumps({"uid": user_id, "csrf": "csrf-token"}).encode())
         return itsdangerous.TimestampSigner(str(self.h.settings.session_secret)).sign(data).decode()
 
-    # --------------------------------------------------------------- filters
-    def test_chat_list_filters(self):
-        mid, cid = self.start("Programming question")
-        self.approve(mid)
-        other = self.kim.new_chat("Fab question", subteam="Fab and design").json()
-        self.h.idle()
-        other_id = int(other["url"].rsplit("/", 1)[1])
-        page = self.ben.get("/recents?subteam=Fab+and+design").text
-        self.assertIn(f"/c/{other_id}", page)
-        self.assertNotIn(f'href="/c/{cid}"', page)
-        page = self.ben.get(f"/recents?owner={self.ava.user['id']}").text
-        self.assertIn(f'href="/c/{cid}"', page)
-        self.assertNotIn(f'href="/c/{other_id}"', page)
-        self.assertIn("Chats started by Ava (student)", page)
-        page = self.ben.get("/recents?q=Fab").text
-        self.assertIn(f"/c/{other_id}", page)
-        self.assertNotIn(f'href="/c/{cid}"', page)
-
-    def test_search_does_not_reveal_pending_text(self):
-        mid, cid = self.start("Approved part")
-        self.approve(mid)
-        self.ava.send(cid, "secretword in a pending follow-up")
-        self.h.idle()
-        self.assertNotIn(f'href="/c/{cid}"', self.ben.get("/recents?q=secretword").text)
-        self.assertIn(f'href="/c/{cid}"', self.ava.get("/recents?q=secretword").text)
-
-    # ----------------------------------------------------------------- model
-    def test_mentor_can_switch_a_chat_to_the_bigger_model(self):
-        self.h.settings.anthropic_api_key = "sk-ant-test-key-0123456789"  # the picker lists only keyed models
-        pass_model_check(self.h, "anthropic/claude-opus-5-5")
-        mid, cid = self.start()
-        self.assertEqual(self.ava.post(f"/c/{cid}/model", {"model": "claude-opus-5-5"}).status_code, 403)
-        self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": "gpt-9"}).status_code, 400)
-        resp = self.kim.post(f"/c/{cid}/model", {"model": "claude-opus-5-5"})
-        self.assertEqual(resp.status_code, 200)
-        self.approve(mid)
-        stream_calls = [c for c in self.h.claude.calls if c.get("kind") != "complete"]
-        self.assertEqual(stream_calls[-1]["model"], "anthropic/claude-opus-5-5")
-        self.assertIn("Opus 5.5", self.kim.get(f"/c/{cid}").text)
-
-
 class ReplyProblemsTest(unittest.TestCase):
     def tearDown(self):
         self.h.close()
@@ -516,15 +456,14 @@ class ReplyProblemsTest(unittest.TestCase):
 
         self.h = Harness(claude=FlakyClaude(delay=0))
         ava, kim = self.h.login(STUDENT), self.h.login(MENTOR)
-        mid = ava.new_chat("Help with swerve offsets").json()["message_id"]
-        self.h.idle()
+        mid = self.h.slack_dm("Help with swerve offsets", user=STUDENT).message_id
         kim.post(f"/m/{mid}/approve")
         self.h.idle()
         reply = self.h.reply_to(mid)
         self.assertEqual(reply["status"], "error")
         self.assertEqual(reply["error"], "Overloaded")
         cid = reply["conversation_id"]
-        page = ava.get(f"/c/{cid}").text
+        page = kim.get(f"/c/{cid}").text
         self.assertIn("Claude couldn't reply: Overloaded", page)
         self.assertIn(f"/m/{mid}/retry", page)
         other = self.h.login(STUDENT_2)
@@ -537,9 +476,8 @@ class ReplyProblemsTest(unittest.TestCase):
 
     def test_mentor_alert_hides_chat_and_alerts_mentors(self):
         self.h = Harness()
-        ava, ben, kim = self.h.login(STUDENT), self.h.login(STUDENT_2), self.h.login(MENTOR)
-        mid = ava.new_chat("ALERT-TEST I've been having a really hard time").json()["message_id"]
-        self.h.idle()
+        ben, kim = self.h.login(STUDENT_2), self.h.login(MENTOR)
+        mid = self.h.slack_dm("ALERT-TEST I've been having a really hard time", user=STUDENT).message_id
         kim.post(f"/m/{mid}/approve")
         self.h.idle()
         reply = self.h.reply_to(mid)
@@ -548,13 +486,15 @@ class ReplyProblemsTest(unittest.TestCase):
         self.assertIn("988", reply["content"])
         cid = reply["conversation_id"]
         self.assertEqual(self.h.services.store.conversation(cid)["visibility"], "private")
-        self.assertEqual(ben.get(f"/c/{cid}").status_code, 404)
+        self.assertEqual(ben.get(f"/c/{cid}", follow_redirects=False).status_code, 303)
         alert = [p for p in self.h.slack.posts if p["text"].startswith("Mentor alert")]
         self.assertEqual(len(alert), 1)
-        self.assertIn(f"/c/{cid}", json.dumps(alert[0]["blocks"]))
+        self.assertIn(f"<http://localhost:8787/c/{cid}|Open the whole chat>", json.dumps(alert[0]["blocks"]))
         self.assertIsNotNone(self.h.services.db.one("SELECT 1 FROM audit_log WHERE action = 'mentor_alert'"))
-        # The student still sees Claude's reply pointing them to trusted adults
-        self.assertIn("trusted adult", ava.get(f"/c/{cid}").text)
+        # The student still gets Claude's reply, pointing them to trusted adults, in their Slack thread
+        thread = [u["text"] for u in self.h.slack.updates if u["channel"].startswith("D0")]
+        self.assertTrue(any("trusted adult" in t for t in thread), thread)
+        self.assertIn("trusted adult", kim.get(f"/c/{cid}").text)
 
     def test_alert_marker_split_across_chunks(self):
         class SplitClaude(FakeClaude):
@@ -562,51 +502,34 @@ class ReplyProblemsTest(unittest.TestCase):
                 for piece in ("[MENT", "OR ALE", "RT]\nPlease talk", " to a mentor today."):
                     yield StreamEvent("text", text=piece)
         self.h = Harness(claude=SplitClaude(delay=0))
-        kim = self.h.login(MENTOR)
-        mid = kim.new_chat("hi").json()["message_id"]
-        self.h.idle()
+        mid = self.h.slack_dm("hi", user=MENTOR).message_id
         reply = self.h.reply_to(mid)
         self.assertEqual(reply["content"], "Please talk to a mentor today.")
         self.assertEqual(self.h.services.store.conversation(reply["conversation_id"])["visibility"], "private")
 
-    def test_works_without_slack(self):
-        self.h = Harness(use_slack=False)
-        ava, kim = self.h.login(STUDENT), self.h.login(MENTOR)
-        mid = ava.new_chat("No Slack yet").json()["message_id"]
-        self.h.idle()
-        self.assertIn("No Slack yet", kim.get("/queue").text)
-        self.assertEqual(kim.post(f"/m/{mid}/approve").status_code, 200)
-        self.h.idle()
-        self.assertEqual(self.h.reply_to(mid)["status"], "complete")
-
     def test_slack_failure_is_logged_and_queue_still_works(self):
         self.h = Harness()
         self.h.slack.fail_posts = True
-        ava, kim = self.h.login(STUDENT), self.h.login(MENTOR)
-        mid = ava.new_chat("Slack is down").json()["message_id"]
-        self.h.idle()
+        kim = self.h.login(MENTOR)
+        mid = self.h.slack_dm("Slack is down", user=STUDENT).message_id
         self.assertIsNotNone(self.h.services.db.one("SELECT 1 FROM audit_log WHERE action = 'slack_card_failed'"))
         self.assertIn(f'id="q{mid}"', kim.get("/queue").text)
 
     def test_reminder_posts_once_in_the_card_thread(self):
         self.h = Harness()
-        ava = self.h.login(STUDENT)
-        mid = ava.new_chat("Waiting a while").json()["message_id"]
-        self.h.idle()
+        mid = self.h.slack_dm("Waiting a while", user=STUDENT).message_id
         three_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat(timespec="seconds")
         self.h.services.db.execute("UPDATE messages SET created_at = ? WHERE id = ?", (three_hours_ago, mid))
         self.assertEqual(self.h.call(self.h.services.approvals.send_reminders), 1)
         self.assertEqual(self.h.call(self.h.services.approvals.send_reminders), 0)
         reminder = self.h.slack.posts[-1]
-        card = self.h.slack.posts[0]
+        card = next(p for p in self.h.slack.posts if p["channel"] == "CAPPROVALS")
         self.assertEqual(reminder["thread_ts"], card["ts"])
         self.assertIn("3 hours", reminder["text"])
 
     def test_restart_marks_unfinished_replies_as_failed(self):
         self.h = Harness()
-        kim = self.h.login(MENTOR)
-        mid = kim.new_chat("hello").json()["message_id"]
-        self.h.idle()
+        mid = self.h.slack_dm("hello", user=MENTOR).message_id
         reply = self.h.reply_to(mid)
         self.h.services.db.execute("UPDATE messages SET status = 'streaming' WHERE id = ?", (reply["id"],))
         # Restart the app on the same data folder
@@ -626,9 +549,7 @@ class SplitAlertTest(unittest.TestCase):
 
     def check(self, claude):
         self.h = Harness(claude=claude)
-        kim = self.h.login(MENTOR)
-        mid = kim.new_chat("ALERT-TEST I feel awful").json()["message_id"]
-        self.h.idle()
+        mid = self.h.slack_dm("ALERT-TEST I feel awful", user=MENTOR).message_id
         reply = self.h.reply_to(mid)
         self.assertNotIn("MENTOR ALERT", reply["content"])
         self.assertTrue(reply["content"].startswith("That sounds like a lot to carry."))

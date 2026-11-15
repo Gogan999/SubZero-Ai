@@ -226,11 +226,6 @@ class ReplyRunner:
         if status == COMPLETE and not conv["title"]:
             await self._make_title(conversation_id)
 
-    def searches_left(self) -> int:
-        if not self.settings.web_search_enabled:
-            return 0
-        return max(0, self.settings.web_search_daily_limit - self.store.web_searches_today())
-
     async def _raise_alert(self, conversation_id: int, user_message_id: int) -> None:
         """Hide the chat from the team before any of the reply is shown, then tell mentors."""
         if self.on_alert is None:

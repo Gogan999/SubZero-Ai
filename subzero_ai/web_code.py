@@ -148,7 +148,7 @@ async def code_page(request: Request, viewer: Viewer) -> Response:
     return render(request, "code.html", viewer, sessions=sessions, mentor=mentor, problem=problem,
                   awaiting=[session_view(s, r) for r in s.code.awaiting()] if mentor else [],
                   available=s.code.available, models=code_models(s), commands=s.code.command_programs(),
-                  error=request.session.pop("code_error", None))
+                  error=request.session.pop("code_error", None), flash=request.session.pop("flash", None))
 
 
 @page(require="login")

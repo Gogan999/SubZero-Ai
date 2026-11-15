@@ -4,7 +4,7 @@ Since version 0.7, admins can change every setting, API key and connected accoun
 This page lists them all. Since 0.8 the page is split into sections, picked from the menu on the left (a row of tabs
 on a phone): Overview (health, backups, Run checks), AI and keys (Claude settings, API keys, Claude subscription,
 Model safety check, AI engine), Mentor review (limits, approval window, system prompt), Accounts and people
-(connected accounts, subteams and admins), Slack, Site and server (site, data, connectors, Code) and Change history. The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env`
+(connected accounts and admins), Slack, Site and server (site, data, connectors, Code) and Change history. The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env`
 by hand.
 
 **Where a setting is saved.** "Database" settings win over config.env and apply to the next message. "config.env"
@@ -25,7 +25,7 @@ beats config.env, so the Settings page shows that field locked and says so.
 | AI providers | `AI_PROVIDERS` |
 | Default, hard-problem and title models | `MODEL_DEFAULT`, `MODEL_HARD`, `MODEL_TITLES` |
 | Safety check judge (must be a Claude model) | `MODEL_CHECK_JUDGE` |
-| Everyday effort, effort for explainers and files | `EFFORT_DEFAULT`, `EFFORT_HIGH` |
+| Everyday effort | `EFFORT_DEFAULT` |
 
 **Model dropdowns.** The default, hard-problem, title, screener and judge models are dropdowns, grouped by company.
 Each list shows the models that can be used right now: the company is turned on and has its key saved (or the Claude
@@ -40,15 +40,14 @@ The AI helper's model list is refreshed whenever AI providers or keys are saved 
 models appear without a restart. The refresh runs in the background, so reload the page a moment after saving if a
 new model is still missing.
 
-| Longest reply, longest explainer, fresh-chat suggestion | `MAX_TOKENS_CHAT`, `MAX_TOKENS_EXPLAINER`, `LONG_CHAT_TOKENS` |
-| Web search, daily search limit, Research for students | `WEB_SEARCH_ENABLED`, `WEB_SEARCH_DAILY_LIMIT`, `RESEARCH_FOR_STUDENTS` |
+| Longest reply | `MAX_TOKENS_CHAT` |
 
 ## Limits, approval window, data, code, people (database)
 
 | Setting | config.env key |
 | --- | --- |
 | Waiting messages per student, approved per day, reminder minutes | `LIMIT_PENDING_PER_STUDENT`, `LIMIT_APPROVED_PER_DAY`, `REMINDER_MINUTES` |
-| Mentors need approval, Slack DMs, show pending or rejected to the team | `MENTORS_NEED_APPROVAL`, `SLACK_DMS`, `SHOW_PENDING_TO_TEAM`, `SHOW_REJECTED_TO_TEAM` |
+| Mentors need approval, Slack DMs | `MENTORS_NEED_APPROVAL`, `SLACK_DMS` |
 | Approval window, screener on, screener model, students who always wait | `APPROVAL_WINDOW_MINUTES`, `SCREENER_ENABLED`, `MODEL_SCREENER`, `ALWAYS_REVIEW_SLACK_IDS` |
 | Retention, days of backups kept | `RETENTION_DAYS`, `BACKUP_KEEP_DAYS` |
 | Code commands and timeout | `CODE_COMMANDS`, `CODE_COMMAND_TIMEOUT` |
@@ -144,7 +143,7 @@ audit log (`code_student_requested`, `code_student_approved`, `code_student_decl
 | Code requests a student can make in 24 hours, new sessions and follow-ups (1 to 50) | `CODE_STUDENT_DAILY_SESSIONS` (default 3) |
 | Claude replies in one run, for students (5 to 200) | `CODE_STUDENT_MAX_TURNS` (default 40) |
 | Stop a student's command after this many seconds (30 to 3600) | `CODE_STUDENT_COMMAND_TIMEOUT` (default 600) |
-| Subteams, admins | `SUBTEAMS`, `ADMIN_SLACK_IDS` |
+| Admins | `ADMIN_SLACK_IDS` |
 
 ## AI engine (config.env)
 

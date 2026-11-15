@@ -1,17 +1,14 @@
 {% from "_icons.html" import icon %}
-{% set recent = recents() %}
 <aside class="sidebar" id="sidebar" aria-label="Sidebar">
   <div class="side-top">
-    <a class="brand" href="/chats">
+    <a class="brand" href="/code">
       <span class="brand-mark" aria-hidden="true">SZ</span>
       <span class="brand-name">{{ settings.app_name }}</span>
     </a>
   </div>
   <div class="side-scroll">
     <nav aria-label="Main">
-      <a class="side-new" href="/chats" {% if path == '/chats' %}aria-current="page"{% endif %}><span class="side-new-mark">{{ icon('plus') }}</span> New chat</a>
       <ul class="side-nav">
-        <li><a href="/recents" {% if path.startswith('/recents') %}aria-current="page"{% endif %}>{{ icon('chats') }} Chats</a></li>
         {% if viewer.is_mentor or settings.code_student_access %}
         <li><a href="/code" {% if path.startswith('/code') %}aria-current="page"{% endif %}>{{ icon('code') }} Code</a></li>
         {% endif %}
@@ -19,7 +16,7 @@
       {% if viewer.is_mentor %}
       <h2 class="side-label">Mentor tools</h2>
       <ul class="side-nav">
-        <li><a href="/queue" {% if path.startswith('/queue') %}aria-current="page"{% endif %}>{{ icon('review') }} Review
+        <li><a href="/queue" {% if path.startswith('/queue') or path.startswith('/c/') %}aria-current="page"{% endif %}>{{ icon('review') }} Review
           {% if pending_count %}<span class="count" aria-label="{{ pending_count }} waiting">{{ pending_count }}</span>{% endif %}</a></li>
         {% if viewer.is_admin %}
         <li><a href="/audit" {% if path.startswith('/audit') %}aria-current="page"{% endif %}>{{ icon('log') }} Audit log</a></li>
@@ -29,25 +26,6 @@
       </ul>
       {% endif %}
     </nav>
-    <h2 class="side-label" id="recents-label">Recents</h2>
-    <ol class="chat-list" aria-labelledby="recents-label">
-      {% for item in recent[:recents_shown] %}
-      <li>
-        <a href="/c/{{ item.id }}" {% if current_id == item.id %}aria-current="page"{% endif %}>
-          <span class="chat-title">{{ item.title }}</span>
-          {% if item.private or item.pending %}
-          <span class="chat-meta">
-            {% if item.private %}<span class="pill held">Private</span>{% endif %}
-            {% if item.pending %}<span class="pill pending">{{ item.pending }} waiting</span>{% endif %}
-          </span>
-          {% endif %}
-        </a>
-      </li>
-      {% else %}
-      <li class="empty">No chats yet. Start one with New chat.</li>
-      {% endfor %}
-    </ol>
-    <a class="side-more" href="/recents">All chats, including the team’s</a>
   </div>
   <details class="account" data-menu>
     <summary>

@@ -93,7 +93,7 @@ p { margin: 0 0 .75rem; }
 .topbar-inner { display: flex; align-items: center; gap: 1.25rem; height: var(--topbar); padding: 0 1rem; }
 .brand { display: flex; align-items: center; gap: .6rem; text-decoration: none; color: var(--ink); font-weight: 650; }
 /* The app initials set like a robot bumper number */
-.brand-mark, .greeting-mark {
+.brand-mark {
   background: var(--brand); color: var(--brand-ink);
   font-weight: 800; font-size: .95rem; letter-spacing: .04em;
   padding: .15rem .45rem; border-radius: 4px; font-variant-numeric: tabular-nums;
@@ -101,14 +101,10 @@ p { margin: 0 0 .75rem; }
 .count { background: var(--pending-bg); color: var(--pending); border-radius: 999px; padding: 0 .45rem; font-size: .8rem; font-weight: 700; }
 .count.alert { background: var(--rejected-bg); color: var(--rejected); }
 .role { font-size: .75rem; font-weight: 650; color: var(--brand); background: var(--frost); padding: .05rem .4rem; border-radius: 4px; }
-/* Marks a claude.ai feature that has a place in the UI but isn't built yet */
-.soon { font-size: .72rem; font-weight: 650; line-height: 1.5; padding: 0 .45rem; border-radius: 999px; white-space: nowrap; color: var(--ink-2); background: var(--muted-bg); border: 1px dashed var(--field-edge); }
 .icon { flex: none; }
 .icon-button { display: inline-grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: none; color: var(--ink); cursor: pointer; }
 .icon-button:hover { background: var(--frost); }
 
-.notice { background: var(--frost); border-bottom: 1px solid var(--rule); }
-.notice p { margin: 0 auto; padding: .5rem 1rem; font-size: .85rem; color: var(--ink-2); max-width: 1100px; }
 .devbar { margin: 0; padding: .4rem 1rem; background: var(--pending-bg); color: var(--pending); font-size: .85rem; text-align: center; }
 
 /* Buttons ------------------------------------------------------------------- */
@@ -140,24 +136,11 @@ button.link { background: none; border: 0; padding: 0; color: var(--brand); font
 .sidebar { position: sticky; top: 0; height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: var(--sheet); border-right: 1px solid var(--rule); }
 .side-top { display: flex; align-items: center; height: var(--topbar); padding: 0 1rem; flex: none; }
 .side-scroll { flex: 1; overflow-y: auto; padding: .25rem .5rem 1rem; }
-.side-new, .side-nav a { display: flex; align-items: center; gap: .65rem; padding: .4rem .6rem; border-radius: 8px; text-decoration: none; color: var(--ink); }
-.side-new { font-weight: 600; }
-.side-new-mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); flex: none; }
-.side-new:hover, .side-nav a:hover { background: var(--frost); color: var(--ink); }
-.side-new[aria-current="page"], .side-nav a[aria-current="page"] { background: var(--frost); font-weight: 600; }
 .side-nav { list-style: none; margin: .15rem 0 0; padding: 0; display: grid; gap: .1rem; font-size: .95rem; }
-/* 18px icons with 5px either side line up with the 28px New chat circle */
 .side-nav .icon { margin: 0 5px; color: var(--ink-2); }
-.side-nav .soon, .side-nav .count { margin-left: auto; }
 .side-label { font-size: .8rem; font-weight: 650; color: var(--ink-2); margin: 1.25rem .6rem .3rem; }
-.chat-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .05rem; }
-.chat-list a { display: grid; gap: .1rem; padding: .4rem .6rem; border-radius: 8px; text-decoration: none; color: var(--ink); font-size: .92rem; }
-.chat-list a:hover { background: var(--frost); }
-.chat-list a[aria-current="page"] { background: var(--frost); box-shadow: inset 3px 0 0 var(--brand); }
 .chat-title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-meta { font-size: .8rem; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
-.chat-list .empty { color: var(--ink-2); padding: .5rem .6rem; font-size: .88rem; }
-.side-more { display: block; padding: .5rem .6rem; font-size: .85rem; }
 
 /* Account button at the foot of the sidebar, opening a menu upward like claude.ai's */
 .account { position: relative; flex: none; border-top: 1px solid var(--rule); padding: .5rem; }
@@ -176,7 +159,6 @@ button.link { background: none; border: 0; padding: 0; color: var(--brand); font
 .menu-item { display: flex; align-items: center; gap: .6rem; width: 100%; padding: .45rem .6rem; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; font-size: .92rem; text-align: left; text-decoration: none; cursor: pointer; }
 a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var(--ink); }
 .menu-item[aria-disabled="true"] { color: var(--ink-2); cursor: default; }
-.menu-item .soon { margin-left: auto; }
 .menu-note { font-size: .8rem; color: var(--ink-2); margin: .25rem .6rem .35rem; }
 /* Composer tools: switches and the response style, as labelled checkboxes and radios inside the menu */
 /* Web pages Claude read for a reply */
@@ -193,27 +175,14 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .pill.unknown { background: var(--muted-bg); color: var(--ink-2); }
 .pill.plain { background: var(--frost); color: var(--ink); font-variant-numeric: tabular-nums; }
 
-.thread-col { width: 100%; max-width: 780px; margin: 0 auto; padding: 1.25rem 1.25rem 0; display: flex; flex-direction: column; flex: 1; }
 /* A chat fills the window exactly: the messages scroll inside .thread-scroll and the composer stays at the bottom,
    so the page itself never grows. The scroller spans the whole column (its scrollbar sits at the window's edge) and
    pads its content in to the same 780px reading width. */
-body.chat-page { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
-body.chat-page .shell { flex: 1; min-height: 0; }
-body.chat-page .main-col { min-height: 0; overflow: hidden; }
-body.chat-page .main-col > main { min-height: 0; }
-body.chat-page .thread-col { max-width: none; padding: 0; min-height: 0; }
-.thread-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column;
-  padding: 1.25rem max(1.25rem, calc((100% - 740px) / 2)) 1rem; }
-body.chat-page .composer, body.chat-page .read-only { width: 100%; max-width: 780px; margin: 0 auto; padding-left: 1.25rem; padding-right: 1.25rem; }
-body.chat-page .composer { position: static; background: none; padding-top: .5rem; }
-.notice-in-thread { display: none; }
 .thread-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: .5rem 1rem; padding-bottom: .75rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--rule); }
+.back { margin: 0 0 .75rem; font-size: .9rem; }
 .thread-title { min-width: 0; }
 .thread-head h1 { font-size: 1.35rem; margin-bottom: .2rem; overflow-wrap: anywhere; }
 .thread-meta { margin: 0; color: var(--ink-2); font-size: .9rem; }
-.thread-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-.model-form { display: flex; align-items: center; gap: .4rem; margin: 0; color: var(--ink-2); font-size: .9rem; }
-.model-form select { font: inherit; font-size: .88rem; padding: .25rem .4rem; border: 1px solid var(--field-edge); border-radius: 6px; background: var(--sheet); color: var(--ink); }
 .private-note { flex-basis: 100%; margin: 0; background: var(--held-bg); color: var(--held); padding: .3rem .6rem; border-radius: 6px; font-size: .9rem; }
 
 .page { width: 100%; max-width: 1100px; margin: 0 auto; padding: 1.75rem 1.25rem 3rem; }
@@ -221,18 +190,11 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .page-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .75rem 1rem; }
 .page-head h1 { margin: 0; }
 
-/* Chats page: search, Team/Mine, and the full list */
-.search { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.25rem; }
-.search-box { flex: 1 1 16rem; display: flex; align-items: center; gap: .5rem; padding: 0 .65rem; border: 1px solid var(--field-edge); border-radius: 8px; background: var(--sheet); color: var(--ink-2); }
 /* The ring goes around the whole box, icon included, instead of just the input */
-.search-box:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
-.search-box input { flex: 1; min-width: 0; padding: .5rem 0; border: 0; background: transparent; color: var(--ink); font: inherit; outline: none; }
-.search select { font: inherit; padding: .45rem .6rem; border: 1px solid var(--field-edge); border-radius: 8px; background: var(--sheet); color: var(--ink); }
 .tabs { display: flex; gap: .25rem; margin-top: 1rem; border-bottom: 1px solid var(--rule); }
 .tabs a { padding: .45rem .9rem; margin-bottom: -1px; border-bottom: 2px solid transparent; text-decoration: none; color: var(--ink-2); }
 .tabs a:hover { color: var(--ink); }
 .tabs a[aria-current="page"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--brand); }
-.filter-note { margin: .75rem 0 0; font-size: .88rem; color: var(--ink-2); }
 .chat-rows { list-style: none; margin: .25rem 0 0; padding: 0; }
 .chat-rows li { border-bottom: 1px solid var(--rule); }
 .chat-rows a { display: grid; gap: .15rem; padding: .75rem .5rem; border-radius: 6px; text-decoration: none; color: var(--ink); }
@@ -241,18 +203,9 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 
 .crumbs { margin: 0 0 .5rem; font-size: .9rem; }
 
-.card-text { margin: 0; color: var(--ink-2); font-size: .9rem; overflow-wrap: anywhere; }
 
 
-.prose-list { padding-left: 1.4rem; margin: 0 0 1rem; }
-.prose-list li + li { margin-top: .3rem; }
 
-/* Start a chat ---------------------------------------------------------------- */
-.start { flex: 1; display: flex; align-items: center; justify-content: center; padding: 2rem 1.25rem 3rem; }
-.start-panel { width: 100%; max-width: 780px; }
-.greeting { display: flex; align-items: center; justify-content: center; gap: .75rem; font-size: 2rem; letter-spacing: -0.02em; text-align: center; }
-.greeting-mark { font-size: 1rem; }
-.start-panel .lede { margin: 0 auto; text-align: center; }
 
 /* Messages ---------------------------------------------------------------------- */
 /* minmax(0, 1fr) keeps a long code line from widening the page on phones; it scrolls inside its block instead */
@@ -319,27 +272,8 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .code pre { margin: 0; padding: .8rem .9rem; overflow-x: auto; font-family: var(--mono); font-size: .86rem; line-height: 1.55; background: transparent; }
 .code pre code { background: none; padding: 0; font-size: inherit; }
 
-/* Composer ---------------------------------------------------------------------- */
-/* One rounded box like claude.ai's: the message, then a bar with tools on the left and model + send on the right */
-.composer { position: sticky; bottom: 0; background: linear-gradient(to bottom, transparent, var(--paper) 1.25rem); padding: 1.25rem 0 .75rem; }
-.composer.big { position: static; background: none; padding: 1.5rem 0 0; }
-.composer-box { display: grid; gap: .45rem; padding: .6rem .6rem .55rem; border: 1px solid var(--field-edge); border-radius: 14px; background: var(--sheet); }
 /* The focus ring goes around the whole box; the textarea inside has no border of its own */
-.composer-box:has(textarea:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
-.composer-box:has(textarea:disabled) { background: var(--muted-bg); }
-.composer textarea {
-  width: 100%; min-height: 2.6rem; max-height: 40vh; padding: .35rem .4rem; resize: none;
-  font: inherit; line-height: 1.5; border: 0; background: transparent; color: var(--ink); outline: none;
-}
-.composer.big textarea { min-height: 6rem; }
-.composer-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem; }
-.composer-send { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .5rem; margin-left: auto; }
-.model-chip { font-size: .88rem; font-weight: 550; color: var(--ink-2); padding: .3rem .4rem; }
-.composer-send select { font: inherit; font-size: .88rem; padding: .35rem .45rem; border: 1px solid var(--field-edge); border-radius: 8px; background: var(--sheet); color: var(--ink); max-width: 11rem; }
-.composer-note { margin: .5rem 0 0; font-size: .8rem; color: var(--ink-2); text-align: center; }
 .form-error { color: var(--rejected); margin: .4rem 0 0; font-size: .92rem; }
-.read-only { color: var(--ink-2); padding: 1.25rem 0 1.5rem; margin: 0; }
-.long-chat { background: var(--pending-bg); color: var(--pending); border-radius: 8px; padding: .55rem .8rem; font-size: .9rem; margin: 1rem 0 0; }
 
 /* Attached files on a message */
 .files { list-style: none; margin: .6rem 0 0; padding: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem; }
@@ -482,7 +416,7 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
 /* Small screens ------------------------------------------------------------------------ */
 @media (max-width: 900px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
-  /* A slim bar with the menu button, the app name and New chat, like claude.ai on a phone */
+  /* A slim bar with the menu button and the app name */
   .mobile-bar { display: flex; align-items: center; gap: .25rem; position: sticky; top: 0; z-index: 5; height: var(--topbar); padding: 0 .35rem; background: var(--sheet); border-bottom: 1px solid var(--rule); }
   .mobile-bar .brand { margin-right: auto; }
   .sidebar { display: none; position: fixed; inset: var(--topbar) 0 0 0; height: auto; z-index: 4; border-right: 0; }
@@ -491,14 +425,6 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
   .side-top { display: none; }
   .side-nav a, .side-new, .chat-list a, .menu-item { min-height: 44px; }
   .topbar-inner { gap: .5rem; }
-  .thread-col { padding-top: .75rem; }
-  .thread-scroll { padding-top: .75rem; }
-  body.chat-page .mobile-bar { position: static; flex: none; }
-  .notice-fixed { display: none; }
-  .notice-in-thread { display: block; border: 0; border-radius: var(--radius); margin-bottom: 1rem; }
-  .notice-in-thread p { padding: .5rem .75rem; }
-  .greeting { font-size: 1.6rem; }
-  .start { align-items: flex-start; padding-top: 2.5rem; }
   .panel { scroll-margin-top: calc(var(--topbar) + 1rem); }
   /* Settings sections become a row of tabs that scrolls sideways, kept under the top bar */
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; margin-top: 1rem; }

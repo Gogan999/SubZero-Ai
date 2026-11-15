@@ -11,7 +11,7 @@
 
   <h2>How approval works</h2>
   <ul>
-    <li>When you send a message, it waits for a mentor. You'll get a Slack DM when they act on it.</li>
+    <li>When you send a message, it waits for a mentor. You'll hear back in your Slack thread with the bot when they act on it.</li>
     <li>A mentor can approve it, edit it before Claude sees it, reject it with a reason, or follow up with you in person.</li>
     {% if settings.approval_window_minutes %}
     <li>Once a mentor approves a message, your follow-ups in that chat go straight to Claude while you keep chatting. If you stop for {{ settings.approval_window_minutes }} minute{{ 's' if settings.approval_window_minutes != 1 }}, the next one waits for a mentor again.{% if settings.screener_enabled %} A small AI model checks each of those follow-ups first, and anything it isn't sure about waits for a mentor.{% endif %} Mentors can see every message you send.</li>
@@ -23,8 +23,8 @@
 
   <h2>Who can see what</h2>
   <ul>
-    <li>Approved messages and Claude's replies are visible to everyone on the team.</li>
-    <li>Messages waiting for review, and rejected ones, are visible only to you and the mentors.</li>
+    <li>Mentors can read every message you send and every reply, including messages that are waiting for review and ones that were rejected.</li>
+    <li>Other students can't read your chats.</li>
     <li>Nothing here is a private conversation. Don't share personal information like your address or phone number.</li>
     <li>Your chats are stored on the team's server. Each approved message and the chat so far are sent over the internet to the company whose AI answers. That is usually Anthropic (Claude), but the team can also use OpenAI, Google, or OpenRouter, which passes messages on to the model's maker. Your name and Slack details are never sent. Each company has its own rules for how long it keeps messages; mentors can tell you which one is in use.</li>
   </ul>

@@ -4,6 +4,7 @@
 {% block main %}
 <section class="page narrow">
   <h1>Code</h1>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
   {% if mentor %}
   <p class="lede">Give Claude a task in the team's robot code. It works in a copy of the repository on this computer: it can read and search on its own, but a mentor approves every file change and every command first. Nothing is pushed to GitHub. When it's done, download the changes as a patch.</p>
   {% else %}

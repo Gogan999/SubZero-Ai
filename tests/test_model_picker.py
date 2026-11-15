@@ -1,5 +1,6 @@
-"""The model picker: what a mentor can choose for a new chat or an existing chat, what the Settings dropdowns offer,
-and what happens when a chat's model stops being allowed. Offline: the fake AI client from tests/helpers.py."""
+"""The model lists: what the Settings dropdowns offer, which models are allowed, and what happens when an old chat's
+model stops being allowed. Chats started in Slack always use the default model. Offline: the fake AI client from
+tests/helpers.py."""
 
 from __future__ import annotations
 
@@ -38,50 +39,18 @@ class PickerTest(unittest.TestCase):
         return [json.loads(r["details"] or "{}") for r in
                 self.h.services.db.all("SELECT details FROM audit_log WHERE action = ? ORDER BY id", (action,))]
 
-    def mentor_chat(self, model: str, text: str = "Hello robot") -> int:
-        resp = self.kim.post("/chats/new", {"text": text, "subteam": "Programming", "model": model})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.h.idle()
-        return int(resp.json()["url"].rsplit("/", 1)[1])
-
     def listed(self, purpose: str = "chat") -> set[str]:
         return {option["id"] for option in selectable_models(self.h.services, purpose=purpose)}
 
-    # ---------------------------------------------------------------- New chat
-    def test_student_model_field_is_ignored(self):
-        resp = self.ava.post("/chats/new", {"text": "Why is my arm slow?", "subteam": "Programming", "model": OPUS})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.h.idle()
-        self.assertEqual(self.conv_model(int(resp.json()["url"].rsplit("/", 1)[1])), SONNET)
-
-    def test_mentor_choice_is_stored_on_the_chat(self):
-        cid = self.mentor_chat(OPUS)
-        self.assertEqual(self.conv_model(cid), OPUS)
-        self.assertEqual(self.audit("conversation_started")[-1]["model"], OPUS)
-        self.assertIn(f'value="{OPUS}"', self.kim.get("/chats", headers=HTML).text)
-
-    def test_mentor_new_chat_page_offers_checked_models_with_default_selected(self):
-        page = self.kim.get("/chats", headers=HTML).text
-        self.assertIn('<select id="new-model"', page)
-        self.assertIn(f'<option value="{SONNET}" selected>', page)
-        self.assertIn(f'<option value="{OPUS}"', page)
-        self.assertNotIn("haiku", page.lower())  # never checked, so not offered
-        self.assertNotIn('<select id="new-model"', self.ava.get("/chats", headers=HTML).text)
-
-    def test_unchecked_model_is_refused_with_a_plain_note(self):
-        # Keep the session cookie the new-chat reply sets, as a browser does, so the note reaches the next page
-        self.h.client.cookies.clear()
-        resp = self.h.client.post("/chats/new", data={"text": "Hello robot", "subteam": "Programming", "model": HAIKU},
-                                  headers={"Cookie": f"subzero_session={self.kim.cookie}",
-                                           "X-CSRF-Token": self.kim.csrf, "Accept": "application/json"})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.h.idle()
-        cid = int(resp.json()["url"].rsplit("/", 1)[1])
-        self.assertEqual(self.conv_model(cid), SONNET)
-        page = self.h.client.get(f"/c/{cid}", headers=HTML).text
-        self.assertIn("Haiku 5.5 can", page)
-        self.assertIn("be used for this chat", page)
-        self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": HAIKU}).status_code, 400)
+    # ---------------------------------------------------------------- chats started in Slack
+    def test_a_chat_started_in_slack_uses_the_default_model(self):
+        sent = self.h.slack_dm("Why is my arm slow?", user=STUDENT)
+        self.assertEqual(self.conv_model(sent.conversation_id), SONNET)
+        self.h.slack_dm("A mentor's own question", user=MENTOR)
+        mentor_chat = self.h.services.db.one("SELECT model FROM conversations ORDER BY id DESC")
+        self.assertEqual(mentor_chat["model"], SONNET)
+        self.h.slack_tap("approve", sent.message_id)
+        self.assertEqual(self.h.chat_calls()[0]["model"], SONNET)
 
     def test_model_without_a_provider_key_is_not_listed(self):
         self.h.settings.ai_backend = "fake"  # so the Anthropic-only rule doesn't hide the OpenAI model
@@ -98,7 +67,6 @@ class PickerTest(unittest.TestCase):
         self.h.services.model_info[GPT] = {"id": GPT, "name": "GPT X"}
         pass_model_check(self.h, GPT)
         self.assertEqual(self.listed(), {SONNET, OPUS})
-        self.assertNotIn("openai", self.kim.get("/chats", headers=HTML).text)
 
     def test_judge_lists_claude_models_only(self):
         self.h.settings.ai_backend = "fake"
@@ -124,24 +92,15 @@ class PickerTest(unittest.TestCase):
         finally:
             h.close()
 
-    def test_set_model_uses_the_same_filter(self):
-        cid = self.mentor_chat(SONNET)
-        self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": HAIKU}).status_code, 400)  # not checked
-        self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": GPT}).status_code, 400)  # not a listed model
-        pass_model_check(self.h, HAIKU)
-        self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": HAIKU}).status_code, 200)
-        self.assertEqual(self.conv_model(cid), HAIKU)
-        self.assertEqual(self.audit("model_changed")[-1]["to"], HAIKU)
-        self.assertEqual(self.ava.post(f"/c/{cid}/model", {"model": OPUS}).status_code, 403)
-
-    def test_chat_moves_to_default_when_its_model_stops_passing(self):
-        cid = self.mentor_chat(OPUS)
-        self.kim.send(cid, "A follow-up question")
-        self.h.idle()
+    def test_an_old_chat_moves_to_the_default_when_its_model_stops_passing(self):
+        """Chats made before 0.11 could use another model; the rule that checks it again on every reply stays."""
+        first = self.h.slack_dm("Hello robot", user=MENTOR)
+        cid = first.conversation_id
+        self.h.services.db.execute("UPDATE conversations SET model = ? WHERE id = ?", (OPUS, cid))
+        self.h.slack_dm("A follow-up question", user=MENTOR, thread_ts=first.thread_ts)
         self.assertEqual(self.audit("model_fallback"), [])  # still passing, so the chat keeps Opus
         pass_model_check(self.h, OPUS, failing="unsafe")  # the newest result is a failure now
-        self.kim.send(cid, "Another follow-up")
-        self.h.idle()
+        self.h.slack_dm("Another follow-up", user=MENTOR, thread_ts=first.thread_ts)
         self.assertEqual(self.conv_model(cid), SONNET)
         streams = [c for c in self.h.claude.calls if c.get("kind") != "complete"]
         self.assertEqual(streams[-1]["model"], SONNET)
@@ -151,8 +110,7 @@ class PickerTest(unittest.TestCase):
     # ---------------------------------------------------------------- Settings
     def claude_form(self, **changes) -> dict:
         form = {"ai_providers": ["anthropic"], "model_default": SONNET, "model_hard": OPUS, "model_titles": HAIKU,
-                "effort_default": "medium", "effort_high": "high", "max_tokens_chat": "8000",
-                "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "effort_default": "medium", "max_tokens_chat": "8000"}
         form.update(changes)
         return form
 

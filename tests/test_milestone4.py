@@ -56,42 +56,34 @@ class ConfigFileTest(TempDirTest):
         with self.assertRaises(ValueError):
             update_env_file(self.tmp / "config.env", {"PUBLIC_URL": "https://a\nDEV_LOGIN=1"})
 
-    def test_subteams_from_config_env(self):
-        (self.tmp / "config.env").write_text("SUBTEAMS=Programming, Build , Strategy\n", encoding="utf-8")
-        settings = load_settings(search_cwd=False, data_dir=self.tmp)
-        self.assertEqual(settings.subteams, ("Programming", "Build", "Strategy"))
-
-
 # --------------------------------------------------------------------------- Settings page
 class SettingsValuesTest(TempDirTest):
     def test_validation(self):
         values, errors = saved_settings.validate("claude", {
             "model_default": "claude-fable-5-1", "model_hard": "gpt-4", "model_titles": "claude-haiku-5-5",
-            "effort_default": "extreme", "effort_high": "high", "max_tokens_chat": "8,000",
-            "long_chat_tokens": "150000"})
+            "effort_default": "extreme", "max_tokens_chat": "8,000"})
         self.assertIn("Fable", errors["model_default"])
         self.assertIn("provider/model", errors["model_hard"])
         self.assertIn("effort_default", errors)
         self.assertEqual(values["max_tokens_chat"], 8000)
 
     def test_admins_cant_remove_themselves(self):
-        _, errors = saved_settings.validate("people", {"subteams": "Programming", "admin_slack_ids": "U0OTHER1"},
+        _, errors = saved_settings.validate("people", {"admin_slack_ids": "U0OTHER1"},
                                             actor_slack_id="U0ME1234")
         self.assertIn("yourself", errors["admin_slack_ids"])
-        _, errors = saved_settings.validate("people", {"subteams": "", "admin_slack_ids": "nope"})
-        self.assertIn("subteams", errors)
+        _, errors = saved_settings.validate("people", {"admin_slack_ids": "nope"})
         self.assertIn("Slack member ID", errors["admin_slack_ids"])
 
     def test_saved_values_survive_a_restart_and_win_over_config_env(self):
         (self.tmp / "config.env").write_text("LIMIT_APPROVED_PER_DAY=10\n", encoding="utf-8")
         settings = load_settings(search_cwd=False, data_dir=self.tmp)
         db = Database(settings.db_path)
-        saved_settings.save(db, settings, {"limit_approved_per_day": 40, "subteams": ("A", "B")}, None)
+        saved_settings.save(db, settings, {"limit_approved_per_day": 40, "reminder_minutes": 90}, None)
         fresh = load_settings(search_cwd=False, data_dir=self.tmp)
         self.assertEqual(fresh.limit_approved_per_day, 10)
         saved_settings.load_into(fresh, Database(fresh.db_path))
         self.assertEqual(fresh.limit_approved_per_day, 40)
-        self.assertEqual(fresh.subteams, ("A", "B"))
+        self.assertEqual(fresh.reminder_minutes, 90)
 
 
 class SettingsPageTest(unittest.TestCase):
@@ -114,22 +106,20 @@ class SettingsPageTest(unittest.TestCase):
     def test_limits_apply_without_a_restart(self):
         resp = self.coach.post("/settings/limits", {
             "limit_pending_per_student": "1", "limit_approved_per_day": "25", "reminder_minutes": "120",
-            "show_pending_to_team": "1"}, headers=HTML)
+            "slack_dms_enabled": "1"}, headers=HTML)
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Saved limits and review.", resp.text)
-        ava = self.h.login(STUDENT)
-        first = ava.new_chat("How do I tune a PID loop?")
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(ava.new_chat("And feedforward?").status_code, 429)
-        self.assertTrue(self.h.services.store.show_pending_to_team, "visibility settings reach the store")
+        first = self.h.slack_dm("How do I tune a PID loop?", user=STUDENT)
+        self.assertIsNotNone(first.message_id)
+        second = self.h.slack_dm("And feedforward?", user=STUDENT)
+        self.assertIsNone(second.message_id, "the new limit of one waiting message applies at once")
         entry = self.h.services.db.one("SELECT details FROM audit_log WHERE action = 'setting_changed' LIMIT 1")
         self.assertIn("Waiting messages per student", entry["details"])
 
     def test_bad_values_are_shown_and_not_saved(self):
         resp = self.coach.post("/settings/claude", {"model_default": "claude-mythos-1", "model_hard": "claude-opus-5-5",
                                                     "model_titles": "claude-haiku-5-5", "effort_default": "medium",
-                                                    "effort_high": "high", "max_tokens_chat": "8000",
-                                                    "long_chat_tokens": "150000"},
+                                                    "max_tokens_chat": "8000"},
                                headers=HTML)
         self.assertEqual(resp.status_code, 400)
         self.assertIn("kept off", resp.text)
@@ -140,14 +130,14 @@ class SettingsPageTest(unittest.TestCase):
         self.assertIn('aria-invalid="true"', field)
         self.assertIn('id="e-model_default"', resp.text)
 
-    def test_subteams(self):
-        self.coach.post("/settings/people", {"subteams": "Software\nMechanical", "admin_slack_ids": ""}, headers=HTML)
-        self.assertNotEqual(self.h.settings.subteams, ("Software", "Mechanical"), "admins can't be emptied")
-        resp = self.coach.post("/settings/people", {"subteams": "Software\nMechanical", "admin_slack_ids": "U0COACH1"},
-                               headers=HTML)
+    def test_admins_are_saved_and_cannot_be_emptied(self):
+        resp = self.coach.post("/settings/people", {"admin_slack_ids": ""}, headers=HTML)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Name at least one admin.", resp.text)
+        resp = self.coach.post("/settings/people", {"admin_slack_ids": "U0COACH1"}, headers=HTML)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(self.h.settings.subteams, ("Software", "Mechanical"))
-        self.assertIn("<option >Software</option>", self.h.login(STUDENT).get("/recents").text.replace("  ", ""))
+        self.assertEqual(self.h.settings.admin_slack_ids, frozenset({"U0COACH1"}))
+        self.assertNotIn("name=\"subteams\"", resp.text)
 
     def test_prompt_layers(self):
         resp = self.coach.post("/settings/prompts/team", {"text": "## Team context\n- Robot code is Java."},
@@ -332,11 +322,9 @@ class BackupTest(unittest.TestCase):
         self.h.close()
 
     def chat(self, text):
-        resp = self.ava.post("/chats/new", {"text": text, "subteam": "Programming"})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.h.idle()
-        self.h.add_old_attachment(resp.json()["message_id"], "notes.txt", b"kP = 0.2\n")  # a file from 0.10
-        return int(resp.json()["url"].rsplit("/", 1)[1])
+        sent = self.h.slack_dm(text, user=STUDENT)
+        self.h.add_old_attachment(sent.message_id, "notes.txt", b"kP = 0.2\n")  # a file from 0.10
+        return sent.conversation_id
 
     def test_backup_and_restore_round_trip(self):
         first = self.chat("First question")
@@ -364,10 +352,8 @@ class BackupTest(unittest.TestCase):
 
     def test_videos_stay_out_of_backups_and_survive_a_restore(self):
         mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2000
-        resp = self.ava.post("/chats/new", {"text": "Look at this"})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.h.idle()
-        self.h.add_old_attachment(resp.json()["message_id"], "clip.mp4", mp4, "video")  # a video from 0.10
+        sent = self.h.slack_dm("Look at this", user=STUDENT)
+        self.h.add_old_attachment(sent.message_id, "clip.mp4", mp4, "video")  # a video from 0.10
         videos = list((self.settings.data_dir / "files").glob("*.mp4"))
         self.assertEqual(len(videos), 1)
         made = backup.make_backup(self.settings, now=datetime(2026, 10, 25, 2, 0, 0))
@@ -473,12 +459,10 @@ class NightlyTest(unittest.TestCase):
         self.assertIn('class="count alert"', page)
 
     def test_old_chats_are_deleted_with_their_files(self):
-        ava = self.h.login(STUDENT)
-        old = ava.post("/chats/new", {"text": "Old", "subteam": "Programming"}).json()
-        new = ava.new_chat("New").json()
-        old_id, new_id = (int(x["url"].rsplit("/", 1)[1]) for x in (old, new))
-        self.h.idle()
-        self.h.add_old_attachment(old["message_id"], "old.txt", b"old")
+        old = self.h.slack_dm("Old", user=STUDENT)
+        new = self.h.slack_dm("New", user=STUDENT)
+        old_id, new_id = old.conversation_id, new.conversation_id
+        self.h.add_old_attachment(old.message_id, "old.txt", b"old")
         row = next(iter(self.s.attachments.for_conversation(old_id).values()))[0]
         path = self.h.settings.data_dir / "files" / row["path"]
         self.assertTrue(path.exists())
@@ -583,13 +567,10 @@ class HealthTest(TempDirTest):
     def test_replies_feed_the_claude_status(self):
         h = Harness()
         try:
-            kim = h.login(MENTOR)
             for _ in range(2):
-                kim.new_chat("ERROR-TEST please")
-                h.idle()
+                h.slack_dm("ERROR-TEST please", user=MENTOR)
             self.assertEqual(h.services.health.snapshot()["claude"]["state"], "failing")
-            kim.new_chat("A normal question")
-            h.idle()
+            h.slack_dm("A normal question", user=MENTOR)
             self.assertEqual(h.services.health.snapshot()["claude"]["state"], "ok")
         finally:
             h.close()

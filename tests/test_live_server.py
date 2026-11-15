@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import re
 import shutil
 import socket
@@ -58,7 +58,9 @@ class LiveServerTest(unittest.TestCase):
     def session_for(self, user):
         session = requests.Session()
         session.trust_env = False
-        page = session.post(self.base + "/auth/dev", data={"user": user}, timeout=5)
+        resp = session.post(self.base + "/auth/dev", data={"user": user}, timeout=5, allow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        page = session.get(self.base + "/about", timeout=5)  # open to everyone signed in; carries the CSRF token
         self.assertEqual(page.status_code, 200)
         session.headers["X-CSRF-Token"] = CSRF_RE.search(page.text).group(1)
         session.headers["Accept"] = "application/json"
@@ -72,91 +74,80 @@ class LiveServerTest(unittest.TestCase):
         watcher.cookies.update(session.cookies)
         return watcher.get(url, stream=True, timeout=15, headers={"Accept": "text/event-stream"})
 
-    def test_reply_streams_to_the_student(self):
-        ava = self.session_for("DEV-student-ava")
-        kim = self.session_for("DEV-mentor-kim")
-        created = ava.post(self.base + "/chats/new", data={"text": "Explain current limits on a NEO"}, timeout=5).json()
-        cid = created["url"].rsplit("/", 1)[1]
-        mid = created["message_id"]
+    def student_dm(self, text, user="DEV-student-ava"):
+        """The student messages the bot in Slack. The app handles it on its own loop, as Socket Mode would."""
+        services = self.app.state.services
+        event = {"type": "message", "channel_type": "im", "channel": "D0" + user, "user": user, "text": text,
+                 "ts": f"1700000{int(time.time() * 1000) % 1000000:06d}.000100"}
+        envelope = {"type": "events_api", "envelope_id": "e", "payload": {"type": "event_callback", "event": event}}
 
-        events: list[tuple[str, dict]] = []
+        async def go():
+            await services.interactions.dispatch(envelope)
+            await services.tasks.wait_idle()
+
+        asyncio.run(go())
+        row = services.db.one("SELECT message_id FROM slack_dm_messages WHERE channel = ? AND ts = ?",
+                              (event["channel"], event["ts"]))
+        message = services.store.message(row["message_id"])
+        return message["id"], message["conversation_id"]
+
+    def test_the_review_queue_stream_tells_a_mentor_about_new_and_decided_messages(self):
+        kim = self.session_for("DEV-mentor-kim")
+        got: list[str] = []
         connected = threading.Event()
-        finished = threading.Event()
-        stream = self.watch(ava, f"{self.base}/c/{cid}/events")
+        stream = self.watch(kim, f"{self.base}/queue/events")
         self.assertEqual(stream.headers["content-type"].split(";")[0], "text/event-stream")
 
         def read():
-            name = None
             try:
                 for line in stream.iter_lines(decode_unicode=True):
                     if line.startswith("retry:"):
                         connected.set()
                     elif line.startswith("event:"):
-                        name = line[6:].strip()
-                    elif line.startswith("data:"):
-                        events.append((name, json.loads(line[5:])))
-                        if name == "title":
-                            finished.set()
-                            return
+                        got.append(line[6:].strip())
             except Exception:
                 pass
 
-        reader = threading.Thread(target=read, daemon=True)
-        reader.start()
+        threading.Thread(target=read, daemon=True).start()
         self.assertTrue(connected.wait(5), "the live-update stream didn't start")
+
+        mid, cid = self.student_dm("Explain current limits on a NEO")
+        deadline = time.time() + 5
+        while "queue" not in got and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertIn("queue", got, "a new waiting message reaches the mentor's open Review page")
+        before = len(got)
 
         resp = kim.post(f"{self.base}/m/{mid}/approve", timeout=5)
         self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertTrue(finished.wait(15), f"reply didn't finish streaming; got {[e[0] for e in events]}")
+        deadline = time.time() + 5
+        while len(got) == before and time.time() < deadline:
+            time.sleep(0.05)
         stream.close()
+        self.assertGreater(len(got), before, "approving also reaches it")
 
-        kinds = [name for name, _ in events]
-        self.assertEqual(kinds[0], "changed")
-        self.assertEqual(events[0][1]["id"], mid)
-        self.assertIn("delta", kinds)
-        self.assertLess(kinds.index("delta"), kinds.index("done"))
-        deltas = [data for name, data in events if name == "delta"]
-        self.assertEqual([d["seq"] for d in deltas], list(range(len(deltas))), "chunks arrive in order")
-        text = "".join(d["text"] for d in deltas)
-        self.assertEqual(text, FakeClaude.reply_for("Explain current limits on a NEO"))
-
-        reply_id = deltas[0]["id"]
-        html = ava.get(f"{self.base}/c/{cid}/m/{reply_id}", timeout=5).text
+        # The read-only chat page shows the reply once it is done
+        deadline = time.time() + 10
+        html = ""
+        while time.time() < deadline:
+            html = kim.get(f"{self.base}/c/{cid}?thread=1", timeout=5).text
+            if 'class="msg-body prose"' in html:
+                break
+            time.sleep(0.2)
         self.assertIn('class="msg-body prose"', html)
         self.assertIn('<div class="code">', html)
 
-    def test_other_students_are_cut_off_when_a_chat_turns_private(self):
+    def test_a_student_gets_no_chat_page_or_stream_on_the_real_server(self):
         ava = self.session_for("DEV-student-ava")
-        ben = self.session_for("DEV-student-ben")
-        kim = self.session_for("DEV-mentor-kim")
-        created = ava.post(self.base + "/chats/new", data={"text": "A normal question"}, timeout=5).json()
-        cid = created["url"].rsplit("/", 1)[1]
-        kim.post(f"{self.base}/m/{created['message_id']}/approve", timeout=5)
-        time.sleep(1.5)  # let the reply finish
-        follow = ava.post(f"{self.base}/c/{cid}/messages", data={"text": "Something private"}, timeout=5).json()
-
-        got = []
-        stream = self.watch(ben, f"{self.base}/c/{cid}/events")
-        self.assertEqual(stream.status_code, 200)
-
-        def read():
-            try:
-                for line in stream.iter_lines(decode_unicode=True):
-                    if line.startswith("event:"):
-                        got.append(line[6:].strip())
-                        if got[-1] == "gone":
-                            return
-            except Exception:
-                pass
-
-        reader = threading.Thread(target=read, daemon=True)
-        reader.start()
-        time.sleep(0.3)
-        kim.post(f"{self.base}/m/{follow['message_id']}/hold", timeout=5)
-        reader.join(5)
-        stream.close()
-        self.assertIn("gone", got)
-        self.assertEqual(ben.get(f"{self.base}/c/{cid}", timeout=5).status_code, 404)
+        _, cid = self.student_dm("A normal question", user="DEV-student-ava")
+        for path in (f"/c/{cid}", f"/c/{cid}?thread=1", f"/c/{cid}/events", "/queue/events", "/queue"):
+            resp = ava.get(self.base + path, timeout=5, allow_redirects=False,
+                           headers={"Accept": "text/html"})
+            self.assertNotIn("normal question", resp.text, path)
+        resp = ava.get(f"{self.base}/c/{cid}", timeout=5, allow_redirects=False, headers={"Accept": "text/html"})
+        self.assertEqual((resp.status_code, resp.headers["location"]), (303, "/code"))
+        self.assertEqual(ava.get(f"{self.base}/c/{cid}/events", timeout=5).status_code, 404)
+        self.assertEqual(ava.get(f"{self.base}/queue/events", timeout=5, allow_redirects=False).status_code, 403)
 
 
 if __name__ == "__main__":

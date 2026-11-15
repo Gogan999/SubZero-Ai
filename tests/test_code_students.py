@@ -22,13 +22,14 @@ API = "https://api.github.com/repos/team/robot-code/zipball"
 
 class StudentAccessTest(CodeStudentTest):
     def test_students_see_no_code_when_access_is_off(self):
+        side = '</svg> Code</a>'  # the sidebar entry (the app name in the corner links to /code for everyone)
         self.h.services.settings.code_student_access = False
-        self.assertNotIn('href="/code"', self.ava.get("/chats").text)
+        self.assertNotIn(side, self.ava.get("/about").text)
         self.assertEqual(self.ava.get("/code").status_code, 403)
         self.assertEqual(self.ava.post("/code", {"task": "x"}).status_code, 403)
-        self.assertIn('href="/code"', self.kim.get("/chats").text, "mentors keep Code")
+        self.assertIn(side, self.kim.get("/about").text, "mentors keep Code")
         self.h.services.settings.code_student_access = True
-        self.assertIn('href="/code"', self.ava.get("/chats").text)
+        self.assertIn(side, self.ava.get("/about").text)
         self.assertEqual(self.ava.get("/code").status_code, 200)
 
     def test_a_student_request_waits_for_a_mentor_and_makes_no_sandbox(self):
