@@ -55,8 +55,8 @@ class ChatPageTest(unittest.TestCase):
         self.h.settings.code_student_access = False
         browser = self.h.browser(self.ava)
         browser.get(f"/c/{self.cid}", headers=HTML, follow_redirects=False)
-        page = browser.get("/code", headers=HTML)  # today's plain page for this case
-        self.assertEqual(page.status_code, 403)
+        page = browser.get("/code", headers=HTML)  # the plain "Code is off" page for this case
+        self.assertEqual(page.status_code, 200)
         self.assertIn(NOTE, page.text)
         self.assertNotIn(NOTE, browser.get("/code", headers=HTML).text)
 
@@ -213,8 +213,8 @@ class OldAddressesTest(unittest.TestCase):
         self.h.settings.code_student_access = False
         ava = self.h.login(STUDENT)
         resp = ava.get("/code", headers=HTML)
-        self.assertEqual(resp.status_code, 403)
-        self.assertIn("Code is for mentors", resp.text)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("A mentor has to turn Code on for students.", resp.text)
         self.assertNotIn("/chats", resp.text)
         self.assertIn('href="/code"', resp.text)  # the button and the app name lead back here, not to /chats
 

@@ -9,7 +9,9 @@ import secrets
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Any
+from urllib.parse import urlencode
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -116,7 +118,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     runner.on_alert = approvals.mentor_alert
     health = Health(settings, slack, claude)
     runner.on_result = lambda ok, error: health.record("claude", ok, error)
-    directory = Directory(settings, slack)
+    directory = Directory(settings, slack, db=db)
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
     code = CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks, sandboxes=sandboxes,
@@ -346,13 +348,7 @@ async def moved_to_code(request: Request) -> Response:
 # --------------------------------------------------------------------------- profile
 @page()
 async def profile_page(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    needs_review = (not viewer.is_mentor) or s.settings.mentors_need_approval
-    usage = None
-    if needs_review and not viewer.is_mentor:
-        usage = {"approved": s.store.count_approved_today(viewer.id), "daily": s.settings.limit_approved_per_day,
-                 "waiting": s.store.count_pending_for(viewer.id), "max_waiting": s.settings.limit_pending_per_student}
-    return render(request, "profile.html", viewer, usage=usage, flash=request.session.pop("flash", None))
+    return render(request, "profile.html", viewer, flash=request.session.pop("flash", None))
 
 
 @page()
@@ -362,7 +358,7 @@ async def profile_save(request: Request, viewer: Viewer) -> Response:
     theme = str(form.get("theme") or "")
     if theme in THEMES:
         s.store.save_preferences(viewer.id, theme=theme)
-    request.session["flash"] = "Saved your preferences."
+    request.session["flash"] = "Saved."
     return RedirectResponse("/profile", status_code=303)
 
 
@@ -444,11 +440,8 @@ async def queue_page(request: Request, viewer: Viewer) -> Response:
     window = [{"id": m["id"], "conversation_id": m["conversation_id"], "student": m["author_name"],
                "title": m["conversation_title"] or "New chat", "text": short_text(m["content"], 120),
                "time": fmt_time(s.store, m["created_at"])} for m in s.store.window_messages()]
-    code_waiting = [{"id": r["id"], "title": r["title"], "owner": r["owner_name"], "pending": r["pending"],
-                     "request": r["status"] == "awaiting_approval"}
-                    for r in s.code.list() if r["status"] in ("waiting", "awaiting_approval")]
     return render(request, "queue.html", viewer, items=_queue_items(s), window=window,
-                  code_waiting=code_waiting, flash=request.session.pop("flash", None))
+                  flash=request.session.pop("flash", None))
 
 
 @page(require="mentor")
@@ -507,22 +500,48 @@ async def attachment_file(request: Request, viewer: Viewer) -> Response:
     return FileResponse(path, media_type=media_type, headers=headers)
 
 
+AUDIT_PAGE = 100  # entries per page
+
+
+def _date_arg(value: str | None) -> date | None:
+    try:
+        return date.fromisoformat((value or "").strip()) if value else None
+    except ValueError:
+        return None
+
+
 @page(require="admin")
 async def audit_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
+    q = request.query_params
+    actor, action = q.get("who", "").strip(), q.get("what", "").strip()
+    since, until = _date_arg(q.get("from")), _date_arg(q.get("to"))
+    number = max(1, int(q["page"])) if q.get("page", "").isdigit() else 1
+    rows, total = s.store.audit_search(actor=actor, action=action, since=since, until=until, limit=AUDIT_PAGE,
+                                       offset=(number - 1) * AUDIT_PAGE)
     entries = []
-    for row in s.store.audit_entries():
+    for row in rows:
         details = json.loads(row["details"] or "{}")
         link = None
         if row["target_type"] == "conversation":
             link = f"/c/{row['target_id']}"
         elif row["target_type"] == "message" and details.get("conversation"):
             link = f"/c/{details['conversation']}#m{row['target_id']}"
+        elif row["target_type"] == "code":
+            link = f"/code/{row['target_id']}"
         entries.append({"time": fmt_time(s.store, row["created_at"]), "actor": row["actor_name"] or "System",
                         "action": row["action"].replace("_", " "),
                         "target": f"{row['target_type'] or ''} {row['target_id'] or ''}".strip(),
                         "link": link, "details": details})
-    return render(request, "audit.html", viewer, entries=entries)
+    keep = {key: value for key, value in (("who", actor), ("what", action), ("from", q.get("from", "")),
+                                          ("to", q.get("to", ""))) if value}
+    pages = max(1, -(-total // AUDIT_PAGE))
+    return render(request, "audit.html", viewer, entries=entries, total=total, number=number, pages=pages,
+                  actors=s.store.audit_actors(), actions=[(a, a.replace("_", " ")) for a in s.store.audit_actions()],
+                  who=actor, what=action, date_from=q.get("from", "") if since else "",
+                  date_to=q.get("to", "") if until else "", filtered=bool(keep),
+                  newer=f"/audit?{urlencode({**keep, 'page': number - 1})}" if number > 1 else None,
+                  older=f"/audit?{urlencode({**keep, 'page': number + 1})}" if number < pages else None)
 
 
 async def about_page(request: Request) -> Response:

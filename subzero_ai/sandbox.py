@@ -989,7 +989,8 @@ NETWORK_CHECK_MARK = "# szsandbox: host network check (read-only, changes nothin
 NETWORK_CHECK_SECONDS = 60  # the Settings page's check gives up after this long
 HOST_VNIC_NAME = "vEthernet ({})"  # the host's adapter for an Internal switch is named after it
 BLOCK_TCP_BELOW = "szsandbox-block-tcp-below"  # blocks TCP ports 1 to proxy port minus 1
-BLOCK_TCP_ABOVE = "szsandbox-block-tcp-above"  # blocks TCP ports proxy port plus 1 to 65535
+BLOCK_TCP_ABOVE = "szsandbox-block-tcp-above"  # blocks TCP ports above the highest open port to 65535
+BLOCK_TCP_BETWEEN = "szsandbox-block-tcp-between"  # blocks the TCP ports between the proxy and gateway ports
 BLOCK_UDP = "szsandbox-block-udp"  # blocks every UDP port
 BLOCK_ICMP4 = "szsandbox-block-icmp4"  # blocks ICMPv4
 BLOCK_ICMP6 = "szsandbox-block-icmp6"  # blocks ICMPv6
@@ -997,7 +998,8 @@ BLOCK_ICMP6 = "szsandbox-block-icmp6"  # blocks ICMPv6
 # ESP (50) and AH (51). Each gets one block rule, BLOCK_PROTO_RULE with the number.
 BLOCK_PROTOCOLS = (2, 41, 47, 50, 51)
 BLOCK_PROTO_RULE = "szsandbox-block-proto-{}"
-PROXY_RULE = "szsandbox-allow-proxy"  # the one allow: TCP to the proxy port from the guest subnet
+PROXY_RULE = "szsandbox-allow-proxy"  # an allow: TCP to the proxy port from the guest subnet
+GATEWAY_RULE = "szsandbox-allow-gateway"  # an allow: TCP to the Claude gateway port from the guest subnet
 # The PowerShell list of BLOCK_PROTOCOLS that sandbox-network.ps1 must contain word for word (a test checks it)
 NETWORK_BLOCK_PROTOCOLS_PS = ("$BlockProtocols = @(" + ", ".join(str(n) for n in BLOCK_PROTOCOLS) + ")  "
                               "# IP protocols with no ports, blocked whole: generated from sandbox.BLOCK_PROTOCOLS")
@@ -1017,6 +1019,8 @@ NETWORK_PROBLEMS = {
                     "on that adapter)",
     "proxy-rule-wrong": "The firewall rule szsandbox-allow-proxy must exist and allow only TCP to the proxy port from "
                         "10.77.0.0/24 on the sandbox adapter",
+    "gateway-rule-wrong": "The firewall rule szsandbox-allow-gateway must exist and allow only TCP to the gateway port "
+                          "from 10.77.0.0/24 on the sandbox adapter",
     "firewall-off": "Windows Firewall is turned off for the Public profile, so none of the sandbox rules would apply. "
                     "Turn it on (Windows Security, Firewall and network protection)",
     "default-inbound-allow": "Windows Firewall's default for incoming traffic on the Public profile is Allow, and it "
@@ -1025,18 +1029,24 @@ NETWORK_PROBLEMS = {
 UNREADABLE_CHECK = "The check gave an answer the app couldn't read"
 
 
-def block_rule_specs(proxy_port: int) -> list[tuple[str, str, str | None]]:
+def block_rule_specs(proxy_port: int, gateway_port: int | None = None) -> list[tuple[str, str, str | None]]:
     """The firewall block rules for the sandbox adapter, as (name, protocol, local ports or None for every port). With
-    PROXY_RULE they cover all inbound traffic: TCP is blocked below and above the proxy port, UDP, both ICMP versions
-    and BLOCK_PROTOCOLS are blocked whole, and the one allow rule opens only the proxy port. Windows Firewall lets a
-    block rule beat an allow rule, which is why the blocks skip the proxy port. A range that would be empty is left
-    out. Allow rules that already exist on the host need no change: these interface-scoped blocks take precedence."""
-    port = int(proxy_port)
+    PROXY_RULE (and GATEWAY_RULE, when there is a gateway port) they cover all inbound traffic: TCP is blocked below,
+    between and above the open ports, UDP, both ICMP versions and BLOCK_PROTOCOLS are blocked whole, and the allow
+    rules open only the proxy and gateway ports. Windows Firewall lets a block rule beat an allow rule, which is why
+    the blocks skip those ports. A range that would be empty is left out. Allow rules that already exist on the host
+    need no change: these interface-scoped blocks take precedence."""
+    ports = sorted({int(proxy_port)} | ({int(gateway_port)} if gateway_port else set()))
     specs: list[tuple[str, str, str | None]] = []
-    if port > 1:
-        specs.append((BLOCK_TCP_BELOW, "TCP", f"1-{port - 1}"))
-    if port < 65535:
-        specs.append((BLOCK_TCP_ABOVE, "TCP", f"{port + 1}-65535"))
+    if ports[0] > 1:
+        specs.append((BLOCK_TCP_BELOW, "TCP", f"1-{ports[0] - 1}"))
+    for low, high in zip(ports, ports[1:]):
+        if high - low == 2:
+            specs.append((BLOCK_TCP_BETWEEN, "TCP", str(low + 1)))
+        elif high - low > 2:
+            specs.append((BLOCK_TCP_BETWEEN, "TCP", f"{low + 1}-{high - 1}"))
+    if ports[-1] < 65535:
+        specs.append((BLOCK_TCP_ABOVE, "TCP", f"{ports[-1] + 1}-65535"))
     specs += [(BLOCK_UDP, "UDP", None), (BLOCK_ICMP4, "ICMPv4", None), (BLOCK_ICMP6, "ICMPv6", None)]
     specs += [(BLOCK_PROTO_RULE.format(number), str(number), None) for number in BLOCK_PROTOCOLS]
     return specs
@@ -1076,7 +1086,7 @@ function Get-RemoteAddresses($Rule) {
 }'''
 
 
-def host_network_check_script(switch: str, proxy_port: int) -> str:
+def host_network_check_script(switch: str, proxy_port: int, gateway_port: int | None = None) -> str:
     """A read-only PowerShell check of the host's side of the sandbox network. It prints a JSON list of problem codes
     (an empty list when everything is in place); parse_host_network_check turns them into plain words. It changes
     nothing. UNVERIFIED on a real host: the cmdlets and their property names are untested (docs/CODE_SANDBOX_PLAN.md,
@@ -1089,7 +1099,21 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
     specs = ", ".join(
         "@{ Name = " + ps_quote(name) + "; Protocol = " + ps_quote(protocol) + "; LocalPort = "
         + (ps_quote(ports) if ports else "$null") + " }"
-        for name, protocol, ports in block_rule_specs(port))
+        for name, protocol, ports in block_rule_specs(port, gateway_port))
+    gateway_lines: list[str] = []
+    if gateway_port:  # the gateway rule is checked exactly like the proxy rule
+        gateway_lines = [
+            "  $gatewayRules = @($infos | Where-Object { $_.Name -eq 'szsandbox-allow-gateway' })",
+            "  $gatewayBad = $gatewayRules.Count -eq 0",
+            "  foreach ($info in $gatewayRules) {",
+            "    $ok = ($info.Direction -eq 'Inbound') -and ($info.Action -eq 'Allow')"
+            " -and ($info.Protocols -contains 'TCP') `",
+            f"      -and ($info.LocalPorts -contains '{int(gateway_port)}') -and ($info.LocalPorts.Count -eq 1) `",
+            f"      -and ($info.Interfaces -contains $alias) -and ($info.Remotes -contains {subnet})",
+            "    if (-not $ok) { $gatewayBad = $true }",
+            "  }",
+            "  if ($gatewayBad) { $problems.Add('gateway-rule-wrong') }",
+        ]
     lines = [
         NETWORK_CHECK_MARK,
         "$ErrorActionPreference = 'Stop'",
@@ -1160,6 +1184,7 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
         "    if (-not $ok) { $proxyBad = $true }",
         "  }",
         "  if ($proxyBad) { $problems.Add('proxy-rule-wrong') }",
+        *gateway_lines,
         "} catch {",
         "  $problems.Add('check-failed:' + ($_.Exception.Message -replace '[\\r\\n]+', ' '))",
         "}",
@@ -1183,10 +1208,11 @@ def parse_host_network_check(output: str) -> list[str]:
     return [describe_network_problem(code) for code in codes]
 
 
-def host_network_problems(switch: str, proxy_port: int, run_powershell: Callable[[str], str]) -> list[str]:
+def host_network_problems(switch: str, proxy_port: int, run_powershell: Callable[[str], str],
+                          gateway_port: int | None = None) -> list[str]:
     """Run the host check and return its problems. Any error while running it is itself a problem (fail closed)."""
     try:
-        output = run_powershell(host_network_check_script(switch, proxy_port))
+        output = run_powershell(host_network_check_script(switch, proxy_port, gateway_port))
     except Exception as exc:
         return [describe_network_problem(f"check-failed:{str(exc) or type(exc).__name__}")]
     return parse_host_network_check(output)
@@ -1403,7 +1429,8 @@ class HyperVSandbox:
                  run_ssh: Callable[..., tuple[int, bytes, bytes]] | None = None,
                  popen_ssh: Callable[[list[str]], subprocess.Popen] | None = None,
                  ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep,
-                 archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128):
+                 archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128,
+                 gateway_port: int | None = None):
         if not base_image:
             raise SandboxRefused("Set the sandbox base image in Settings first.")
         self.base_image = base_image
@@ -1429,6 +1456,7 @@ class HyperVSandbox:
         self.sleep = sleep
         self.archive_limit = archive_limit
         self.proxy_port = proxy_port
+        self.gateway_port = gateway_port  # None: no gateway rule is expected (the classic engine only)
         self._lock = threading.Lock()  # guards _killed, _reserved and _network_ok_until; never held across a VM call
         self._key_lock = threading.Lock()  # makes the app's client key once, even when two sandboxes start together
         self._killed: set[str] = set()
@@ -1585,7 +1613,7 @@ class HyperVSandbox:
         with self._lock:
             if time.monotonic() < self._network_ok_until:
                 return
-        problems = host_network_problems(self.switch, self.proxy_port, self._ps)
+        problems = host_network_problems(self.switch, self.proxy_port, self._ps, self.gateway_port)
         if problems:
             raise SandboxRefused(network_refusal(problems))
         with self._lock:
@@ -1725,7 +1753,7 @@ def backend_fingerprint(settings: Settings, kind: str) -> tuple:
     if kind == "hyperv":
         return (str(settings.data_dir), settings.sandbox_base_image, settings.sandbox_switch,
                 settings.sandbox_memory_mb, settings.sandbox_cpus, settings.sandbox_disk_gb,
-                settings.sandbox_proxy_port, settings.sandbox_guest_sudo)
+                settings.sandbox_proxy_port, settings.sandbox_gateway_port, settings.sandbox_guest_sudo)
     return ()
 
 
@@ -1743,7 +1771,8 @@ def make_backend(settings: Settings, kind: str) -> SandboxBackend:
                              memory_mb=settings.sandbox_memory_mb, cpus=settings.sandbox_cpus,
                              disk_gb=settings.sandbox_disk_gb, ssh_key=str(keys / "id_ed25519"), disks_dir=str(keys / "disks"),
                              known_dir=str(keys / "known_hosts"), staging_dir=str(keys / "staging"),
-                             guest_sudo=settings.sandbox_guest_sudo, proxy_port=settings.sandbox_proxy_port)
+                             guest_sudo=settings.sandbox_guest_sudo, proxy_port=settings.sandbox_proxy_port,
+                             gateway_port=settings.sandbox_gateway_port)
     raise SandboxError(f"There's no sandbox kind called {kind}.")
 
 

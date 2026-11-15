@@ -1,11 +1,25 @@
 # Every setting, and where to change it
 
-Since version 0.7, admins can change every setting, API key and connected account on the **Settings** page.
-This page lists them all. Since 0.8 the page is split into sections, picked from the menu on the left (a row of tabs
-on a phone): Overview (health, backups, Run checks), AI and keys (Claude settings, API keys, Claude subscription,
-Model safety check, AI engine), Mentor review (limits, approval window, system prompt), Accounts and people
-(connected accounts and admins), Slack, Site and server (site, data, connectors, Code) and Change history. The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env`
-by hand.
+Admins can change every setting, API key and connected account on the **Settings** page. This file lists them all.
+The page has eight tabs, picked from the menu on the left (a row of tabs on a phone):
+
+| Tab | What is on it |
+| --- | --- |
+| Overview | Health list (Slack, Claude API, the Code gateway, last backup, version and the update notice, the mentor-list warning), **Slack messages waiting for a mentor** with **Post the cards again**, Connected accounts, **Check everything**. While Code is signed in with the team subscription, a short warning shows here too. |
+| Code | Code engine (new engine, or the classic engine as the fallback), Code sign-in with its permanent warning and the team subscription token box, students and the sandbox, the repository, branch and GitHub token (with a **Check** button), how sessions work (plan first, web tools, helpers), cost and capacity (caps, sessions at once, how many days finished sessions keep their files), student limits, the settings that only matter for the classic engine, and a folded **Advanced** box for the sandbox network, proxy, gateway port, memory, processors and disk. |
+| AI and keys | AI engine (first), AI providers, API keys, models and effort, the Claude subscription sign-in, the Model safety check. |
+| Slack chat review | Approval window, screener, limits and reminders, students who always wait, the three system prompt layers. |
+| People | The admin list, and a read-only list of who is a mentor or an admin right now, by name, with the time it was read from Slack. |
+| Slack | Sign-in keys, bot and app tokens, the review channel, the guest rule, and the switch for messaging the bot in Slack. |
+| Site and server | Address, app name, time zone, backup hour, update check, data and backups settings. A folded **Advanced** box holds the backups folder, the update source and the settings kept only in config.env. |
+| History | Recent setting changes, the backups list with **Back up now**, and **Old website chats** (below). |
+
+Every box saves on its own, and the message says which tab and box it came from ("Saved Code sign-in on the Code tab.").
+Only the fields in that box change. If you start typing in a box and then leave the tab or the page, the browser asks
+first. A restart banner shows above every tab while a saved change waits for a restart. Old links that end in a box name
+(`#connectors`, `#code`, `#limits`, `#window`, `#data`, `#accounts`) still open the right tab.
+
+The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env` by hand.
 
 **Where a setting is saved.** "Database" settings win over config.env and apply to the next message. "config.env"
 settings are written to config.env by the Settings page. Secrets (keys and tokens) are always in config.env, never
@@ -50,7 +64,7 @@ new model is still missing.
 | Mentors need approval, Slack DMs | `MENTORS_NEED_APPROVAL`, `SLACK_DMS` |
 | Approval window, screener on, screener model, students who always wait | `APPROVAL_WINDOW_MINUTES`, `SCREENER_ENABLED`, `MODEL_SCREENER`, `ALWAYS_REVIEW_SLACK_IDS` |
 | Retention, days of backups kept | `RETENTION_DAYS`, `BACKUP_KEEP_DAYS` |
-| Code commands and timeout | `CODE_COMMANDS`, `CODE_COMMAND_TIMEOUT` |
+| Code commands and timeout (classic engine) | `CODE_COMMANDS`, `CODE_COMMAND_TIMEOUT` |
 
 ## Code sandboxes (database)
 
@@ -140,6 +154,7 @@ audit log (`code_student_requested`, `code_student_approved`, `code_student_decl
 | Which engine new Code sessions use (`agent` runs in the sandbox only; `classic` is the older step-by-step one). Running sessions keep theirs | `CODE_ENGINE` (default agent) |
 | How Code signs in: `api_key`, or `subscription` (testing only, uses `CODE_SUBSCRIPTION_TOKEN` in config.env, never shown on the page) | `CODE_AUTH`, `CODE_SUBSCRIPTION_TOKEN` |
 | Code sessions working at once (1 to 8); the rest wait in line | `CODE_MAX_RUNNING` (default 2) |
+| Delete a finished session's repository copies after this many days (1 to 365). Its steps and transcript stay. Checked every night | `CODE_KEEP_DAYS` (default 14) |
 | Ask for a plan before changing anything: students, mentors | `CODE_PLAN_FIRST_STUDENTS` (default on), `CODE_PLAN_FIRST_MENTORS` (default off) |
 | Claude may search and read the web: students, mentors | `CODE_WEB_TOOLS_STUDENTS`, `CODE_WEB_TOOLS_MENTORS` (default on) |
 | Claude may use helper agents | `CODE_SUB_AGENTS` (default on) |
@@ -176,6 +191,7 @@ safety check fails or goes out of date), the next reply uses the default model i
 ## API keys (config.env, secret)
 
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`. New keys work from the next message.
+The team subscription token for Code (`CODE_SUBSCRIPTION_TOKEN`) is entered on the Code tab, in Code sign-in.
 A key can be removed unless a model setting still needs it.
 
 ## Slack connection (config.env)
@@ -192,9 +208,10 @@ New tokens are tried with Slack before they're saved. A bot token for a differen
 everyone's accounts belong to the current one: moving to a new workspace is done on the setup page.
 `SLACK_TEAM_ID` is filled in from the bot token automatically.
 
-## Connectors (config.env)
+## Repository and branch (config.env, Code tab)
 
-`CONNECTOR_GITHUB_REPO`, `CONNECTOR_GITHUB_BRANCH`, `CONNECTOR_GITHUB_TOKEN` (secret), `CONNECTOR_DRIVE_LINKS`.
+`CONNECTOR_GITHUB_REPO`, `CONNECTOR_GITHUB_BRANCH`, `CONNECTOR_GITHUB_TOKEN` (secret). **Check** tries them as typed without
+saving. The box used to be called Connectors and sat on the Site and server tab.
 
 ## Site and server (config.env)
 
@@ -203,9 +220,48 @@ everyone's accounts belong to the current one: moving to a new workspace is done
 | Site address | `PUBLIC_URL` | restart |
 | App name | `APP_NAME` | |
 | Time zone | `TIMEZONE` | restart |
-| Largest text file | `MAX_TEXT_FILE_KB` | |
 | Backups folder, nightly backup hour | `BACKUP_DIR`, `BACKUP_HOUR` | |
 | Check for new versions, where they come from | `CHECK_FOR_UPDATES`, `UPDATE_REPO` | |
+
+## Code sign-in and the subscription warning
+
+Code signs in to Anthropic with the team's API key (`CODE_AUTH=api_key`) or a Claude subscription token
+(`CODE_AUTH=subscription`). The Code tab always shows, directly under the sign-in choice, whichever one is chosen:
+"Team subscription is for testing only. Anthropic's terms don't allow sharing a subscription through an app, and they
+can limit the account without notice. Use an API key for regular use." It can't be hidden or dismissed. The token is
+saved in config.env, never shown again (only "Saved" and its last four characters), and left out of backups and the
+audit log. The Overview shows a shorter warning while the subscription is the chosen sign-in.
+
+## Slack messages waiting for a mentor
+
+The Overview counts the messages still waiting for a mentor and how long the oldest has waited. **Post the cards again**
+posts a new approval card in the review channel for each of them (the same card as the first time; the buttons check
+who taps them, so who may approve doesn't change). The old card is replaced by a short note, and the new card takes
+over from then on. It is written to the audit log as `cards_reposted`. Reminders already sent aren't sent again.
+
+## Old website chats (History tab)
+
+Before chat moved to Slack, people also chatted on the website. **Old website chats** are the conversations that have
+no Slack thread. A chat created in the last 10 minutes is never counted, in case its Slack thread isn't saved yet.
+Chats from Slack are never archived, deleted or changed by anything on this box. The box shows how many chats, messages
+and files there are, their total file size and the date range. Only admins can use it.
+
+- **Build the archive** saves a zip file named `old-chats-<date>-<time>.zip` in the backups folder. It has `index.html`
+  (every chat with owner, title and dates), `chats/<id>.html` (a readable page, everything escaped, no scripts) and
+  `chats/<id>.json` (every message with author, role, status, times, review decisions and reasons, screener notes and
+  token counts) for each chat, the attached files in `files/<chat id>/`, `projects/<id>/` for each old project (its
+  instructions and files), `shares.json` (the old share-link records; the secret part of each link is left out) and
+  `archive.json`. Videos are left out unless the box is ticked, because they make the file very large. It is built in
+  the background, with progress on the page, because Cloudflare cuts long requests. The finished file is listed with
+  its size, a download link and a Delete button (asks first). Audit: `old_chats_archived`, `old_chats_archive_downloaded`,
+  `old_chats_archive_deleted`. Archives are not backups and are never deleted by the nightly clean-up.
+- **Delete old website chats** needs the word DELETE typed in capital letters. It makes a normal backup first
+  (`subzero-<date>-<time>-before-old-chats-delete.zip`) and stops if that fails. Then it deletes every old chat with its
+  messages, file rows and files, the files of old projects, and the share-link rows of those chats. The `projects` and
+  `shares` tables stay. A review card in Slack that was still waiting for one of these chats is changed to say it was
+  deleted by an admin (a card that can't be changed is skipped). Backups leave out videos, so build an archive with
+  videos first if you want to keep them. Running it again finds nothing and does nothing. Audit:
+  `old_chats_deleted_by_admin` with the counts and bytes (`old_chats_delete_stopped` if the backup failed).
 
 ## Connected accounts
 

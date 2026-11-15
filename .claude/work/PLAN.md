@@ -45,13 +45,13 @@ Track A (website) runs in order. Track B (engine) starts in parallel with new fi
 | F2 | Rule tests through Slack (`tests/test_rules.py`), old web tests still present | done |
 | F3a | Remove projects, share links, artifacts/explainers, Drive, uploads/attachments, composer tools | done |
 | F3b | Remove web chat pages; read-only mentor chat page + Review; redirects; Slack wording; removed settings; test triage | done |
-| F4 | Code interface: shell/sidebar, Code home, "Needs a mentor", session states, on-page diff, About, role fallback fix | todo |
-| F5 | Settings reorganised + `archive.py` (archive download, delete old website chats) | todo |
+| F4 | Code interface: shell/sidebar, Code home, "Needs a mentor", session states, on-page diff, About, role fallback fix | done (in review) |
+| F5 | Settings reorganised + `archive.py` (archive download, delete old website chats) | done (in review) |
 | F6 | Files page for mentors and admins | todo |
 | G1 | `anthropic_gateway.py` (new file, parallel) | done |
 | G2 | `sandbox_runner/` Node runner on the Agent SDK + fake runner for tests (new files, parallel) | done |
-| G3 | Engine driver `code_engine.py`, migration v17, engine settings, concurrency queue, defaults on | todo |
-| G4 | Site for the new engine: transcript, plan-first, cost and cap, sign-in setting with warning | todo |
+| G3 | Engine driver `code_engine.py`, migration v17, engine settings, concurrency queue, defaults on | done (in review) |
+| G4 | Site for the new engine: transcript, plan-first, cost and cap, sign-in setting with warning | done (in review) |
 | G5 | Sandbox base image provisioning (tools + runner baked in, version check) | done |
 | H1 | Docs, CLAUDE.md, version 0.11.0 | todo |
 | H2 | Verify: suites, upgrade/rollback, walk-through, screenshots, zip, whole-diff review | todo |
@@ -149,6 +149,10 @@ plain message when the image is too old.
 - F3b M5: unused imports in tests/test_code_students.py.
 - safety.md line 1 and the 'team can see these chats' line: now only mentors can see chats; reword to 'the team's mentors can see these conversations' (H1).
 - F5: when the archive deletes chats that still have Slack review cards, mark the cards (the old `_mark_cards_deleted` went with the delete route).
+
+- Settings page still says 'Claude Code' in three subscription-bridge hints (settings.html ~349-376); reword to 'the Claude program' (H1).
+- Session page on phones scrolls to the bottom on load and hides the title.
+- Code home links to /settings, should link to the Code tab.
 
 ## Open questions / for Logan at the end
 - Mini PC steps (image, sign-in token, sandbox test, deploy).

@@ -221,6 +221,33 @@ class ApprovalService:
             self.db.audit("slack_card_failed", actor_id=None, target_type="message", target_id=message_id,
                           details={"error": str(exc)})
 
+    async def repost_cards(self) -> dict[str, int]:
+        """Post the approval card again for every message still waiting for a mentor (the Settings page's "Post the
+        cards again", for when cards were missed or scrolled away). It uses the same card as the first time, so who
+        can approve doesn't change. The old card, if there was one, is replaced by a short note, and the new card
+        takes over the message's later updates. Returns how many cards were posted and how many couldn't be."""
+        posted = failed = 0
+        for msg in self.store.pending_messages():
+            old = self.store.card(msg["id"])
+            await self._post_card(msg["id"])
+            new = self.store.card(msg["id"])
+            if new is None or (old is not None and (new["channel"], new["ts"]) == (old["channel"], old["ts"])):
+                failed += 1
+                continue
+            posted += 1
+            if old is None:
+                continue
+            if old["reminded_at"]:  # the reminder for this message was already sent; don't send another at once
+                self.db.execute("UPDATE slack_cards SET reminded_at = ? WHERE message_id = ?",
+                                (old["reminded_at"], msg["id"]))
+            note = [{"type": "context", "elements": [{"type": "mrkdwn", "text": "This card was posted again below."}]}]
+            try:
+                await self.slack.update_message(old["channel"], old["ts"],
+                                                slack_cards.card_fallback_text(msg["author_name"]), note)
+            except Exception:
+                log.exception("Couldn't replace the old Slack card for message %s", msg["id"])
+        return {"posted": posted, "failed": failed}
+
     # -------------------------------------------------------------- decisions
     async def approve(self, reviewer: Viewer, message_id: int, edited_text: str | None = None) -> Outcome:
         if not reviewer.is_mentor:

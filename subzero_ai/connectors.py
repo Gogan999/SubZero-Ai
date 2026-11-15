@@ -85,5 +85,5 @@ class GitHub:
             raise ConnectorError("Couldn't reach GitHub. Try again in a minute.") from exc
         if resp.status_code >= 400:
             raise ConnectorError(f"GitHub couldn't send the repository ({resp.status_code}). An admin should check "
-                                 "the repository and token in Settings, Connectors.")
+                                 "the repository and token in Settings, on the Code tab.")
         return _read_limited(resp, limit, "The repository")

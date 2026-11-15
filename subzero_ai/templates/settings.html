@@ -100,41 +100,53 @@
   </div>
   {% endif %}
 {% endmacro %}
-{% macro env_panel(sec) %}
+{% macro env_panel(sec, advanced=[], advanced_title='Advanced') %}
   <section class="panel" id="env-{{ sec.key }}" aria-labelledby="env-{{ sec.key }}-title">
     <h2 id="env-{{ sec.key }}-title">{{ sec.title }}</h2>
-    <p class="field-hint">{{ sec.intro }} Saved in config.env on the mini PC.{% if sec.key == 'slack' %} Tokens and secrets are never shown again. A box left empty keeps the saved one.{% endif %}</p>
+    <p class="field-hint">{{ sec.intro }} Saved in config.env on the server PC.{% if sec.key == 'slack' %} Tokens and secrets are never shown again. A box left empty keeps the saved one.{% endif %}</p>
     <form method="post" action="/settings/env/{{ sec.key }}" novalidate>
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="fields">
-        {% for item in sec.fields %}{{ env_row(item, sec.key) }}{% endfor %}
+        {% for item in sec.fields %}{% if item.field.name not in advanced %}{{ env_row(item, sec.key) }}{% endif %}{% endfor %}
       </div>
-      {{ caller() if caller else '' }}
+      {% if advanced %}
+      <details class="advanced">
+        <summary>{{ advanced_title }}</summary>
+        <div class="fields">
+          {% for item in sec.fields %}{% if item.field.name in advanced %}{{ env_row(item, sec.key) }}{% endif %}{% endfor %}
+        </div>
+        {{ caller() if caller else '' }}
+      </details>
+      {% endif %}
       <div class="form-actions"><button class="button primary" type="submit">Save {{ sec.name }}</button></div>
     </form>
   </section>
 {% endmacro %}
-{% macro db_panel(sec) %}
-  <section class="panel" id="{{ sec.key }}" aria-labelledby="{{ sec.key }}-title">
-    <h2 id="{{ sec.key }}-title">{{ sec.title }}</h2>
-    <form method="post" action="/settings/{{ sec.key }}" novalidate>
+{% macro db_panel(p, badge='', fold=False) %}
+  <section class="panel" id="{{ p.id }}" aria-labelledby="{{ p.id }}-title">
+    {% if fold %}<details class="advanced" {% if p.fields|selectattr('error')|list %}open{% endif %}><summary id="{{ p.id }}-title">{{ p.title }}</summary>{% else %}
+    <h2 id="{{ p.id }}-title">{{ p.title }}{% if badge %} <span class="pill unknown">{{ badge }}</span>{% endif %}</h2>{% endif %}
+    {% if p.help %}<p class="field-hint">{{ p.help }}</p>{% endif %}
+    <form method="post" action="{{ p.action }}" novalidate>
       <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="_panel" value="{{ p.id }}">
       <div class="fields">
-        {% for item in sec.fields %}{{ field_row(item) }}{% endfor %}
+        {% for item in p.fields %}{{ field_row(item) }}{% endfor %}
       </div>
-      <div class="form-actions"><button class="button primary" type="submit">Save {{ sec.title if sec.key == 'claude' else sec.title|lower }}{{ ' settings' if sec.key == 'claude' else '' }}</button></div>
+      {{ caller() if caller else '' }}
+      <div class="form-actions"><button class="button primary" type="submit">Save {{ p.title|lower }}</button></div>
     </form>
+    {% if fold %}</details>{% endif %}
   </section>
 {% endmacro %}
 {% block main %}
 {% set env = {} %}{% for sec in env_sections %}{% set _ = env.update({sec.key: sec}) %}{% endfor %}
-{% set by_key = {} %}{% for sec in sections %}{% set _ = by_key.update({sec.key: sec}) %}{% endfor %}
 <section class="page settings-page">
   <h1>Settings</h1>
-  <p class="lede">Every setting, API key and connected account is here. Most changes apply to the next message. The few marked "Needs a restart" wait until you press Restart. Every change is kept in the <a href="/audit">audit log</a>. API keys and tokens are saved in config.env on the mini PC and are never shown here again.</p>
+  <p class="lede">Every setting, API key and connected account is here, on eight tabs. Most changes apply to the next message. The few marked "Needs a restart" wait until you press Restart. Every change is kept in the <a href="/audit">audit log</a>. API keys and tokens are saved in config.env on the server PC and are never shown here again.</p>
   {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
   {% if pending %}
-  <section class="panel" id="restart" aria-labelledby="restart-title">
+  <section class="banner" id="restart" aria-labelledby="restart-title" role="status">
     <h2 id="restart-title">Restart to finish saving</h2>
     <p class="field-hint">These are saved but not in use yet: {{ pending|join(', ') }}. Restarting takes about 15 seconds. Anyone waiting on a reply sees it stop and can press Retry.</p>
     <form method="post" action="/settings/restart" class="form-actions">
@@ -144,22 +156,23 @@
   </section>
   {% endif %}
 
-  <div class="settings-layout">
+  <div class="settings-layout" data-anchors='{{ anchors|tojson }}'>
   <nav class="settings-nav" aria-label="Settings sections">
     <ul>
-      <li><a href="#tab-overview">Overview</a></li>
-      <li><a href="#tab-ai">AI and keys</a></li>
-      <li><a href="#tab-review">Mentor review</a></li>
-      <li><a href="#tab-people">Accounts and people</a></li>
-      <li><a href="#tab-slack">Slack</a></li>
-      <li><a href="#tab-site">Site and server</a></li>
-      <li><a href="#tab-history">Change history</a></li>
+      {% for key, name in tabs.items() %}<li><a href="#tab-{{ key }}">{{ name }}</a></li>
+      {% endfor %}
     </ul>
   </nav>
   <div class="settings-tabs">
   <div class="settings-tab" id="tab-overview" data-settings-tab role="region" aria-labelledby="tab-overview-title">
     <h2 class="settings-tab-title" id="tab-overview-title">Overview</h2>
-    <p class="field-hint">Is everything working, and the latest backups.</p>
+    <p class="field-hint">Is everything working, what is waiting for a mentor, and which accounts are connected.</p>
+    {% if subscription_on %}
+    <p class="warning-line" id="overview-subscription" role="note"><strong>Warning.</strong> Code is signed in with the team subscription, which is for testing only. Use an API key for regular use. See <a href="#code-auth">Code sign-in</a> on the Code tab.</p>
+    {% endif %}
+    {% if directory_warning %}
+    <p class="warning-line" id="mentor-warning" role="note"><strong>Mentor list.</strong> {{ directory_warning }}</p>
+    {% endif %}
   <section class="panel" id="health" aria-labelledby="health-title">
     <h2 id="health-title">Health and backups</h2>
     <ul class="health">
@@ -171,22 +184,36 @@
       </li>
       {% endfor %}
     </ul>
-    <p class="field-hint">If Slack or the Claude API fails for 15 minutes, admins get a Slack DM. Cloudflare's Zero Trust dashboard shows whether the tunnel is up.</p>
-    <h3>Recent backups</h3>
-    {% if backups %}
-    <ul class="simple-list">
-      {% for b in backups %}<li><span class="mono">{{ b.name }}</span> <span class="field-hint">{{ b.time }}, {{ b.size }}</span></li>{% endfor %}
-    </ul>
-    {% else %}
-    <p class="field-hint">No backups yet.</p>
-    {% endif %}
-    <p class="field-hint">Backups are saved in <span class="mono">{{ backup_folder }}</span>. To put one back, run restore.cmd in the SubZero AI folder on the mini PC.</p>
-    <form method="post" action="/settings/backup" class="form-actions">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="button" type="submit">Back up now</button>
-    </form>
+    <p class="field-hint">If Slack or the Claude API fails for 15 minutes, admins get a Slack DM. Cloudflare's Zero Trust dashboard shows whether the tunnel is up. Backups are listed on the <a href="#backups">History tab</a>.</p>
   </section>
 
+  <section class="panel" id="waiting" aria-labelledby="waiting-title">
+    <h2 id="waiting-title">Slack messages waiting for a mentor</h2>
+    <p><strong>Slack messages waiting for a mentor: {{ waiting.count }}</strong>{% if waiting.count %}, oldest waiting {{ waiting.oldest }}{% endif %}</p>
+    {% if waiting.count %}
+    <p class="field-hint">Each waiting message has a card in the review channel. If the cards were missed or buried, post them again. Everyone who may approve stays the same: the buttons check who taps them. The old cards are replaced by a short note.</p>
+    <form method="post" action="/settings/repost-cards" class="form-actions">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button" type="submit" {% if not waiting.can_post %}disabled{% endif %} data-confirm="Post a new card in the review channel for each of the {{ waiting.count }} waiting message{{ 's' if waiting.count != 1 else '' }}?">Post the cards again</button>
+    </form>
+    {% if not waiting.can_post %}<p class="field-hint">Slack isn't connected or no review channel is set, so there is nowhere to post them.</p>{% endif %}
+    {% else %}
+    <p class="field-hint">Nothing is waiting.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" id="accounts" aria-labelledby="accounts-title">
+    <h2 id="accounts-title">Connected accounts</h2>
+    <ul class="health">
+      {% for row in accounts %}
+      <li>
+        <span class="health-label">{{ row.label }}</span>
+        <span class="pill {{ row.kind }}">{{ row.state }}</span>
+        <span class="health-detail">{{ row.detail }} <a href="{{ row.link }}">Change</a></span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
 
   <section class="panel" id="checks" aria-labelledby="checks-title">
     <h2 id="checks-title">Check everything</h2>
@@ -210,33 +237,24 @@
 
   </div>
 
-  <div class="settings-tab" id="tab-ai" data-settings-tab role="region" aria-labelledby="tab-ai-title">
-    <h2 class="settings-tab-title" id="tab-ai-title">AI and keys</h2>
-    <p class="field-hint">Which models answer, the keys that pay for them, and the safety check every model has to pass.</p>
-  {{ db_panel(by_key.claude) }}
-  <section class="panel" id="ai-keys" aria-labelledby="ai-keys-title">
-    <h2 id="ai-keys-title">API keys</h2>
-    <p class="field-hint">One API key for each company you turned on under AI providers in the Claude settings. Keys are saved in config.env on the mini PC and never shown again, only their last four characters so you can tell which one is saved. To replace a key, paste the new one. A box left empty keeps the saved key. New keys work right away. The Claude subscription doesn't use a key: see <a href="#bridge">Claude subscription</a>.</p>
+  <div class="settings-tab" id="tab-code" data-settings-tab role="region" aria-labelledby="tab-code-title">
+    <h2 class="settings-tab-title" id="tab-code-title">Code</h2>
+    <p class="field-hint">How Code sessions run: the engine, how Code signs in, who can use it, the repository, and what it may spend.</p>
+  {{ db_panel(panels['code-engine']) }}
+
+  {% call db_panel(panels['code-auth']) %}
+      <p class="warning-line" id="code-subscription-warning" role="note"><strong>Warning.</strong> {{ code_warning }}</p>
+  {% endcall %}
+  <section class="panel" id="code-token" aria-labelledby="code-token-title">
+    <h3 id="code-token-title">Team subscription token</h3>
     <form method="post" action="/settings/ai-keys" novalidate>
       <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="back" value="code">
       <div class="fields">
-        {% for k in ai_keys %}
-        <div class="field">
-          <label for="key-{{ k.id }}">{{ k.label }} API key <span class="pill {{ 'ok' if k.set else 'unknown' }}">{{ 'Saved' if k.set else 'Not set' }}</span>{% if k.hint %} <span class="field-hint">{{ k.hint }}</span>{% endif %}</label>
-          <input id="key-{{ k.id }}" name="{{ k.field }}" type="password" autocomplete="off" spellcheck="false" aria-describedby="key-{{ k.id }}-hint" placeholder="{{ 'Leave empty to keep the saved key' if k.set else 'Paste the key here' }}" {% if k.locked or not k.on %}disabled{% endif %}>
-          <p class="field-hint" id="key-{{ k.id }}-hint">{% if k.locked %}Set by an environment variable on the mini PC, which wins over this page. Change it there.{% elif not k.on %}{{ k.label }} is turned off. You can remove its saved key.{% else %}{{ k.help }}{% endif %}</p>
-        </div>
-        {% if k.set and not k.locked %}
-        <div class="field check">
-          <input type="checkbox" id="remove-key-{{ k.id }}" name="remove_{{ k.id }}" value="1">
-          <label for="remove-key-{{ k.id }}">Remove the saved {{ k.label }} key</label>
-        </div>
-        {% endif %}
-        {% endfor %}
         <div class="field">
           <label for="key-code">Team subscription token for Code <span class="pill {{ 'ok' if code_key.set else 'unknown' }}">{{ 'Saved' if code_key.set else 'Not set' }}</span>{% if code_key.hint %} <span class="field-hint">{{ code_key.hint }}</span>{% endif %}</label>
           <input id="key-code" name="{{ code_key.field }}" type="password" autocomplete="off" spellcheck="false" aria-describedby="key-code-hint" placeholder="{{ 'Leave empty to keep the saved token' if code_key.set else 'Paste the token here' }}" {% if code_key.locked %}disabled{% endif %}>
-          <p class="field-hint" id="key-code-hint">{% if code_key.locked %}Set by an environment variable on the mini PC, which wins over this page. Change it there.{% else %}Only used when Code sign-in (in the Code settings) is set to Team subscription, which is for testing only. It comes from running <span class="mono">claude setup-token</span>.{% endif %}</p>
+          <p class="field-hint" id="key-code-hint">{% if code_key.locked %}Set by an environment variable on the server PC, which wins over this page. Change it there.{% else %}Only used when Code sign-in above is set to Team subscription. It comes from running <span class="mono">claude setup-token</span>. It is saved in config.env on the server PC and never shown again.{% endif %}</p>
         </div>
         {% if code_key.set and not code_key.locked %}
         <div class="field check">
@@ -245,16 +263,93 @@
         </div>
         {% endif %}
       </div>
+      <div class="form-actions"><button class="button primary" type="submit">Save token</button></div>
+    </form>
+  </section>
+
+  {{ db_panel(panels['code-students']) }}
+
+  <section class="panel" id="connectors" aria-labelledby="connectors-title">
+    <h2 id="connectors-title">Repository and branch</h2>
+    <p class="field-hint">The team's GitHub repository. Code sessions work in a copy of it, and nothing is pushed back. (This box used to be called Connectors and sat on the Site and server tab.)</p>
+    <form method="post" action="/settings/connectors" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        <div class="field">
+          <label for="github-repo">GitHub repository</label>
+          <input id="github-repo" name="connector_github_repo" value="{{ connectors.repo }}" placeholder="owner/name" autocomplete="off" spellcheck="false" aria-describedby="github-repo-hint">
+          <p class="field-hint" id="github-repo-hint">The team's robot code, as owner/name or its github.com address. Leave it empty to turn GitHub off.</p>
+        </div>
+        <div class="field">
+          <label for="github-branch">Branch</label>
+          <input id="github-branch" name="connector_github_branch" value="{{ connectors.branch }}" placeholder="Default branch" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="github-token">GitHub access token{% if connectors.token_set %} <span class="pill ok">Saved</span>{% endif %}</label>
+          <input id="github-token" name="connector_github_token" type="password" autocomplete="off" spellcheck="false" aria-describedby="github-token-hint" placeholder="{{ 'Leave empty to keep the saved token' if connectors.token_set else 'Only for a private repository' }}">
+          <p class="field-hint" id="github-token-hint">For a private repository, make a fine-grained token on GitHub for just this repository with read-only Contents access. It's saved in config.env on the server PC and never shown here.</p>
+        </div>
+        {% if connectors.token_set %}
+        <div class="field check">
+          <input type="checkbox" id="remove-token" name="remove_token" value="1">
+          <label for="remove-token">Remove the saved token</label>
+        </div>
+        {% endif %}
+      </div>
+      <div class="form-actions">
+        <button class="button primary" type="submit">Save repository and branch</button>
+        <button class="button" type="submit" formaction="/settings/connectors/check">Check</button>
+      </div>
+      <p class="field-hint">Check tries the repository, branch and token as typed, without saving anything.</p>
+    </form>
+  </section>
+
+  {{ db_panel(panels['code-plan']) }}
+  {{ db_panel(panels['code-limits']) }}
+  {{ db_panel(panels['code-student-limits']) }}
+  {{ db_panel(panels['code-classic'], badge='Classic engine only') }}
+  {{ db_panel(panels['code-advanced'], fold=True) }}
+  </div>
+
+  <div class="settings-tab" id="tab-ai" data-settings-tab role="region" aria-labelledby="tab-ai-title">
+    <h2 class="settings-tab-title" id="tab-ai-title">AI and keys</h2>
+    <p class="field-hint">Which program talks to the AI companies, the keys that pay for them, which models answer, and the safety check every model has to pass.</p>
+  {{ env_panel(env.engine, advanced=['pi_request_timeout', 'pi_idle_timeout', 'pi_node', 'pi_gateway_script', 'anthropic_base_url'], advanced_title='Advanced: AI helper and Anthropic address') }}
+
+  {{ db_panel(panels['ai-providers']) }}
+
+  <section class="panel" id="ai-keys" aria-labelledby="ai-keys-title">
+    <h2 id="ai-keys-title">API keys</h2>
+    <p class="field-hint">One API key for each company you turned on under AI providers above. Keys are saved in config.env on the server PC and never shown again, only their last four characters so you can tell which one is saved. To replace a key, paste the new one. A box left empty keeps the saved key. New keys work right away. The Claude subscription doesn't use a key: see <a href="#bridge">Claude subscription</a>. The key for Code's team subscription is on the <a href="#code-auth">Code tab</a>.</p>
+    <form method="post" action="/settings/ai-keys" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fields">
+        {% for k in ai_keys %}
+        <div class="field">
+          <label for="key-{{ k.id }}">{{ k.label }} API key <span class="pill {{ 'ok' if k.set else 'unknown' }}">{{ 'Saved' if k.set else 'Not set' }}</span>{% if k.hint %} <span class="field-hint">{{ k.hint }}</span>{% endif %}</label>
+          <input id="key-{{ k.id }}" name="{{ k.field }}" type="password" autocomplete="off" spellcheck="false" aria-describedby="key-{{ k.id }}-hint" placeholder="{{ 'Leave empty to keep the saved key' if k.set else 'Paste the key here' }}" {% if k.locked or not k.on %}disabled{% endif %}>
+          <p class="field-hint" id="key-{{ k.id }}-hint">{% if k.locked %}Set by an environment variable on the server PC, which wins over this page. Change it there.{% elif not k.on %}{{ k.label }} is turned off. You can remove its saved key.{% else %}{{ k.help }}{% endif %}</p>
+        </div>
+        {% if k.set and not k.locked %}
+        <div class="field check">
+          <input type="checkbox" id="remove-key-{{ k.id }}" name="remove_{{ k.id }}" value="1">
+          <label for="remove-key-{{ k.id }}">Remove the saved {{ k.label }} key</label>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
       <div class="form-actions"><button class="button primary" type="submit">Save keys</button></div>
     </form>
   </section>
+
+  {{ db_panel(panels['claude']) }}
 
   <section class="panel" id="bridge" aria-labelledby="bridge-title">
     <h2 id="bridge-title">Claude subscription <span class="pill {{ 'ok' if bridge.signed_in else 'bad' if bridge.on else 'plain' }}">{{ 'Signed in' if bridge.signed_in else 'Not signed in' }}</span></h2>
     <p class="field-hint">Answers with one person's Claude Pro or Max plan through Claude Code, instead of an API key. Replies count against that plan's limits, so keep an API-key model set up too. Anthropic's terms generally don't allow sharing a claude.ai login inside another product without their approval, so read them before you turn this on.</p>
     {% if bridge.needs_pi %}<p class="field-hint"><span class="pill unknown">Needs the AI helper</span> It only works when <a href="#env-engine">AI engine</a> is set to the AI helper.</p>{% endif %}
     {% if bridge.signed_in %}
-    <p class="field-hint">{% if bridge.on %}Signed in and turned on. Claude subscription models can be picked like any other model.{% else %}Signed in, but turned off. Tick Claude subscription under <a href="#claude">AI providers</a> to use it.{% endif %}</p>
+    <p class="field-hint">{% if bridge.on %}Signed in and turned on. Claude subscription models can be picked like any other model.{% else %}Signed in, but turned off. Tick Claude subscription under <a href="#ai-providers">AI providers</a> to use it.{% endif %}</p>
     <form method="post" action="/settings/bridge/sign-out" class="form-actions">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="button quiet" type="submit" data-confirm="Sign out of the Claude subscription? Its models stop working until someone signs in again.">Sign out of the Claude subscription</button>
@@ -270,7 +365,7 @@
       <div class="field">
         <label for="bridge-code">Code from the Claude page</label>
         <input id="bridge-code" name="code" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="bridge-code-hint">
-        <p class="field-hint" id="bridge-code-hint">The code works once, for about 10 minutes. It's passed to Claude Code on the mini PC and never saved here.{% if bridge.by %} Started by {{ bridge.by }}.{% endif %}</p>
+        <p class="field-hint" id="bridge-code-hint">The code works once, for about 10 minutes. It's passed to Claude Code on the server PC and never saved here.{% if bridge.by %} Started by {{ bridge.by }}.{% endif %}</p>
       </div>
       <div class="form-actions">
         <button class="button primary" type="submit">Finish signing in</button>
@@ -278,9 +373,9 @@
       </div>
     </form>
     {% elif not bridge.found %}
-    <p class="field-hint">The Claude Code program that comes with the AI helper isn't installed on the mini PC. Install the newest SubZero AI zip, then come back here.</p>
+    <p class="field-hint">The Claude Code program that comes with the AI helper isn't installed on the server PC. Install the newest SubZero AI zip, then come back here.</p>
     {% else %}
-    <p class="field-hint">Press Sign in to get a sign-in link. You open it on any device, sign in, and paste back the code Claude shows. Nothing needs to be done on the mini PC.</p>
+    <p class="field-hint">Press Sign in to get a sign-in link. You open it on any device, sign in, and paste back the code Claude shows. Nothing needs to be done on the server PC.</p>
     <form method="post" action="/settings/bridge/sign-in" class="form-actions">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="button primary" type="submit">Sign in</button>
@@ -303,16 +398,16 @@
     {% for r in safety.running_only %}<p class="field-hint"><span class="pill unknown">Running</span> <span class="mono">{{ r.model }}</span> since {{ r.since }}. Refresh the page in a minute.</p>{% endfor %}
     {% if safety.rows %}
     <div class="table-wrap">
-      <table class="audit">
+      <table class="audit stack">
         <thead><tr><th>Model</th><th>Chats</th><th>Screener</th><th>Checked</th><th>What failed</th></tr></thead>
         <tbody>
         {% for r in safety.rows %}
         <tr>
-          <td class="mono">{{ r.model }}{% if r.running %} <span class="pill unknown">Running</span>{% endif %}</td>
-          <td>{% if r.chat_passed %}<span class="pill ok">&#10003; Passed</span>{% else %}<span class="pill bad">&#10007; Failed</span>{% endif %}</td>
-          <td>{% if r.screener_passed %}<span class="pill ok">&#10003; Passed</span>{% else %}<span class="pill bad">&#10007; Failed</span>{% endif %}</td>
-          <td>{{ r.time }}{% if not r.current %}<br><span class="field-hint">Out of date. Run it again.</span>{% endif %}</td>
-          <td>{% if r.failed %}<ul class="simple-list">{% for f in r.failed %}<li>{{ f.name }}{% if f.detail %}: <span class="field-hint">{{ f.detail }}</span>{% endif %}</li>{% endfor %}</ul>{% else %}<span class="field-hint">Nothing</span>{% endif %}</td>
+          <td class="mono" data-label="Model">{{ r.model }}{% if r.running %} <span class="pill unknown">Running</span>{% endif %}</td>
+          <td data-label="Chats">{% if r.chat_passed %}<span class="pill ok">&#10003; Passed</span>{% else %}<span class="pill bad">&#10007; Failed</span>{% endif %}</td>
+          <td data-label="Screener">{% if r.screener_passed %}<span class="pill ok">&#10003; Passed</span>{% else %}<span class="pill bad">&#10007; Failed</span>{% endif %}</td>
+          <td data-label="Checked">{{ r.time }}{% if not r.current %}<br><span class="field-hint">Out of date. Run it again.</span>{% endif %}</td>
+          <td data-label="What failed">{% if r.failed %}<ul class="simple-list">{% for f in r.failed %}<li>{{ f.name }}{% if f.detail %}: <span class="field-hint">{{ f.detail }}</span>{% endif %}</li>{% endfor %}</ul>{% else %}<span class="field-hint">Nothing</span>{% endif %}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -323,15 +418,15 @@
     {% endif %}
   </section>
 
-  {{ env_panel(env.engine) }}
-
   </div>
 
   <div class="settings-tab" id="tab-review" data-settings-tab role="region" aria-labelledby="tab-review-title">
-    <h2 class="settings-tab-title" id="tab-review-title">Mentor review</h2>
-    <p class="field-hint">How messages wait for a mentor, the approval window, and what Claude is told before every chat.</p>
-  {{ db_panel(by_key.limits) }}
-  {{ db_panel(by_key.window) }}
+    <h2 class="settings-tab-title" id="tab-review-title">Slack chat review</h2>
+    <p class="field-hint">How messages sent to the bot in Slack wait for a mentor, the approval window, and what Claude is told before every chat.</p>
+  {{ db_panel(panels['review-window']) }}
+  {{ db_panel(panels['review-screener']) }}
+  {{ db_panel(panels['review-limits']) }}
+  {{ db_panel(panels['review-always']) }}
   <section class="panel" id="prompts" aria-labelledby="prompts-title">
     <h2 id="prompts-title">System prompt</h2>
     <p class="field-hint">Claude reads these three layers, in this order, before every chat. Students don't see them. Changes apply to the next reply.</p>
@@ -354,94 +449,169 @@
   </div>
 
   <div class="settings-tab" id="tab-people" data-settings-tab role="region" aria-labelledby="tab-people-title">
-    <h2 class="settings-tab-title" id="tab-people-title">Accounts and people</h2>
-    <p class="field-hint">The outside accounts the site uses and the admins.</p>
-  <section class="panel" id="accounts" aria-labelledby="accounts-title">
-    <h2 id="accounts-title">Connected accounts</h2>
-    <ul class="health">
-      {% for row in accounts %}
-      <li>
-        <span class="health-label">{{ row.label }}</span>
-        <span class="pill {{ row.kind }}">{{ row.state }}</span>
-        <span class="health-detail">{{ row.detail }} <a href="{{ row.link }}">Change</a></span>
-      </li>
-      {% endfor %}
-    </ul>
+    <h2 class="settings-tab-title" id="tab-people-title">People</h2>
+    <p class="field-hint">Who can change these settings, and who counts as a mentor right now.</p>
+  {{ db_panel(panels['people']) }}
+  <section class="panel" id="who" aria-labelledby="who-title">
+    <h2 id="who-title">Mentors and admins right now</h2>
+    <p class="field-hint">Read only. Mentors are the people in the review channel in Slack, so to add or remove a mentor, add or remove them from that channel. Admins are set in the box above.{% if people.as_of %} List as of {{ people.as_of }}.{% endif %}</p>
+    {% if not people.known %}<p class="field-hint">Couldn't read the review channel from Slack just now, so only admins are shown.</p>{% endif %}
+    {% if people.rows %}
+    <div class="table-wrap">
+      <table class="audit stack">
+        <thead><tr><th scope="col">Name</th><th scope="col">Role</th></tr></thead>
+        <tbody>
+          {% for r in people.rows %}<tr><td data-label="Name">{{ r.name }}</td><td data-label="Role">{{ r.role }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
   </section>
-  {{ db_panel(by_key.people) }}
   </div>
 
   <div class="settings-tab" id="tab-slack" data-settings-tab role="region" aria-labelledby="tab-slack-title">
     <h2 class="settings-tab-title" id="tab-slack-title">Slack</h2>
-    <p class="field-hint">The Slack app that signs people in, posts review cards and answers DMs.</p>
+    <p class="field-hint">The Slack app that signs people in, posts review cards and answers messages.</p>
   {{ env_panel(env.slack) }}
-
+  {{ db_panel(panels['slack-dms']) }}
   </div>
 
   <div class="settings-tab" id="tab-site" data-settings-tab role="region" aria-labelledby="tab-site-title">
     <h2 class="settings-tab-title" id="tab-site-title">Site and server</h2>
-    <p class="field-hint">The site's address, data, connectors and the Code tab.</p>
-  {% call env_panel(env.site) %}
+    <p class="field-hint">The site's address, name and clock, and how backups and updates work.</p>
+  {% call env_panel(env.site, advanced=['backup_dir', 'update_repo'], advanced_title='Advanced: backups folder, update source, and settings kept only in config.env') %}
       <h3>Kept in config.env only</h3>
-      <p class="field-hint">These are changed by editing {{ config_path }} on the mini PC, then restarting.</p>
+      <p class="field-hint">These are changed by editing {{ config_path }} on the server PC, then restarting.</p>
       <ul class="simple-list">
         {% for name, why in file_only %}<li><span class="mono">{{ name }}</span> <span class="field-hint">{{ why }}</span></li>{% endfor %}
       </ul>
   {% endcall %}
 
-  {{ db_panel(by_key.data) }}
-  <section class="panel" id="connectors" aria-labelledby="connectors-title">
-    <h2 id="connectors-title">Connectors</h2>
-    <p class="field-hint">The team's GitHub repository. Code sessions work in a copy of it, and nothing is pushed back.</p>
-    <form method="post" action="/settings/connectors" novalidate>
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <div class="fields">
-        <div class="field">
-          <label for="github-repo">GitHub repository</label>
-          <input id="github-repo" name="connector_github_repo" value="{{ connectors.repo }}" placeholder="owner/name" autocomplete="off" spellcheck="false" aria-describedby="github-repo-hint">
-          <p class="field-hint" id="github-repo-hint">The team's robot code, as owner/name or its github.com address. Leave it empty to turn GitHub off.</p>
-        </div>
-        <div class="field">
-          <label for="github-branch">Branch</label>
-          <input id="github-branch" name="connector_github_branch" value="{{ connectors.branch }}" placeholder="Default branch" autocomplete="off" spellcheck="false">
-        </div>
-        <div class="field">
-          <label for="github-token">Access token{% if connectors.token_set %} <span class="pill ok">Saved</span>{% endif %}</label>
-          <input id="github-token" name="connector_github_token" type="password" autocomplete="off" spellcheck="false" aria-describedby="github-token-hint" placeholder="{{ 'Leave empty to keep the saved token' if connectors.token_set else 'Only for a private repository' }}">
-          <p class="field-hint" id="github-token-hint">For a private repository, make a fine-grained token on GitHub for just this repository with read-only Contents access. It's saved in config.env on the mini PC and never shown here.</p>
-        </div>
-        {% if connectors.token_set %}
-        <div class="field check">
-          <input type="checkbox" id="remove-token" name="remove_token" value="1">
-          <label for="remove-token">Remove the saved token</label>
-        </div>
-        {% endif %}
-      </div>
-      <div class="form-actions"><button class="button primary" type="submit">Save connectors</button></div>
-    </form>
-  </section>
-
-  {{ db_panel(by_key.code) }}
+  {{ db_panel(panels['site-data']) }}
   </div>
 
   <div class="settings-tab" id="tab-history" data-settings-tab role="region" aria-labelledby="tab-history-title">
-    <h2 class="settings-tab-title" id="tab-history-title">Change history</h2>
-    <p class="field-hint">The last 20 changes made on this page. The audit log has everything.</p>
+    <h2 class="settings-tab-title" id="tab-history-title">History</h2>
+    <p class="field-hint">Recent setting changes, backups, and the old chats from the website.</p>
   <section class="panel" id="history" aria-labelledby="history-title">
     <h2 id="history-title">Change history</h2>
+    <p class="field-hint">The last 20 changes made on this page. The audit log has everything.</p>
     {% if history %}
     <div class="table-wrap">
-      <table class="audit">
+      <table class="audit stack">
         <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Setting</th><th scope="col">Change</th></tr></thead>
         <tbody>
           {% for h in history %}
-          <tr><td>{{ h.time }}</td><td>{{ h.who }}</td><td>{{ h.what }}</td><td>{{ h.change or 'See the audit log for the before and after text.' }}</td></tr>
+          <tr><td data-label="When">{{ h.time }}</td><td data-label="Who">{{ h.who }}</td><td data-label="Setting">{{ h.what }}</td><td data-label="Change">{{ h.change or 'See the audit log for the before and after text.' }}</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
     {% else %}
     <p class="field-hint">Nothing has been changed here yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" id="backups" aria-labelledby="backups-title">
+    <h2 id="backups-title">Backups</h2>
+    {% if backups %}
+    <div class="table-wrap">
+      <table class="audit stack">
+        <thead><tr><th scope="col">File</th><th scope="col">Made</th><th scope="col">Size</th></tr></thead>
+        <tbody>
+          {% for b in backups %}<tr><td class="mono" data-label="File">{{ b.name }}</td><td data-label="Made">{{ b.time }}</td><td data-label="Size">{{ b.size }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="field-hint">No backups yet.</p>
+    {% endif %}
+    <p class="field-hint">Backups are saved in <span class="mono">{{ backup_folder }}</span>. To put one back, run restore.cmd in the SubZero AI folder on the server PC. Backups leave out videos.</p>
+    <form method="post" action="/settings/backup" class="form-actions">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button" type="submit">Back up now</button>
+    </form>
+  </section>
+
+  <section class="panel" id="old-chats" aria-labelledby="old-chats-title">
+    <h2 id="old-chats-title">Old website chats</h2>
+    <p class="field-hint">Before chat moved to Slack, people also chatted on the website. Those chats, their files, old projects and old share links are still stored here. Chats in Slack are never touched by anything on this panel.</p>
+    {% set job = archive.job %}
+    {% if job %}
+    <div class="job {{ job.state }}" role="status" {% if job.running %}data-archive-progress{% endif %}>
+      {% if job.running %}
+      <p><strong>{{ job.word }} is running.</strong> <span data-archive-step>{{ job.step }}</span></p>
+      <progress max="100" value="{{ job.percent }}" aria-label="Progress" data-archive-bar>{{ job.percent }}%</progress>
+      <p class="field-hint">Started by {{ job.by }}. This page updates by itself. You can leave it open or come back later.</p>
+      {% else %}
+      <p><span class="pill {{ 'ok' if job.state == 'done' else 'bad' }}">{{ 'Finished' if job.state == 'done' else 'Stopped' }}</span> {{ job.word }} by {{ job.by }}, {{ job.when }}. {{ job.message }}</p>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if archive.chats or archive.project_files %}
+    <ul class="facts">
+      <li><strong>{{ archive.chats }}</strong> old website chat{{ 's' if archive.chats != 1 else '' }}, with {{ archive.messages }} message{{ 's' if archive.messages != 1 else '' }}</li>
+      <li><strong>{{ archive.files }}</strong> attached file{{ 's' if archive.files != 1 else '' }}, {{ archive.size }} in all{% if archive.videos %} ({{ archive.videos }} video{{ 's' if archive.videos != 1 else '' }}, {{ archive.video_size }}){% endif %}</li>
+      {% if archive.oldest %}<li>From {{ archive.oldest }} to {{ archive.newest }}</li>{% endif %}
+      <li>{{ archive.projects }} old project{{ 's' if archive.projects != 1 else '' }} ({{ archive.project_files }} file{{ 's' if archive.project_files != 1 else '' }}) and {{ archive.shares }} old share link{{ 's' if archive.shares != 1 else '' }}</li>
+    </ul>
+
+    <h3>Download archive</h3>
+    <p class="field-hint">Saves everything above as one zip file in the backups folder: a page for each chat you can open in a browser, the same data as JSON, the files, the projects and the share-link records. It's built in the background, so it can take a while for a lot of files.</p>
+    <form method="post" action="/settings/archive/start" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if archive.videos %}
+      <div class="field check">
+        <input type="checkbox" id="archive-videos" name="include_videos" value="1" aria-describedby="archive-videos-hint">
+        <label for="archive-videos">Include the {{ archive.videos }} video{{ 's' if archive.videos != 1 else '' }} ({{ archive.video_size }})</label>
+        <p class="field-hint" id="archive-videos-hint">Off by default because videos make the file very large. Backups leave videos out too, so tick this before deleting if you want to keep them.</p>
+      </div>
+      {% endif %}
+      <div class="form-actions"><button class="button primary" type="submit" {% if job and job.running %}disabled{% endif %}>Build the archive</button></div>
+    </form>
+    {% else %}
+    <p class="field-hint">There are no old website chats stored.</p>
+    {% endif %}
+
+    <h3>Archives</h3>
+    {% if archive.archives %}
+    <div class="table-wrap">
+      <table class="audit stack">
+        <thead><tr><th scope="col">File</th><th scope="col">Made</th><th scope="col">Size</th><th scope="col">Actions</th></tr></thead>
+        <tbody>
+          {% for a in archive.archives %}
+          <tr>
+            <td class="mono" data-label="File">{{ a.name }}</td><td data-label="Made">{{ a.time }}</td><td data-label="Size">{{ a.size }}</td>
+            <td data-label="Actions">
+              <form method="post" action="/settings/archives/{{ a.name }}/delete" class="inline-actions">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <a class="button small" href="/settings/archives/{{ a.name }}">Download</a>
+                <button class="button small reject" type="submit" data-confirm="Delete {{ a.name }}? Its contents can't be rebuilt once the old chats are deleted.">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="field-hint">No archives yet.</p>
+    {% endif %}
+
+    {% if archive.chats or archive.project_files %}
+    <h3>Delete old website chats</h3>
+    <p class="field-hint">Deletes all {{ archive.chats }} old website chats with their messages and files, and the files of old projects. A backup is made first, and nothing is deleted if it fails. Chats in Slack, their review cards and their files are not touched. Any review card still waiting for one of these chats is marked as deleted by an admin in Slack. Download an archive first if you want to keep a readable copy. This can't be undone, except by restoring the backup.</p>
+    <form method="post" action="/settings/archive/delete-old" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="delete-confirm">Type {{ archive.confirm_word }} to confirm</label>
+        <input id="delete-confirm" name="confirm" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="delete-confirm-hint">
+        <p class="field-hint" id="delete-confirm-hint">Capital letters, exactly as shown.</p>
+      </div>
+      <div class="form-actions"><button class="button reject" type="submit" {% if job and job.running %}disabled{% endif %} data-confirm="Make a backup and then delete all {{ archive.chats }} old website chats? This can't be undone.">Delete old website chats</button></div>
+    </form>
     {% endif %}
   </section>
   </div>

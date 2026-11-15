@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Profile and preferences · {{ settings.app_name }}{% endblock %}
+{% block title %}Profile · {{ settings.app_name }}{% endblock %}
 {% block main %}
 <section class="page narrow">
-  <h1>Profile and preferences</h1>
+  <h1>Profile</h1>
   {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
   <section class="panel" aria-labelledby="account-title">
     <h2 id="account-title">Your account</h2>
@@ -14,28 +14,19 @@
       </div>
     </div>
   </section>
-  {% if usage %}
-  <section class="panel" aria-labelledby="usage-title">
-    <h2 id="usage-title">Today's messages</h2>
-    <ul class="health">
-      <li><span class="health-label">Approved today</span><span class="pill plain">{{ usage.approved }} of {{ usage.daily }}</span><span class="health-detail">The count starts again at midnight.</span></li>
-      <li><span class="health-label">Waiting now</span><span class="pill plain">{{ usage.waiting }} of {{ usage.max_waiting }}</span><span class="health-detail">How many of your messages can wait for a mentor at once.</span></li>
-    </ul>
-  </section>
-  {% endif %}
   <section class="panel" aria-labelledby="prefs-title">
-    <h2 id="prefs-title">Preferences</h2>
+    <h2 id="prefs-title">Appearance</h2>
     <form method="post" action="/profile">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="fields">
         <fieldset class="field">
-          <legend>Appearance</legend>
+          <legend>Theme</legend>
           {% for value, label in (('system', 'Match this device'), ('light', 'Light'), ('dark', 'Dark')) %}
           <label class="radio"><input type="radio" name="theme" value="{{ value }}" {% if viewer.theme == value %}checked{% endif %}> {{ label }}</label>
           {% endfor %}
         </fieldset>
       </div>
-      <div class="form-actions"><button class="button primary" type="submit">Save preferences</button></div>
+      <div class="form-actions"><button class="button primary" type="submit">Save appearance</button></div>
     </form>
   </section>
 </section>

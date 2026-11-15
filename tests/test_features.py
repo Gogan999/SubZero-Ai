@@ -58,7 +58,7 @@ class ProfileTest(FeatureTest):
 
     def test_profile_is_appearance_only(self):
         page = self.ava.get("/profile").text
-        self.assertIn("Approved today", page, "students see how many messages they have left")
+        self.assertNotIn("Approved today", page, "the chat usage panel is gone")
         self.assertNotIn("Approved today", self.kim.get("/profile").text)
         for gone in ("default_subteam", "notify_dm", "subteam", "Slack messages when a mentor"):
             self.assertNotIn(gone, page)
@@ -178,10 +178,12 @@ class CodeTest(FeatureTest):
         self.h.idle()
 
     def test_mentors_only(self):
-        self.assertEqual(self.ava.get("/code").status_code, 403)
+        home = self.ava.get("/code")
+        self.assertIn("A mentor has to turn Code on for students.", home.text)
+        self.assertNotIn('id="code-task"', home.text)
         self.assertEqual(self.ava.post("/code", {"task": "x"}).status_code, 403)
         self.h.services.settings.connector_github_repo = ""
-        self.assertIn("Connect the repository first", self.kim.get("/code").text)
+        self.assertIn("No repository is set up yet", self.kim.get("/code").text)
 
     def test_every_change_and_command_waits_for_a_mentor(self):
         sid = self.begin()

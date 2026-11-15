@@ -1,36 +1,41 @@
 {% extends "base.html" %}
-{% block title %}Using {{ settings.app_name }} responsibly{% endblock %}
+{% block title %}How {{ settings.app_name }} works{% endblock %}
 {% block main %}
 <section class="page narrow">
-  <h1>Using {{ settings.app_name }} responsibly</h1>
+  <h1>How {{ settings.app_name }} works</h1>
+  <p class="fine">Powered by Claude, an AI made by Anthropic. Claude can be wrong, so check anything important with a mentor.</p>
   <div class="prose">
-  <p>{{ settings.app_name }} lets the team's students ask an AI for help with robot code, CAD, fabrication, physics, and materials, with a mentor checking every message first.</p>
+  <h2>What Code does</h2>
+  <p>Code lets Claude work on the team's robot code. You describe a task, like "the arm overshoots at high speed, find out why and fix it". Claude works on its own copy of the team's repository: it reads the files, makes changes, and can run builds and tests. Nothing is ever pushed to GitHub. You can read every step Claude takes, as it happens.</p>
 
-  <h2>What it's for</h2>
-  <p>Use it to understand things: why code behaves the way it does, how a mechanism works, which material fits a part, how to check a calculation. The AI is set up to teach, so expect explanations and questions back, not just finished answers.</p>
-
-  <h2>How approval works</h2>
+  <h2>What a mentor approves</h2>
   <ul>
-    <li>When you send a message, it waits for a mentor. You'll hear back in your Slack thread with the bot when they act on it.</li>
-    <li>A mentor can approve it, edit it before Claude sees it, reject it with a reason, or follow up with you in person.</li>
-    {% if settings.approval_window_minutes %}
-    <li>Once a mentor approves a message, your follow-ups in that chat go straight to Claude while you keep chatting. If you stop for {{ settings.approval_window_minutes }} minute{{ 's' if settings.approval_window_minutes != 1 }}, the next one waits for a mentor again.{% if settings.screener_enabled %} A small AI model checks each of those follow-ups first, and anything it isn't sure about waits for a mentor.{% endif %} Mentors can see every message you send.</li>
-    {% else %}
-    <li>Every follow-up message needs its own approval.</li>
-    {% endif %}
-    <li>Mentors' own messages go straight to Claude.</li>
+    <li>A mentor reads every student request before Claude starts. Until then, nothing runs.</li>
+    <li>Your follow-up questions in a session also go to a mentor first.</li>
+    <li>If "Plan first" is ticked, Claude writes a plan and waits. A mentor approves the plan before Claude changes anything.</li>
+    <li>A mentor can decline at any step and say why. You will see their note.</li>
+    <li>Mentors can stop a session at any time.</li>
   </ul>
+
+  <h2>What the sandbox is</h2>
+  <p>Each session gets its own sandbox: a separate virtual computer that Claude uses and nobody else shares. It can only reach a short list of websites that robot builds need, like the places Gradle downloads from. It is deleted after a while, so don't keep anything there. Claude's work is saved as a patch before the sandbox goes away.</p>
+
+  <h2>How the results come back</h2>
+  <p>When Claude is done, the changes are saved as a patch, a file that lists exactly which lines were added and removed. A mentor looks at the changes first. When a mentor releases them, you can read them on the session page and download the patch. To use it, apply it in your own copy of the repository with <span class="mono">git apply</span>, then test it on the robot before you commit it.</p>
+
+  <h2>Chatting with Claude</h2>
+  <p>To ask Claude a question that isn't about code in the repository, message the bot in Slack. Messages from students wait for a mentor to approve them.{% if settings.approval_window_minutes %} Once a mentor approves a message, your follow-ups in that chat go straight to Claude while you keep chatting. If you stop for {{ settings.approval_window_minutes }} minute{{ 's' if settings.approval_window_minutes != 1 }}, the next one waits for a mentor again.{% if settings.screener_enabled %} A small AI model checks each of those follow-ups first, and anything it isn't sure about waits for a mentor.{% endif %}{% endif %} You hear back in your Slack thread.</p>
 
   <h2>Who can see what</h2>
   <ul>
-    <li>Mentors can read every message you send and every reply, including messages that are waiting for review and ones that were rejected.</li>
-    <li>Other students can't read your chats.</li>
+    <li>Mentors can read every Slack chat with the bot, including messages that are waiting for review and ones that were rejected. They can also read every Code session.</li>
+    <li>Other students can't read your chats or your Code sessions.</li>
     <li>Nothing here is a private conversation. Don't share personal information like your address or phone number.</li>
-    <li>Your chats are stored on the team's server. Each approved message and the chat so far are sent over the internet to the company whose AI answers. That is usually Anthropic (Claude), but the team can also use OpenAI, Google, or OpenRouter, which passes messages on to the model's maker. Your name and Slack details are never sent. Each company has its own rules for how long it keeps messages; mentors can tell you which one is in use.</li>
+    <li>What you send, and what Claude does for you, is stored on the team's server. It is also sent over the internet to the company whose AI answers, which is usually Anthropic (Claude). Your name and Slack details are never sent. Mentors can tell you how long that company keeps messages.</li>
   </ul>
 
   <h2>Check before you trust it</h2>
-  <p>The AI can be wrong. Confirm load ratings, material limits, wiring, and anything else safety-critical with a mentor before it goes on the robot. Never use an AI answer as a reason to skip shop safety rules.</p>
+  <p>Claude can be wrong. Read the changes before you use them, and confirm anything safety-critical with a mentor before it goes on the robot. Never use an AI answer as a reason to skip shop safety rules.</p>
 
   <h2>If something's wrong</h2>
   <p>If you're going through something hard, talk to a parent, a mentor, or your school counselor. In the US you can call or text 988 any time, and call 911 in an emergency.</p>

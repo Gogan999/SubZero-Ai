@@ -122,6 +122,8 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual((row.status, row.title), (OK, "The sandbox network is locked down"))
         self.assertIn("szsandbox-internal", row.detail)
         self.assertIn("Get-VMSwitch -Name 'szsandbox-internal'", seen[0])
+        self.assertIn("szsandbox-allow-gateway", seen[0], "the gateway rule is checked too")
+        self.assertIn("-contains '3129')", seen[0])
 
     def test_a_problem_in_the_sandbox_network_is_a_failure_with_the_fix(self):
         settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx", sandbox_proxy_port=8080)

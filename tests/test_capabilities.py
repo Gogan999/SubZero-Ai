@@ -54,7 +54,7 @@ class CodeModelTest(Base):
         self.h.services.settings.model_default = OTHER
         self.h.services.settings.model_hard = OTHER
         page = self.kim.get("/code").text
-        self.assertIn("Code sessions need a Claude model", page)
+        self.assertIn("needs a Claude model", page)
         self.assertNotIn('name="task"', page)
         with mock.patch.object(self.h.services.code, "tasks"):
             resp = self.kim.post("/code", {"task": "Fix it", "model": OTHER})

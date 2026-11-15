@@ -9,14 +9,15 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import __version__, model_check, saved_settings, server_settings, setup_flow
+from . import __version__, archive, model_check, saved_settings, server_settings, setup_flow
 from .ai_backend import resolve_backend
 from .bridge_login import LoginError, login_env, looks_like_code
 from .backup import list_backups, size_text
@@ -48,6 +49,7 @@ from .web_common import (
     page,
     render,
     services,
+    waited,
 )
 
 log = logging.getLogger("subzero.admin")
@@ -57,6 +59,13 @@ CHANNEL_RE = server_settings.CHANNEL_RE
 
 def flash(request: Request, text: str) -> None:
     request.session["flash"] = text
+
+
+# The tab each config.env box is on
+ENV_TABS = {"engine": "ai", "site": "site", "slack": "slack"}
+
+
+BRIDGE_WHERE = "Claude subscription box, AI and keys tab"
 
 
 def _ago(store, iso: str | None) -> str:
@@ -107,7 +116,7 @@ def health_rows(s: Services) -> list[dict[str, Any]]:
     if newer:
         rows.append({"label": "Version", "state": "Update available", "kind": "unknown",
                      "detail": f"You have {__version__}. Version {newer['version']} is out. "
-                               "On the mini PC, run update.cmd in the SubZero AI folder.",
+                               "On the server PC, open the SubZero AI folder and run update.cmd.",
                      "link": newer.get("url")})
     else:
         rows.append({"label": "Version", "state": __version__, "kind": "plain", "detail": "Up to date as of the "
@@ -154,39 +163,205 @@ KEY_HELP = {
 }
 # The team subscription token for Code sessions (from `claude setup-token`). It is saved with the API keys below.
 CODE_KEY, CODE_KEY_ENV = "code_subscription_token", "CODE_SUBSCRIPTION_TOKEN"
+# Shown on the Code tab whenever the page is drawn, whichever sign-in is chosen. It isn't a setting and can't be hidden.
+CODE_SUBSCRIPTION_WARNING = ("Team subscription is for testing only. Anthropic's terms don't allow sharing a "
+                             "subscription through an app, and they can limit the account without notice. Use an API "
+                             "key for regular use.")
 KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY",
            "openrouter": "OPENROUTER_API_KEY"}
 
 
+# --------------------------------------------------------------------------- tabs and boxes
+TAB_NAMES = {"overview": "Overview", "code": "Code", "ai": "AI and keys", "review": "Slack chat review",
+             "people": "People", "slack": "Slack", "site": "Site and server", "history": "History"}
+
+
+@dataclass(frozen=True)
+class Panel:
+    """One box of database settings on the Settings page: a form that saves some of a section's fields."""
+
+    id: str
+    tab: str
+    section: str  # the saved_settings section these fields belong to (the form posts to /settings/<section>)
+    title: str
+    fields: tuple[str, ...]
+    help: str = ""
+
+
+PANELS: tuple[Panel, ...] = (
+    Panel("code-engine", "code", "code", "Code engine", ("code_engine",),
+          "Which engine runs Code sessions. The new engine lets Claude use a full shell inside the session's own "
+          "sandbox. The classic engine is the older one, kept as the fallback: a mentor approves each change and "
+          "command, and it can run without a sandbox. If the new engine ever misbehaves, switch back here. Sessions "
+          "already started keep the engine they began with."),
+    Panel("code-auth", "code", "code", "Code sign-in", ("code_auth",),
+          "How Code signs in to Anthropic: with the team's API key (AI and keys tab), or with a Claude subscription "
+          "token, for testing only."),
+    Panel("code-students", "code", "code", "Students and the sandbox",
+          ("code_student_access", "code_sandbox", "sandbox_base_image"),
+          "Students need the Hyper-V sandbox. Every student request still waits for a mentor to approve it."),
+    Panel("code-plan", "code", "code", "How sessions work",
+          ("code_plan_first_students", "code_plan_first_mentors", "code_web_tools_students",
+           "code_web_tools_mentors", "code_sub_agents"),
+          "The starting choices for new sessions, who may search the web, and helpers."),
+    Panel("code-limits", "code", "code", "Cost and capacity",
+          ("code_cap_student_usd", "code_cap_mentor_usd", "code_max_running", "code_agent_max_turns",
+           "code_keep_days"),
+          "Spending caps, how many sessions work at once, and how long finished sessions keep their files."),
+    Panel("code-student-limits", "code", "code", "Student limits",
+          ("code_student_max_open", "code_student_daily_sessions", "code_student_max_turns",
+           "code_student_command_timeout")),
+    Panel("code-classic", "code", "code", "Classic engine only",
+          ("code_student_free_rein", "code_mentor_free_rein", "code_sandbox_commands", "code_commands",
+           "code_command_timeout"),
+          "These settings only matter when the Code engine above is set to Classic engine."),
+    Panel("code-advanced", "code", "code", "Advanced sandbox settings",
+          ("sandbox_switch", "sandbox_host_address", "sandbox_proxy_port", "sandbox_gateway_port",
+           "sandbox_allowed_hosts", "sandbox_allowed_ports", "sandbox_proxy_mb_limit", "sandbox_proxy_max_per_sandbox",
+           "sandbox_guest_sudo", "sandbox_memory_mb", "sandbox_cpus", "sandbox_disk_gb", "sandbox_disk_cap_gb",
+           "sandbox_min_free_gb", "sandbox_ttl_hours", "sandbox_max_sessions"),
+          "The sandbox network, the proxy and gateway ports, and each sandbox's memory, processors and disk. The "
+          "standard values work for most teams."),
+    Panel("ai-providers", "ai", "claude", "AI providers", ("ai_providers",)),
+    Panel("claude", "ai", "claude", "Models and effort",
+          ("model_default", "model_hard", "model_titles", "model_check_judge", "effort_default", "max_tokens_chat")),
+    Panel("review-limits", "review", "limits", "Limits and review",
+          ("limit_pending_per_student", "limit_approved_per_day", "reminder_minutes", "mentors_need_approval")),
+    Panel("review-window", "review", "window", "Approval window", ("approval_window_minutes",)),
+    Panel("review-screener", "review", "window", "Screener", ("screener_enabled", "model_screener")),
+    Panel("review-always", "review", "window", "Students who always wait", ("always_review_slack_ids",)),
+    Panel("people", "people", "people", "Admins", ("admin_slack_ids",)),
+    Panel("slack-dms", "slack", "limits", "Messages to the bot in Slack", ("slack_dms_enabled",)),
+    Panel("site-data", "site", "data", "Data and backups", ("retention_days", "backup_keep_days")),
+)
+PANEL_BY_ID = {p.id: p for p in PANELS}
+
+# Boxes and tabs that used to have these addresses (#name) and where they are now, so an old link or bookmark lands
+# on the right tab. Any old address not listed here still exists on the page under the same name.
+LEGACY_ANCHORS = {
+    "code": "code-engine", "limits": "review-limits", "window": "review-window",
+    "data": "site-data",
+}
+
+
+def anchors_context() -> dict[str, str]:
+    return dict(LEGACY_ANCHORS)
+
+
+def _field_item(s: Services, f: saved_settings.Field, errors: dict[str, str] | None,
+                submitted: dict[str, str] | None) -> dict[str, Any]:
+    value = (submitted or {}).get(f.name)
+    if value is None:
+        value = saved_settings.current(s.settings, f.name)
+    item: dict[str, Any] = {"field": f, "value": value, "error": (errors or {}).get(f.name)}
+    if f.kind == "model":
+        # A dropdown of the models that can be picked here, plus Other for a model id not in the list
+        options = selectable_models(s, purpose=MODEL_PURPOSE[f.name], include_unchecked=True)
+        listed = {o["id"] for o in options}
+        chosen = normalize_model_id(value)
+        item.update(groups=group_options(options), other=saved_settings.OTHER_MODEL,
+                    pick=chosen if chosen in listed else saved_settings.OTHER_MODEL,
+                    typed="" if chosen in listed else value)
+    elif f.kind == "ids":
+        item["people"] = _names_for(s, getattr(s.settings, f.name))
+    elif f.kind == "providers":
+        on = set(value.split())
+        item["choices"] = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "on": p in on,
+                            "help": saved_settings.PROVIDER_HELP.get(p, "")} for p in PROVIDERS]
+    return item
+
+
+def panels_context(s: Services, errors: dict[str, str] | None = None,
+                   submitted: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
+    """Every database settings box, by id, with its fields ready to show."""
+    out = {}
+    for panel in PANELS:
+        fields = [saved_settings.FIELDS[name] for name in panel.fields]
+        out[panel.id] = {"id": panel.id, "tab": panel.tab, "section": panel.section, "title": panel.title,
+                         "help": panel.help, "action": f"/settings/{panel.section}",
+                         "fields": [_field_item(s, f, errors, submitted) for f in fields]}
+    return out
+
+
+def waiting_context(s: Services) -> dict[str, Any]:
+    """Messages that are waiting for a mentor right now, for the Overview."""
+    pending = s.store.pending_messages()
+    oldest = min((m["created_at"] for m in pending), default="")
+    return {"count": len(pending), "oldest": waited(oldest) if oldest else "",
+            "can_post": s.slack is not None and bool(s.settings.slack_approvals_channel)}
+
+
+async def directory_ids(s: Services) -> set[str] | None:
+    """The mentors in the review channel (None when Slack can't be asked). Never blocks the page for long."""
+    if s.slack is None or not s.settings.slack_approvals_channel:
+        return None
+    try:
+        return set(await asyncio.wait_for(s.directory.mentor_ids(), timeout=3))
+    except Exception:
+        return None
+
+
+def people_context(s: Services, mentor_ids: set[str] | None) -> dict[str, Any]:
+    """Who is a mentor or an admin right now, by name, for the read-only list on the People tab."""
+    admins = set(s.settings.admin_slack_ids)
+    rows = []
+    for slack_id in sorted(admins | (mentor_ids or set())):
+        user = s.store.user_by_slack_id(slack_id)
+        rows.append({"name": user["name"] if user else f"{slack_id} (hasn't signed in yet)",
+                     "role": "Admin" if slack_id in admins else "Mentor"})
+    rows.sort(key=lambda r: (r["role"] != "Admin", r["name"].lower()))
+    fetched = getattr(s.directory, "_fetched_at", None)  # when the directory last heard from Slack (monotonic)
+    as_of = ""
+    if mentor_ids is not None and fetched is not None:
+        taken = datetime.now(timezone.utc) - timedelta(seconds=max(time.monotonic() - fetched, 0))
+        as_of = fmt_time(s.store, taken.isoformat(timespec="seconds"))
+    return {"rows": rows, "as_of": as_of, "known": bool(as_of) or not s.settings.slack_approvals_channel}
+
+
+def directory_warning(s: Services) -> str:
+    """The mentor list's warning, if the directory has one (the directory may not have the check yet)."""
+    check = getattr(s.directory, "stale_warning", None)
+    if not callable(check):
+        return ""
+    try:
+        return str(check() or "")
+    except Exception:
+        log.exception("The mentor list check failed")
+        return ""
+
+
+def _date(s: Services, iso: str) -> str:
+    local = s.store.local_time(iso)
+    return f"{local:%b} {local.day}, {local:%Y}" if local else ""
+
+
+def archive_context(s: Services) -> dict[str, Any]:
+    """The Old website chats box in History: how many there are, the running job, and the archives made."""
+    summary = archive.summarize(s.db)
+    job = archive.job_state(s.db)
+    if job:
+        job["running"] = job.get("state") == "running"
+        job["percent"] = min(100, int(100 * job.get("done", 0) / max(job.get("total", 1), 1)))
+        job["word"] = "Archive" if job.get("kind") == "archive" else "Delete"
+        job["when"] = fmt_time(s.store, job.get("finished_at") or job.get("started_at"))
+    return {
+        "chats": summary.chats, "messages": summary.messages, "files": summary.files,
+        "size": size_text(summary.file_bytes), "videos": summary.videos, "video_size": size_text(summary.video_bytes),
+        "projects": summary.projects, "project_files": summary.project_files, "shares": summary.shares,
+        "oldest": _date(s, summary.oldest), "newest": _date(s, summary.newest), "job": job,
+        "confirm_word": archive.CONFIRM_WORD,
+        "archives": [{"name": a.name, "time": f"{a.created:%b} {a.created.day}, {a.created:%Y}, "
+                                              f"{a.created:%I:%M %p}".replace(" 0", " "), "size": size_text(a.size)}
+                     for a in archive.list_archives(s.settings)]}
+
+
 def settings_context(s: Services, errors: dict[str, str] | None = None,
-                     submitted: dict[str, str] | None = None, env_section: str = "") -> dict[str, Any]:
+                     submitted: dict[str, str] | None = None, env_section: str = "",
+                     mentor_ids: set[str] | None = None) -> dict[str, Any]:
     """Everything the Settings page shows. `env_section` names a config.env section whose save failed, so
-    `errors` and `submitted` belong to it instead of the database sections."""
+    `errors` and `submitted` belong to it instead of the database boxes."""
     db_errors, db_submitted = (None, None) if env_section else (errors, submitted)
-    sections = []
-    for key, (title, fields) in saved_settings.SECTIONS.items():
-        items = []
-        for f in fields:
-            value = (db_submitted or {}).get(f.name)
-            if value is None:
-                value = saved_settings.current(s.settings, f.name)
-            item = {"field": f, "value": value, "error": (db_errors or {}).get(f.name)}
-            if f.kind == "model":
-                # A dropdown of the models that can be picked here, plus Other for a model id not in the list
-                options = selectable_models(s, purpose=MODEL_PURPOSE[f.name], include_unchecked=True)
-                listed = {o["id"] for o in options}
-                chosen = normalize_model_id(value)
-                item.update(groups=group_options(options), other=saved_settings.OTHER_MODEL,
-                            pick=chosen if chosen in listed else saved_settings.OTHER_MODEL,
-                            typed="" if chosen in listed else value)
-            elif f.kind == "ids":
-                item["people"] = _names_for(s, getattr(s.settings, f.name))
-            elif f.kind == "providers":
-                on = set(value.split())
-                item["choices"] = [{"id": p, "label": saved_settings.PROVIDER_LABELS[p], "on": p in on,
-                                    "help": saved_settings.PROVIDER_HELP.get(p, "")} for p in PROVIDERS]
-            items.append(item)
-        sections.append({"key": key, "title": title, "fields": items})
+    panels = panels_context(s, db_errors, db_submitted)
     prompts = []
     for name, label, help_text in saved_settings.PROMPT_LAYERS:
         text, custom = saved_settings.prompt_layer(s.settings, name)
@@ -205,7 +380,7 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
         history.append({"time": fmt_time(s.store, row["created_at"]), "who": row["actor_name"] or "Setup",
                         "what": what, "change": change})
     backups = [{"name": b.name, "time": f"{b.created:%b} {b.created.day}, {b.created:%I:%M %p}".replace(" 0", " "),
-                "size": size_text(b.size)} for b in list_backups(s.settings)[:5]]
+                "size": size_text(b.size)} for b in list_backups(s.settings)[:8]]
     connectors = {"repo": s.settings.connector_github_repo, "branch": s.settings.connector_github_branch,
                   "token_set": bool(s.settings.connector_github_token)}
     ai_keys = []
@@ -218,14 +393,25 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
     code_key = {"field": CODE_KEY, "set": bool(s.settings.code_subscription_token),
                 "hint": server_settings.secret_hint(s.settings.code_subscription_token),
                 "locked": CODE_KEY_ENV in os.environ}
-    return {"health": health_rows(s), "sections": sections, "ai_keys": ai_keys, "code_key": code_key,
+    return {"health": health_rows(s), "panels": panels, "ai_keys": ai_keys, "code_key": code_key,
+            "tabs": TAB_NAMES, "anchors": anchors_context(), "code_warning": CODE_SUBSCRIPTION_WARNING,
+            "subscription_on": s.settings.code_auth == "subscription",
+            "waiting": waiting_context(s), "people": people_context(s, mentor_ids),
+            "directory_warning": directory_warning(s), "archive": archive_context(s),
             "safety": safety_context(s),
             "prompts": prompts, "history": history,
             "backups": backups, "backup_folder": str(s.settings.backups_path), "connectors": connectors,
             "env_sections": env_sections_context(s, env_section, errors, submitted),
-            "accounts": accounts_context(s), "checks": checks_context(s), "bridge": bridge_context(s), "file_only": server_settings.FILE_ONLY,
+            "accounts": accounts_context(s), "checks": checks_context(s), "bridge": bridge_context(s),
+            "file_only": server_settings.FILE_ONLY,
             "pending": [server_settings.ENV_FIELDS[n].label for n in s.pending_restart],
             "config_path": str(s.settings.config_path)}
+
+
+async def full_context(s: Services, errors: dict[str, str] | None = None, submitted: dict[str, str] | None = None,
+                       env_section: str = "") -> dict[str, Any]:
+    """settings_context plus the answer from Slack about who the mentors are."""
+    return settings_context(s, errors, submitted, env_section, mentor_ids=await directory_ids(s))
 
 
 def env_sections_context(s: Services, failed_section: str = "", errors: dict[str, str] | None = None,
@@ -349,7 +535,7 @@ async def settings_page(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     await learn_workspace(s)
     return render(request, "settings.html", viewer, flash=request.session.pop("flash", None),
-                  **settings_context(s))
+                  **await full_context(s))
 
 
 @page(require="admin")
@@ -359,17 +545,27 @@ async def save_section(request: Request, viewer: Viewer) -> Response:
     if section not in saved_settings.SECTIONS:
         return error_page(request, viewer, 404, "Not found", "That settings section doesn't exist.")
     form = saved_settings.model_choices_form(await request.form(), section)
+    # A box on the page saves only its own fields. A form without a box name saves the whole section.
+    panel = PANEL_BY_ID.get(str(form.get("_panel", "") or ""))
+    if panel is not None and panel.section != section:
+        panel = None
+    only = set(panel.fields) if panel is not None else None
     values, errors = saved_settings.validate(section, form, actor_slack_id=viewer.slack_user_id,
-                                                    settings=s.settings, db=s.db)
+                                             settings=s.settings, db=s.db, only=only)
     if errors:
-        submitted = {f.name: saved_settings.form_text(form, f.name) for f in saved_settings.SECTIONS[section][1]}
+        submitted = {f.name: saved_settings.form_text(form, f.name) for f in saved_settings.SECTIONS[section][1]
+                     if only is None or f.name in only}
         return render(request, "settings.html", viewer, status_code=400,
                       flash="Some settings need fixing. They're marked below.",
-                      **settings_context(s, errors, submitted))
+                      **await full_context(s, errors, submitted))
     changed = saved_settings.save(s.db, s.settings, values, viewer.id)
     if "ai_providers" in changed:
         use_new_bridge(s)
         refresh_model_names(s)
+    if panel is not None:
+        where = f"on the {TAB_NAMES[panel.tab]} tab"
+        flash(request, f"Saved {panel.title} {where}." if changed else f"Nothing changed in {panel.title} {where}.")
+        return RedirectResponse(f"/settings#{panel.id}", status_code=303)
     title = saved_settings.SECTIONS[section][0]
     title = "Claude settings" if section == "claude" else title.lower()
     flash(request, f"Saved {title}." if changed else f"Nothing changed in {title}.")
@@ -419,6 +615,10 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
     """Save API keys for the providers that are turned on. They go in config.env and are never shown again."""
     s = services(request)
     form = await request.form()
+    # The token box on the Code tab posts here too, and comes back to itself
+    on_code = form.get("back") == "code"
+    anchor, where = (("code-auth", "Code sign-in box, Code tab") if on_code
+                     else ("ai-keys", "API keys box, AI and keys tab"))
     typed = {p: str(form.get(name, "") or "").strip() for p, name in KEY_SETTINGS.items()}
     typed = {p: key for p, key in typed.items() if key}
     removed = [p for p in KEY_SETTINGS if form.get(f"remove_{p}") == "1" and getattr(s.settings, KEY_SETTINGS[p])
@@ -442,7 +642,7 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
             break
         if provider not in s.settings.ai_providers:
             problem = (f"{saved_settings.PROVIDER_LABELS[provider]} isn't turned on. "
-                       "Turn it on under Claude settings first.")
+                       "Turn it on under AI providers (AI and keys tab) first.")
         else:
             problem = key_problem(provider, key)
         if problem:
@@ -450,8 +650,8 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
     if not typed and not removed and not code_typed and not code_removed and not problem:
         problem = "Paste a key into at least one box."
     if problem:
-        flash(request, f"Keys weren't saved. {problem}")
-        return RedirectResponse("/settings#ai-keys", status_code=303)
+        flash(request, f"Keys weren't saved. {problem} ({where}.)")
+        return RedirectResponse(f"/settings#{anchor}", status_code=303)
     updates = {**{KEY_ENV[p]: key for p, key in typed.items()}, **{KEY_ENV[p]: "" for p in removed}}
     if code_typed or code_removed:
         updates[CODE_KEY_ENV] = code_typed  # empty when removed
@@ -477,24 +677,21 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
         parts.append("Saved the team subscription token for Code. It works from the next request.")
     if code_removed:
         parts.append("Removed the team subscription token for Code.")
-    flash(request, " ".join(parts))
-    return RedirectResponse("/settings#ai-keys", status_code=303)
+    flash(request, " ".join(parts) + f" ({where}.)")
+    return RedirectResponse(f"/settings#{anchor}", status_code=303)
 
 
 GITHUB_URL_RE = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/\s]+/[^/#?\s]+)")
 
 
-@page(require="admin")
-async def save_connectors(request: Request, viewer: Viewer) -> Response:
-    """The GitHub repository Code works in. The token goes in config.env with the other secrets and is never
-    shown again."""
-    s = services(request)
-    form = {k: str(v).strip() for k, v in (await request.form()).items() if isinstance(v, str)}
+def _connector_form(s: Services, form: dict[str, str]) -> tuple[str, str, str, str]:
+    """Read the repository box: (repository, branch, token, problem). Checks the shape only; GitHub isn't asked."""
     repo, branch = form.get("connector_github_repo", ""), form.get("connector_github_branch", "")
     match = GITHUB_URL_RE.match(repo)
     if match:
         repo = match.group(1).removesuffix(".git")
-    token = "" if form.get("remove_token") == "1" else (form.get("connector_github_token") or s.settings.connector_github_token)
+    token = ("" if form.get("remove_token") == "1"
+             else (form.get("connector_github_token") or s.settings.connector_github_token))
     problem = ""
     if any("\n" in value or "\r" in value for value in form.values()):
         problem = "A value has a line break in it. Paste it again on one line."
@@ -504,28 +701,62 @@ async def save_connectors(request: Request, viewer: Viewer) -> Response:
         problem = "That branch name has characters GitHub doesn't allow. Leave it empty for the default branch."
     elif token and not token.startswith(("github_pat_", "ghp_")):
         problem = "A GitHub token starts with github_pat_ (fine-grained) or ghp_. Copy it again."
-    elif repo:
+    return repo, branch, token, problem
+
+
+CONNECTORS_WHERE = "Repository and branch box, Code tab"
+
+
+@page(require="admin")
+async def save_connectors(request: Request, viewer: Viewer) -> Response:
+    """The GitHub repository Code works in. The token goes in config.env with the other secrets and is never
+    shown again."""
+    s = services(request)
+    form = {k: str(v).strip() for k, v in (await request.form()).items() if isinstance(v, str)}
+    repo, branch, token, problem = _connector_form(s, form)
+    if not problem and repo:
         try:
             await asyncio.to_thread(s.github.check, repo, branch, token)
         except ConnectorError as exc:
             problem = f"Couldn't read {repo}: {exc}"
     if problem:
-        flash(request, f"Connectors weren't saved. {problem}")
+        flash(request, f"Connectors weren't saved. {problem} ({CONNECTORS_WHERE}.)")
         return RedirectResponse("/settings#connectors", status_code=303)
     before = {"repository": s.settings.connector_github_repo, "branch": s.settings.connector_github_branch,
               "token": "saved" if s.settings.connector_github_token else "none"}
     after = {"repository": repo, "branch": branch, "token": "saved" if token else "none"}
     token_changed = token != s.settings.connector_github_token
     if before == after and not token_changed:
-        flash(request, "Nothing changed in connectors.")
+        flash(request, "Nothing changed in connectors. (Repository and branch box, Code tab.)")
         return RedirectResponse("/settings#connectors", status_code=303)
-    _save_config(s, {"CONNECTOR_GITHUB_REPO": repo, "CONNECTOR_GITHUB_BRANCH": branch, "CONNECTOR_GITHUB_TOKEN": token})
-    s.settings.connector_github_repo, s.settings.connector_github_branch, s.settings.connector_github_token = repo, branch, token
+    _save_config(s, {"CONNECTOR_GITHUB_REPO": repo, "CONNECTOR_GITHUB_BRANCH": branch,
+                     "CONNECTOR_GITHUB_TOKEN": token})
+    s.settings.connector_github_repo, s.settings.connector_github_branch = repo, branch
+    s.settings.connector_github_token = token
     changes = {key: {"from": before[key], "to": after[key]} for key in before if before[key] != after[key]}
     if token_changed and "token" not in changes:
         changes["token"] = {"from": "saved", "to": "replaced"}
     s.db.audit("connectors_changed", actor_id=viewer.id, details=changes)
-    flash(request, "Saved connectors." + (f" Code now works in a copy of {repo}." if repo else ""))
+    flash(request, "Saved connectors." + (f" Code now works in a copy of {repo}." if repo else "")
+          + f" ({CONNECTORS_WHERE}.)")
+    return RedirectResponse("/settings#connectors", status_code=303)
+
+
+@page(require="admin")
+async def check_connectors(request: Request, viewer: Viewer) -> Response:
+    """The Check button: try the repository, branch and token as typed, without saving anything."""
+    s = services(request)
+    form = {k: str(v).strip() for k, v in (await request.form()).items() if isinstance(v, str)}
+    repo, branch, token, problem = _connector_form(s, form)
+    if not problem and not repo:
+        problem = "Type a repository first."
+    if not problem:
+        try:
+            await asyncio.to_thread(s.github.check, repo, branch, token)
+        except ConnectorError as exc:
+            problem = f"Couldn't read {repo}: {exc}"
+    flash(request, (f"Check failed. {problem}" if problem else f"The check worked: GitHub let us read {repo}. "
+                                                              "Nothing was saved yet.") + f" ({CONNECTORS_WHERE}.)")
     return RedirectResponse("/settings#connectors", status_code=303)
 
 
@@ -584,9 +815,10 @@ async def save_env_section(request: Request, viewer: Viewer) -> Response:
                      if f.kind != "secret"}
         return render(request, "settings.html", viewer, status_code=400,
                       flash="Some settings need fixing. They're marked below.",
-                      **settings_context(s, errors, submitted, env_section=section))
+                      **await full_context(s, errors, submitted, env_section=section))
+    where = f"on the {TAB_NAMES[ENV_TABS[section]]} tab"
     if not values:
-        flash(request, f"Nothing changed in {name}.")
+        flash(request, f"Nothing changed in {name} {where}.")
         return RedirectResponse(f"/settings#env-{section}", status_code=303)
     _save_config(s, {**server_settings.env_updates(values), **extra})
     waiting = []
@@ -612,7 +844,7 @@ async def save_env_section(request: Request, viewer: Viewer) -> Response:
             s.settings.slack_team_id = value
     if "slack_bot_token" in values:
         s.slack_workspace = ""
-    text = f"Saved {name}."
+    text = f"Saved {name} {where}."
     if waiting:
         text += " " + ", ".join(waiting) + (" applies" if len(waiting) == 1 else " apply") + " after a restart."
     flash(request, text)
@@ -660,12 +892,13 @@ async def start_checks(request: Request, viewer: Viewer) -> Response:
     """Run the same checks as check.cmd, in the background: they can take longer than the tunnel waits."""
     s = services(request)
     if s.checks_running:
-        flash(request, "The checks are already running. Refresh in a minute.")
+        flash(request, "The checks are already running. Refresh in a minute. (Check everything box, Overview tab.)")
     else:
         s.checks_running = utcnow()
         s.db.audit("checks_started", actor_id=viewer.id)
         s.tasks.spawn(_run_checks(s, viewer.id, viewer.name), name="settings-checks")
-        flash(request, "Checks started. Refresh in a minute.")
+        flash(request, "Checks started. Refresh in a minute. The results appear in Check everything on the "
+                       "Overview tab.")
     return RedirectResponse("/settings#checks", status_code=303)
 
 
@@ -676,15 +909,15 @@ async def bridge_sign_in(request: Request, viewer: Viewer) -> Response:
     cli = claude_cli_path(s.settings.pi_gateway_script or None)
     if cli is None:
         flash(request, "Couldn't find the Claude Code program that comes with the AI helper. Install the newest "
-                       "SubZero AI zip, then try again.")
+                       f"SubZero AI zip, then try again. ({BRIDGE_WHERE}.)")
         return RedirectResponse("/settings#bridge", status_code=303)
     try:
         await asyncio.to_thread(s.bridge_login.start, cli, login_env(s.settings.data_dir), viewer.name)
     except LoginError as exc:
-        flash(request, str(exc))
+        flash(request, f"{exc} ({BRIDGE_WHERE}.)")
         return RedirectResponse("/settings#bridge", status_code=303)
     s.db.audit("bridge_sign_in_started", actor_id=viewer.id)
-    flash(request, "Open the sign-in page, sign in, then paste the code here.")
+    flash(request, f"Open the sign-in page, sign in, then paste the code here. ({BRIDGE_WHERE}.)")
     return RedirectResponse("/settings#bridge", status_code=303)
 
 
@@ -695,7 +928,8 @@ async def bridge_code(request: Request, viewer: Viewer) -> Response:
     form = await request.form()
     code = str(form.get("code") or "").strip()
     if not s.bridge_login.waiting():
-        flash(request, "That sign-in isn't waiting anymore. Press Sign in again to get a new address.")
+        flash(request, "That sign-in isn't waiting anymore. Press Sign in again to get a new address. "
+                       f"({BRIDGE_WHERE}.)")
         return RedirectResponse("/settings#bridge", status_code=303)
     if not looks_like_code(code):
         flash(request, "That doesn't look like the whole code. Copy all of it from the Claude page, including the "
@@ -706,13 +940,13 @@ async def bridge_code(request: Request, viewer: Viewer) -> Response:
         await asyncio.to_thread(s.bridge_login.finish, code, lambda: bridge_logged_in(data_dir))
     except LoginError as exc:
         s.db.audit("bridge_sign_in_failed", actor_id=viewer.id)
-        flash(request, f"Not signed in. {exc}")
+        flash(request, f"Not signed in. {exc} ({BRIDGE_WHERE}.)")
         return RedirectResponse("/settings#bridge", status_code=303)
     use_new_bridge(s)
     s.db.audit("bridge_signed_in", actor_id=viewer.id)
     flash(request, "Signed in to the Claude subscription." + (
         "" if BRIDGE_PROVIDER in s.settings.ai_providers else
-        " Turn on Claude subscription under AI providers to use it."))
+        " Turn on Claude subscription under AI providers to use it.") + f" ({BRIDGE_WHERE}.)")
     return RedirectResponse("/settings#bridge", status_code=303)
 
 
@@ -720,7 +954,7 @@ async def bridge_code(request: Request, viewer: Viewer) -> Response:
 async def bridge_cancel(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     s.bridge_login.cancel()
-    flash(request, "Sign-in stopped.")
+    flash(request, f"Sign-in stopped. ({BRIDGE_WHERE}.)")
     return RedirectResponse("/settings#bridge", status_code=303)
 
 
@@ -765,8 +999,9 @@ async def save_prompt(request: Request, viewer: Viewer) -> Response:
             flash(request, f"The {labels[name].lower()} layer is too long. Keep it under 50,000 characters.")
             return RedirectResponse(f"/settings#prompt-{name.removesuffix('.md')}", status_code=303)
     changed = saved_settings.save_prompt(s.db, s.settings, name, text, viewer.id)
-    flash(request, f"Saved the {labels[name].lower()} layer. It applies to the next reply."
-          if changed else f"Nothing changed in the {labels[name].lower()} layer.")
+    flash(request, (f"Saved the {labels[name].lower()} layer. It applies to the next reply."
+                    if changed else f"Nothing changed in the {labels[name].lower()} layer.")
+          + " (System prompt box, Slack chat review tab.)")
     return RedirectResponse(f"/settings#prompt-{name.removesuffix('.md')}", status_code=303)
 
 
@@ -775,9 +1010,9 @@ async def backup_now(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     name = await s.nightly.run(label="manual")
     s.db.audit("backup_made", actor_id=viewer.id, details={"file": name})
-    flash(request, f"Backed up to {name}." if name else
-          "The backup failed. The health list says why; check that the backups folder exists.")
-    return RedirectResponse("/settings#health", status_code=303)
+    flash(request, f"Backed up to {name}. It is listed in Backups on the History tab." if name else
+          "The backup failed. The health list on the Overview tab says why; check that the backups folder exists.")
+    return RedirectResponse("/settings#backups", status_code=303)
 
 
 async def _run_safety_check(s: Services, model: str, actor_id: int, actor_name: str) -> None:
@@ -808,13 +1043,116 @@ async def run_model_check(request: Request, viewer: Viewer) -> Response:
     if not problem and model in s.model_checks_running:
         problem = f"A safety check on {model} is already running."
     if problem:
-        flash(request, f"The safety check didn't start. {problem}")
+        flash(request, f"The safety check didn't start. {problem} (Model safety check box, AI and keys tab.)")
         return RedirectResponse("/settings#model-check", status_code=303)
     s.model_checks_running[model] = utcnow()
     s.db.audit("model_check_started", actor_id=viewer.id, details={"model": model})
     s.tasks.spawn(_run_safety_check(s, model, viewer.id, viewer.name), name=f"model-check-{model}")
-    flash(request, "Safety check started. Refresh in a minute.")
+    flash(request, "Safety check started. Refresh in a minute. The results appear in Model safety check on the "
+                   "AI and keys tab.")
     return RedirectResponse("/settings#model-check", status_code=303)
+
+
+# --------------------------------------------------------------------------- waiting messages, old chats
+@page(require="admin")
+async def post_cards_again(request: Request, viewer: Viewer) -> Response:
+    """Post the approval card again for every message still waiting for a mentor. It doesn't change who may approve:
+    the cards are the same ones, and the buttons check the person who taps them."""
+    s = services(request)
+    where = "(Slack messages waiting box, Overview tab.)"
+    if s.slack is None or not s.settings.slack_approvals_channel:
+        flash(request, f"Slack isn't connected or no review channel is set, so there is nowhere to post the cards. "
+                       f"{where}")
+        return RedirectResponse("/settings#waiting", status_code=303)
+    result = await s.approvals.repost_cards()
+    s.db.audit("cards_reposted", actor_id=viewer.id, details=result)
+    if not result["posted"] and not result["failed"]:
+        flash(request, f"No messages are waiting, so no cards were posted. {where}")
+    else:
+        text = f"Posted {result['posted']} card{'s' if result['posted'] != 1 else ''} again."
+        if result["failed"]:
+            text += f" {result['failed']} couldn't be posted. Check that the app is in the review channel."
+        flash(request, f"{text} {where}")
+    return RedirectResponse("/settings#waiting", status_code=303)
+
+
+ARCHIVE_WHERE = "Old website chats box, History tab"
+
+
+@page(require="admin")
+async def archive_start(request: Request, viewer: Viewer) -> Response:
+    """Start saving all old website chats into a zip file in the backups folder, in the background."""
+    s = services(request)
+    form = await request.form()
+    job = archive.start_job(s.db, "archive", viewer.name)
+    if job is None:
+        flash(request, f"An archive or delete is already running. Wait for it to finish. ({ARCHIVE_WHERE}.)")
+    else:
+        include_videos = form.get("include_videos") == "1"
+        s.db.audit("old_chats_archive_started", actor_id=viewer.id, details={"videos": include_videos})
+        s.tasks.spawn(archive.run_archive_job(s.settings, s.db, job, actor_id=viewer.id, include_videos=include_videos),
+                      name="old-chats-archive")
+        flash(request, f"Started saving the archive. The progress shows below. ({ARCHIVE_WHERE}.)")
+    return RedirectResponse("/settings#old-chats", status_code=303)
+
+
+@page(require="admin")
+async def archive_delete_old(request: Request, viewer: Viewer) -> Response:
+    """Delete every old website chat, after a backup, once the admin has typed the confirmation word."""
+    s = services(request)
+    form = await request.form()
+    if str(form.get("confirm", "") or "").strip() != archive.CONFIRM_WORD:
+        flash(request, f"Nothing was deleted. Type the word {archive.CONFIRM_WORD} in capital letters to confirm. "
+                       f"({ARCHIVE_WHERE}.)")
+        return RedirectResponse("/settings#old-chats", status_code=303)
+    job = archive.start_job(s.db, "delete", viewer.name)
+    if job is None:
+        flash(request, f"An archive or delete is already running. Wait for it to finish. ({ARCHIVE_WHERE}.)")
+    else:
+        slack_id = viewer.slack_user_id if SLACK_ID_RE.fullmatch(viewer.slack_user_id or "") else None
+        s.db.audit("old_chats_delete_started", actor_id=viewer.id)
+        s.tasks.spawn(archive.run_delete_job(s.settings, s.db, s.slack, job, actor_id=viewer.id,
+                                             admin_slack_id=slack_id), name="old-chats-delete")
+        flash(request, f"Started. A backup is made first, then the chats are deleted. ({ARCHIVE_WHERE}.)")
+    return RedirectResponse("/settings#old-chats", status_code=303)
+
+
+@page(require="admin")
+async def archive_status(request: Request, viewer: Viewer) -> Response:
+    """The running job's progress, for the page to show without reloading."""
+    job = archive.job_state(services(request).db) or {}
+    return JSONResponse({"state": job.get("state", ""), "step": job.get("step", ""), "done": job.get("done", 0),
+                         "total": job.get("total", 1)})
+
+
+@page(require="admin")
+async def archive_download(request: Request, viewer: Viewer) -> Response:
+    """Send one archive. Only a file named like the ones we make, directly in the backups folder."""
+    s = services(request)
+    path = archive.archive_path(s.settings, request.path_params["name"])
+    if path is None:
+        return error_page(request, viewer, 404, "Not found", "There's no archive with that name.")
+    s.db.audit("old_chats_archive_downloaded", actor_id=viewer.id, details={"file": path.name})
+    return FileResponse(path, media_type="application/zip", filename=path.name)
+
+
+@page(require="admin")
+async def archive_remove(request: Request, viewer: Viewer) -> Response:
+    """Delete one archive file."""
+    s = services(request)
+    path = archive.archive_path(s.settings, request.path_params["name"])
+    if path is None:
+        flash(request, f"There's no archive with that name. ({ARCHIVE_WHERE}.)")
+    else:
+        size = path.stat().st_size
+        try:
+            path.unlink()
+        except OSError:
+            flash(request, f"Couldn't delete {path.name} right now. Try again in a minute. ({ARCHIVE_WHERE}.)")
+            return RedirectResponse("/settings#old-chats", status_code=303)
+        s.db.audit("old_chats_archive_deleted", actor_id=viewer.id, details={"file": path.name, "bytes": size})
+        flash(request, f"Deleted the archive {path.name}. ({ARCHIVE_WHERE}.)")
+    return RedirectResponse("/settings#old-chats", status_code=303)
 
 
 # --------------------------------------------------------------------------- setup page
@@ -1034,6 +1372,13 @@ admin_routes = [
     Route("/settings/model-check", run_model_check, methods=["POST"]),
     Route("/settings/prompts/{layer}", save_prompt, methods=["POST"]),
     Route("/settings/connectors", save_connectors, methods=["POST"]),
+    Route("/settings/connectors/check", check_connectors, methods=["POST"]),
+    Route("/settings/repost-cards", post_cards_again, methods=["POST"]),
+    Route("/settings/archive/start", archive_start, methods=["POST"]),
+    Route("/settings/archive/delete-old", archive_delete_old, methods=["POST"]),
+    Route("/settings/archive/status", archive_status),
+    Route("/settings/archives/{name}", archive_download),
+    Route("/settings/archives/{name}/delete", archive_remove, methods=["POST"]),
     Route("/settings/ai-keys", save_ai_keys, methods=["POST"]),
     Route("/settings/env/{section}", save_env_section, methods=["POST"]),
     Route("/settings/restart", restart_app, methods=["POST"]),

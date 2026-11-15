@@ -248,20 +248,30 @@ def waited(iso: str) -> str:
 
 def render(request: Request, name: str, viewer: Viewer | None, status_code: int = 200, **context) -> HTMLResponse:
     s = services(request)
+    mentor = viewer is not None and viewer.is_mentor
+    review_count = len(s.store.pending_messages()) if mentor else 0  # Slack messages waiting for review
+    needs_count = s.code.count_waiting() if mentor else 0  # Code items waiting for a mentor
     base = {
         "viewer": viewer,
         "settings": s.settings,
         "csrf": csrf_token(request),
         "dev_mode": s.settings.dev_login,
         "version": __version__,
-        "pending_count": (len(s.store.pending_messages()) + s.code.count_waiting()
-                          if viewer and viewer.is_mentor else 0),
+        "review_count": review_count,
+        "needs_count": needs_count,
+        "pending_count": review_count + needs_count,  # the mentor's total, in the browser tab's title
+        "side_sessions": _sidebar_sessions(s, viewer) if viewer is not None else [],
         "setting_alert": viewer is not None and viewer.is_admin and any(
             row.get("alert") for row in _health_alerts(s)),
         "path": request.url.path,
     }
     base.update(context)
     return templates.TemplateResponse(request, name, base, status_code=status_code)
+
+
+def _sidebar_sessions(s: Services, viewer: Viewer) -> list[dict[str, Any]]:
+    from .web_code import sidebar_sessions  # late import: web_code imports this module
+    return sidebar_sessions(s, viewer)
 
 
 def _health_alerts(s: Services) -> list[dict[str, str]]:

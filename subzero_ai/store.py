@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .db import Database, utcnow
@@ -307,6 +307,42 @@ class Store:
             "ORDER BY l.id DESC LIMIT ?",
             (limit,),
         )
+
+    def audit_search(self, *, actor: str = "", action: str = "", since: date | None = None, until: date | None = None,
+                     limit: int = 100, offset: int = 0) -> tuple[list[sqlite3.Row], int]:
+        """Audit entries, newest first, narrowed by who (a user id, or "system" for entries with no person), what (the
+        exact action) and a range of local dates (both ends included). Returns one page of rows and how many match."""
+        where, params = [], []
+        if actor == "system":
+            where.append("l.actor_id IS NULL")
+        elif actor.isdigit():
+            where.append("l.actor_id = ?")
+            params.append(int(actor))
+        if action:
+            where.append("l.action = ?")
+            params.append(action)
+        if since is not None:  # local midnight, as UTC, to compare with the stored UTC times
+            where.append("l.created_at >= ?")
+            params.append(self._utc_midnight(since))
+        if until is not None:
+            where.append("l.created_at < ?")
+            params.append(self._utc_midnight(until + timedelta(days=1)))
+        clause = f"WHERE {' AND '.join(where)} " if where else ""
+        total = self.db.one(f"SELECT COUNT(*) AS n FROM audit_log l {clause}", params)["n"]
+        rows = self.db.all("SELECT l.*, u.name AS actor_name FROM audit_log l LEFT JOIN users u ON u.id = l.actor_id "
+                           f"{clause}ORDER BY l.id DESC LIMIT ? OFFSET ?", (*params, limit, offset))
+        return rows, total
+
+    def _utc_midnight(self, day: date) -> str:
+        return datetime.combine(day, time.min, self.tz).astimezone(timezone.utc).isoformat(timespec="seconds")
+
+    def audit_actors(self) -> list[sqlite3.Row]:
+        """The people who appear in the audit log, for the "Who" filter."""
+        return self.db.all("SELECT DISTINCT u.id, u.name FROM audit_log l JOIN users u ON u.id = l.actor_id "
+                           "ORDER BY u.name COLLATE NOCASE")
+
+    def audit_actions(self) -> list[str]:
+        return [r["action"] for r in self.db.all("SELECT DISTINCT action FROM audit_log ORDER BY action")]
 
     # ------------------------------------------------------------------ times
     def local_time(self, iso: str | None) -> datetime | None:

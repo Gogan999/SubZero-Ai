@@ -7,6 +7,7 @@ import asyncio
 import json
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -19,7 +20,7 @@ from subzero_ai.config import Settings
 from subzero_ai.db import MIGRATIONS, Database
 from subzero_ai.pi_client import bridge_credentials_path
 from subzero_ai.prompts import load_safety_prompt
-from subzero_ai.sandbox import HyperVSandbox, SandboxHandle, SandboxStream, sandbox_address
+from subzero_ai.sandbox import HyperVSandbox, SandboxError, SandboxHandle, SandboxStream, sandbox_address
 
 from .helpers import ADMIN, MENTOR, STUDENT, CodeStudentTest, Harness
 
@@ -148,7 +149,8 @@ class MentorSessionTest(AgentTest):
         resp = self.kim.post("/code", {"task": "Try."}, follow_redirects=True, headers=HTML)
         self.assertIn("switch to the classic engine", resp.text)
         self.assertEqual(self.db.one("SELECT COUNT(*) AS n FROM code_sessions")["n"], 0)
-        page = self.kim.get("/code").text
+        self.assertNotIn("The new Code engine needs the sandbox", self.kim.get("/code").text, "the detail is for admins")
+        page = self.h.login(ADMIN).get("/code").text
         self.assertIn("The new Code engine needs the sandbox", page)
         self.assertNotIn('id="code-task"', page, "no broken form")
         self.assertEqual(self.sent, [])
@@ -158,7 +160,10 @@ class MentorSessionTest(AgentTest):
         sid = self.mentor_start()
         row = self.row(sid)
         self.assertEqual(row["status"], "failed")
-        self.assertIn("prepare-sandbox-image.cmd", row["error"])
+        self.assertNotIn("prepare-sandbox-image.cmd", row["error"], "the student-facing text is a plain sentence")
+        self.assertIn("An admin needs to finish setting up the sandbox image", row["error"])
+        notes = [s["output"] for s in self.code.steps(sid) if s["tool"] == "mentor"]
+        self.assertTrue(any("prepare-sandbox-image.cmd" in n for n in notes), notes)
         self.assertEqual(self.sent, [], "nothing reached a runner")
         self.assertIsNone(self.manager.live_for_session(sid), "the sandbox was deleted")
 
@@ -212,7 +217,7 @@ class MentorSessionTest(AgentTest):
         self.assertFalse([s for s in steps if s["tool"] == "TodoWrite"])
         page = self.kim.get(f"/code/{sid}").text
         self.assertIn("Task list", page)
-        self.assertIn("Handed work to a helper", page)
+        self.assertIn("Helper: ", page)
         self.assertEqual(self.kim.get(f"/code/{sid}/steps").status_code, 200)
 
 
@@ -519,7 +524,7 @@ class StudentRuleTest(AgentTest):
         self.approve(sid)
         self.assertEqual(self.row(sid)["status"], "waiting")
         [step] = [s for s in self.code.steps(sid) if s["tool"] == "plan"]
-        self.assertIn("Waiting for a mentor to look at this step", self.ava.get(f"/code/{sid}").text)
+        self.assertIn("A mentor is reading Claude's plan.", self.ava.get(f"/code/{sid}").text)
         self.assertEqual(self.ava.post(f"/code/steps/{step['id']}/approve", {"note": ""}).status_code, 403)
         self.kim.post(f"/code/steps/{step['id']}/approve", {"note": ""}, follow_redirects=False)
         self.h.idle()
@@ -902,10 +907,114 @@ class StreamTest(unittest.TestCase):
         self.assertIsNotNone(again.wait(5))
 
     def test_the_patch_script_is_a_constant_with_the_exclusions(self):
-        script = patch_script()
+        sha = "a" * 40
+        script = patch_script(sha)
         self.assertIn("--binary", script)
-        self.assertIn("subzero-base", script)
+        self.assertIn(f"--cached {sha} --", script, "the patch is compared with a recorded SHA, not a tag")
+        self.assertNotIn("subzero-base", script)
+        for bad in ("", "subzero-base", "a" * 40 + "; rm -rf /", "A" * 40):
+            with self.assertRaises(SandboxError):
+                patch_script(bad)
         self.assertIn("exclude,glob", script)
+
+
+class ReviewFixesTest(AgentTest):
+    """Fixes from the G3 review (B1, M1 to M6)."""
+
+    def slow_start(self, task: str) -> int:
+        resp = self.kim.post("/code", {"task": task}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303, resp.text)
+        return int(resp.headers["location"].rsplit("/", 1)[1])
+
+    def test_b1_a_follow_up_sent_during_the_end_of_turn_snapshot_is_not_lost(self):
+        entered, release = threading.Event(), threading.Event()
+        original = self.engine.snapshot
+
+        def slow(sid, handle):
+            entered.set()
+            release.wait(20)
+            return original(sid, handle)
+
+        self.engine.snapshot = slow
+        self.addCleanup(release.set)
+        sid = self.slow_start("First job.")
+        self.assertTrue(entered.wait(15), "the snapshot began")
+        self.assertEqual(self.row(sid)["status"], "running")
+        self.kim.post(f"/code/{sid}/follow-up", {"text": "Second job."}, follow_redirects=False)
+        self.assertEqual([m["type"] for m in self.sent], ["start", "message"])
+        self.engine.snapshot = original
+        release.set()
+        self.h.idle()
+        self.assertEqual(self.row(sid)["status"], "done")
+        self.assertEqual(len(self.starts()), 1, "the same runner carried on")
+        texts = [s["output"] for s in self.code.steps(sid) if s["kind"] == "note" and s["tool"] is None]
+        self.assertIn("Second job.", texts)
+        self.assertIn("+- Second job.", self.kim.get(f"/code/{sid}/changes.patch").text)
+        self.assertAlmostEqual(self.row(sid)["cost_usd"], 0.02)
+
+    def test_m1_an_idle_runner_that_is_closing_is_never_reused(self):
+        sid = self.mentor_start("First job.")
+        run = self.live_run(sid)
+        resume = self.row(sid)["agent_session_id"]
+        self.h.call(lambda: self.engine._idle_fire(sid, run))
+        self.assertTrue(run.closing)
+        self.assertIsNone(self.live_run(sid), "taken out of the table before the close starts")
+        self.h.idle()
+        self.post_follow_up(self.kim, sid, "Second job.")
+        starts = self.starts()
+        self.assertEqual(len(starts), 2, "a fresh runner was started")
+        self.assertEqual(starts[1]["resume"], resume)
+        self.assertEqual(self.row(sid)["status"], "done")
+
+    def test_m3_a_line_over_the_limit_fails_the_run_with_a_plain_message(self):
+        with mock.patch.object(SandboxStream, "MAX_LINE", 120):
+            sid = self.mentor_start("First job.")
+        row = self.row(sid)
+        self.assertEqual(row["status"], "failed")
+        self.assertNotIn("longer than the limit", row["error"])
+        self.assertIn("A mentor can send a follow-up", row["error"])
+        notes = [s["output"] for s in self.code.steps(sid) if s["tool"] == "mentor"]
+        self.assertTrue(any("longer than the limit" in n for n in notes), notes)
+        self.assertIsNone(self.live_run(sid))
+
+    def test_m3_the_event_queue_is_bounded(self):
+        sid = self.mentor_start("First job.")
+        self.assertEqual(self.live_run(sid).events.maxsize, 1000)
+
+    def test_m4_a_patch_over_the_limit_is_not_kept_and_cannot_be_released(self):
+        with mock.patch("subzero_ai.code_engine.MAX_PATCH_BYTES", 10):
+            sid, _ = self.ask(self.ava)
+            self.approve(sid)
+        workspace = self.code.workspace(sid)
+        self.assertEqual((workspace.root / "agent.patch").read_bytes(), b"")
+        notes = [s["output"] for s in self.code.steps(sid) if s["tool"] == "mentor"]
+        self.assertTrue(any("too big" in n for n in notes), notes)
+        self.assertEqual(self.engine.patch_problem(sid), "The changes are too big to hand out as a patch. "
+                                                         "Download the workspace export instead.")
+
+    def test_m5_a_sandbox_error_never_reaches_the_students_text(self):
+        with mock.patch.object(type(self.manager), "create_for_session",
+                               side_effect=SandboxError("secret-detail from the host")):
+            sid = self.mentor_start("First job.")
+        row = self.row(sid)
+        self.assertEqual(row["status"], "failed")
+        self.assertNotIn("secret-detail", row["error"])
+        notes = [s["output"] for s in self.code.steps(sid) if s["tool"] == "mentor"]
+        self.assertTrue(any("secret-detail" in n for n in notes), notes)
+
+    def test_m6_the_patch_is_compared_with_a_sha_recorded_on_the_host(self):
+        sid = self.mentor_start("First job.")
+        sha = (self.code.workspace(sid).root / "base.sha").read_text().strip()
+        self.assertRegex(sha, r"^[0-9a-f]{40}$")
+        box = self.manager.live_for_session(sid)
+        backend = self.manager.backend("fake")
+        handle = self.manager.handle_of(box)
+        # Claude moves the tag to the latest state: the patch must still show everything since the real base
+        backend.run(handle, ["sh", "-c", "git add -A && git -c user.name=x -c user.email=x@x commit -qm sneaky && "
+                                          "git tag -f subzero-base"], cwd="work", env={}, timeout=60)
+        self.post_follow_up(self.kim, sid, "Second job.")
+        self.assertIn("+- First job.", self.kim.get(f"/code/{sid}/changes.patch").text)
+        self.assertEqual((self.code.workspace(sid).root / "base.sha").read_text().strip(), sha)
 
 
 if __name__ == "__main__":

@@ -180,6 +180,7 @@ class Settings:
     code_cap_student_usd: float = 5.0  # the most one student session may cost, at API prices (0 = no cap)
     code_cap_mentor_usd: float = 15.0
     code_agent_max_turns: int = 200  # Claude replies per run in the new engine
+    code_keep_days: int = 14  # a finished Code session's repository copies are deleted after this many days
     code_auth: str = "api_key"  # how the gateway signs in to Anthropic for Code: api_key or subscription
     code_subscription_token: str = field(default="", repr=False)  # from `claude setup-token`; config.env only
 

@@ -3,7 +3,37 @@
 {% block main %}
 <section class="page">
   <h1>Audit log</h1>
-  <p class="lede">The latest 300 actions: sign-ins, messages sent, reviews, alerts, and Slack problems. Newest first.</p>
+  <p class="lede">Sign-ins, Code requests and approvals, message reviews, setting changes and deletions. Newest first.</p>
+  <form class="audit-filters" method="get" action="/audit">
+    <div class="field">
+      <label for="audit-who">Who</label>
+      <select id="audit-who" name="who">
+        <option value="">Everyone</option>
+        <option value="system"{% if who == 'system' %} selected{% endif %}>System (no person)</option>
+        {% for a in actors %}<option value="{{ a.id }}"{% if who == a.id|string %} selected{% endif %}>{{ a.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="audit-what">What</label>
+      <select id="audit-what" name="what">
+        <option value="">Anything</option>
+        {% for value, label in actions %}<option value="{{ value }}"{% if what == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="audit-from">From</label>
+      <input id="audit-from" type="date" name="from" value="{{ date_from }}">
+    </div>
+    <div class="field">
+      <label for="audit-to">To</label>
+      <input id="audit-to" type="date" name="to" value="{{ date_to }}">
+    </div>
+    <div class="form-actions">
+      <button class="button primary" type="submit">Show</button>
+      {% if filtered %}<a class="button quiet" href="/audit">Clear filters</a>{% endif %}
+    </div>
+  </form>
+  <p class="fine" role="status">{{ total }} {{ 'entry' if total == 1 else 'entries' }}{% if filtered %} match{{ 'es' if total == 1 }}{% endif %}. Page {{ number }} of {{ pages }}.</p>
   <div class="table-wrap">
     <table class="audit">
       <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Target</th><th scope="col">Details</th></tr></thead>
@@ -24,10 +54,16 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="5">Nothing has happened yet.</td></tr>
+        <tr><td colspan="5">{{ 'Nothing matches those filters.' if filtered else 'Nothing has happened yet.' }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% if newer or older %}
+  <nav class="pager" aria-label="Pages">
+    {% if newer %}<a class="button" href="{{ newer }}">Newer</a>{% endif %}
+    {% if older %}<a class="button" href="{{ older }}">Older</a>{% endif %}
+  </nav>
+  {% endif %}
 </section>
 {% endblock %}

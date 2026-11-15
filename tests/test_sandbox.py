@@ -1796,6 +1796,30 @@ class HostNetworkCheckScriptTest(unittest.TestCase):
         self.assertNotIn("'1-0'", script)
         self.assertIn("LocalPort = $null", script)
 
+    def test_the_blocks_skip_the_gateway_port_too(self):
+        def tcp(proxy, gateway):
+            return [(n, r) for n, p, r in block_rule_specs(proxy, gateway) if p == "TCP"]
+        self.assertEqual(tcp(3128, 3129), [("szsandbox-block-tcp-below", "1-3127"),
+                                           ("szsandbox-block-tcp-above", "3130-65535")])
+        self.assertEqual(tcp(3128, 3130), [("szsandbox-block-tcp-below", "1-3127"), ("szsandbox-block-tcp-between", "3129"),
+                                           ("szsandbox-block-tcp-above", "3131-65535")])
+        self.assertEqual(tcp(9000, 3129), [("szsandbox-block-tcp-below", "1-3128"),
+                                           ("szsandbox-block-tcp-between", "3130-8999"),
+                                           ("szsandbox-block-tcp-above", "9001-65535")])
+        self.assertEqual(tcp(3128, 3128), tcp(3128, None), "one port is one open port")
+
+    def test_the_check_script_verifies_the_gateway_rule_like_the_proxy_rule(self):
+        script = host_network_check_script("szsandbox-internal", 3128, 3129)
+        self.assertIn("-eq 'szsandbox-allow-gateway'", script)
+        self.assertIn("-contains '3129')", script)
+        self.assertIn("$problems.Add('gateway-rule-wrong')", script)
+        self.assertNotIn("gateway-rule-wrong", host_network_check_script("szsandbox-internal", 3128),
+                         "no gateway port, no gateway rule")
+        self.assertIn("allow only TCP to the gateway port", parse_host_network_check('["gateway-rule-wrong"]')[0])
+        seen = []
+        host_network_problems("szsandbox-internal", 3128, lambda s: seen.append(s) or "[]", 4000)
+        self.assertIn("'4000'", seen[0])
+
     def test_the_protocol_blocks_are_the_constant_list(self):
         self.assertEqual(BLOCK_PROTOCOLS, (2, 41, 47, 50, 51))
         self.assertEqual(BLOCK_PROTO_RULE.format(41), "szsandbox-block-proto-41")
@@ -2204,6 +2228,9 @@ class SandboxNetworkScriptTest(unittest.TestCase):
         self.assertIn('ValidateSet("Install", "Remove", "Check")', text)
         self.assertIn('[string]$Switch = "szsandbox-internal"', text)
         self.assertIn("[int]$ProxyPort = 3128", text)
+        self.assertIn("[int]$GatewayPort = 3129", text)
+        self.assertIn('$GatewayRule = "szsandbox-allow-gateway"', text)
+        self.assertIn("-LocalPort $GatewayPort -RemoteAddress $Subnet -InterfaceAlias $Alias", text)
 
     def test_it_only_ever_changes_objects_named_for_the_sandboxes(self):
         text = self.text()
@@ -2259,7 +2286,7 @@ class SandboxNetworkDriftTest(unittest.TestCase):
 
     def test_the_script_and_the_app_use_the_same_problem_codes(self):
         self.assertEqual(set(self.CODE.findall(ps1_text())), self.expected_codes())
-        self.assertEqual(set(self.CODE.findall(host_network_check_script("szsandbox-internal", 3128))),
+        self.assertEqual(set(self.CODE.findall(host_network_check_script("szsandbox-internal", 3128, 3129))),
                          self.expected_codes())
 
     def test_the_script_has_plain_words_for_every_fixed_code(self):
@@ -2269,11 +2296,12 @@ class SandboxNetworkDriftTest(unittest.TestCase):
     def test_the_rule_names_match_the_app_constants(self):
         names = set(re.findall(r'"(szsandbox-(?:block|allow)-[a-z0-9-]+)"', ps1_text()))
         self.assertEqual(names, {sandbox.BLOCK_TCP_BELOW, sandbox.BLOCK_TCP_ABOVE, sandbox.BLOCK_UDP,
-                                 sandbox.BLOCK_ICMP4, sandbox.BLOCK_ICMP6, sandbox.PROXY_RULE})
+                                 sandbox.BLOCK_ICMP4, sandbox.BLOCK_ICMP6, sandbox.PROXY_RULE,
+                                 sandbox.BLOCK_TCP_BETWEEN, sandbox.GATEWAY_RULE})
         self.assertEqual(sandbox.BLOCK_PROTO_RULE.format("$number"), "szsandbox-block-proto-$number")
         for port in (1, 3128, 65535):
-            for name, _, _ in block_rule_specs(port):
-                self.assertIn(f"'{name}'", host_network_check_script("szsandbox-internal", port))
+            for name, _, _ in block_rule_specs(port, 3129):
+                self.assertIn(f"'{name}'", host_network_check_script("szsandbox-internal", port, 3129))
 
     def test_the_protocol_list_is_generated_into_the_script(self):
         self.assertIn(NETWORK_BLOCK_PROTOCOLS_PS, ps1_text())

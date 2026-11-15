@@ -74,7 +74,7 @@ FINISHED = ("done", "stopped", "failed")  # a session in one of these states has
 AWAITING = "awaiting_approval"  # a student's request that a mentor hasn't answered yet
 OPEN_STUDENT_STATES = (AWAITING, "preparing", "running", "waiting")
 NO_CODE_MODEL = "Code sessions need a Claude model. An admin can pick one in Settings."
-NO_REPO = "Code needs the team's GitHub repository. An admin can add it in Settings, Connectors."
+NO_REPO = "Code needs the team's GitHub repository. An admin can add it in Settings, on the Code tab."
 STUDENTS_OFF = "Code isn't open to students yet. A mentor or admin can turn it on in Settings, Code."
 STUDENT_NEEDS_SANDBOX = ("Code for students needs the sandbox turned on. An admin can turn on Hyper-V in Settings, "
                          "Code.")
@@ -600,11 +600,56 @@ class CodeRunner:
         return self.db.all("SELECT t.*, u.name AS reviewer_name FROM code_steps t LEFT JOIN users u ON "
                            "u.id = t.reviewed_by WHERE t.session_id = ? ORDER BY t.id", (session_id,))
 
+    def needs_mentor(self) -> list[dict[str, Any]]:
+        """Code sessions that wait for a mentor, oldest wait first, one item per session. `kind` is "request" (a student's
+        new session), "follow_up" (a student's follow-up), "plan" (a plan to approve) or "step" (classic engine: steps
+        to approve, `count` of them). `since` is when the wait began."""
+        sessions = self.db.all(
+            "SELECT s.id, s.title, s.status, s.created_at, u.name AS owner_name, s.owner_is_student, s.screen_note "
+            "FROM code_sessions s JOIN users u ON u.id = s.created_by "
+            "WHERE s.status IN ('awaiting_approval', 'waiting') OR EXISTS (SELECT 1 FROM code_steps t "
+            "WHERE t.session_id = s.id AND t.kind = 'note' AND t.status = 'pending')")
+        pending: dict[int, list[sqlite3.Row]] = {}
+        for step in self.db.all("SELECT session_id, kind, tool, created_at FROM code_steps WHERE status = 'pending' "
+                                "ORDER BY id"):
+            pending.setdefault(step["session_id"], []).append(step)
+        items = []
+        for row in sessions:
+            steps = pending.get(row["id"], [])
+            notes = [t for t in steps if t["kind"] == "note"]
+            tools = [t for t in steps if t["kind"] == "tool"] if row["status"] == "waiting" else []
+            if row["status"] == "awaiting_approval":
+                kind, since, count = "request", row["created_at"], 1
+            elif notes:
+                kind, since, count = "follow_up", notes[0]["created_at"], len(notes)
+            elif any(t["tool"] == "plan" for t in tools):
+                kind, since, count = "plan", next(t for t in tools if t["tool"] == "plan")["created_at"], 1
+            elif tools:
+                kind, since, count = "step", tools[0]["created_at"], len(tools)
+            else:
+                continue  # waiting with nothing to answer (a moment between steps)
+            items.append({"id": row["id"], "title": row["title"], "owner": row["owner_name"], "kind": kind,
+                          "since": since, "count": count, "student": bool(row["owner_is_student"]),
+                          "screen_note": row["screen_note"] if kind == "request" else None})
+        return sorted(items, key=lambda item: item["since"])
+
     def count_waiting(self) -> int:
-        """Sessions a mentor should look at: requests, steps and follow-ups waiting for an answer."""
-        return self.db.one("SELECT COUNT(*) AS n FROM code_sessions s WHERE s.status IN ('awaiting_approval', "
-                           "'waiting') OR EXISTS (SELECT 1 FROM code_steps t WHERE t.session_id = s.id AND "
-                           "t.kind = 'note' AND t.status = 'pending')")["n"]
+        """Sessions a mentor should look at: requests, plans, steps and follow-ups waiting for an answer."""
+        return len(self.needs_mentor())
+
+    def limit_problem(self, viewer: Viewer) -> str | None:
+        """Why this person can't start a session right now because of a limit, in plain words. None when they can.
+        The same checks as starting one, without starting it."""
+        try:
+            student = not viewer.is_mentor
+            self._check_open_limit(viewer.id, student=student)
+            if student:
+                self._check_daily_limit(viewer.id)
+            if self.sandboxed:
+                self._check_capacity()
+        except CodeError as exc:
+            return str(exc)
+        return None
 
     def _set(self, session_id: int, **fields) -> None:
         fields["updated_at"] = utcnow()
@@ -656,6 +701,10 @@ class CodeRunner:
 
     def _cap_for(self, student: bool) -> float | None:
         return self.agent.role_cap(student) if self.engine_now() == "agent" else None
+
+    def plan_first_default(self, student: bool) -> bool:
+        """Whether "Plan first" starts ticked on the start form for a student or a mentor (never, on the classic engine)."""
+        return bool(self._plan_first_default(student))
 
     def _plan_first_default(self, student: bool) -> int:
         if self.engine_now() != "agent":
@@ -978,6 +1027,9 @@ class CodeRunner:
             raise CodeError("That session doesn't exist.")
         if not self.workspace(session_id).ready():
             raise CodeError("There are no changes to release yet.")
+        problem = self.agent.patch_problem(session_id) if row["engine"] == "agent" else ""
+        if problem:
+            raise CodeError(problem)
         with self.db.transaction() as conn:
             changed = conn.execute("UPDATE code_sessions SET patch_released = 1, updated_at = ? WHERE id = ? AND "
                                    "patch_released = 0", (utcnow(), session_id)).rowcount

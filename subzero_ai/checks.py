@@ -183,7 +183,8 @@ async def _check_sandbox_network(settings: Settings, add, runner=None) -> None:
     runner = runner or functools.partial(default_run_powershell, timeout=NETWORK_CHECK_SECONDS)
     try:
         problems = await asyncio.wait_for(asyncio.to_thread(
-            host_network_problems, settings.sandbox_switch, settings.sandbox_proxy_port, runner),
+            host_network_problems, settings.sandbox_switch, settings.sandbox_proxy_port, runner,
+            settings.sandbox_gateway_port),
             NETWORK_CHECK_SECONDS + 5)
     except asyncio.TimeoutError:
         problems = [describe_network_problem("check-failed:the check didn't finish in time")]

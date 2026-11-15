@@ -1,0 +1,154 @@
+{# One step of a Code session. `mentor` and `csrf` come from the page. Everything here is escaped; the only |safe text is
+   Claude's own words, rendered from Markdown with raw HTML switched off (render.py). #}
+
+{% macro pills(st) %}
+  {%- if st.status == 'pending' %}<span class="pill pending">Needs approval</span>
+  {%- elif st.status == 'declined' %}<span class="pill bad">Declined{% if st.reviewer %} by {{ st.reviewer }}{% endif %}</span>
+  {%- elif st.status == 'error' %}<span class="pill bad">Didn't work</span>
+  {%- elif st.status == 'running' %}<span class="pill pending">Running</span>
+  {%- elif st.reviewer %}<span class="pill ok">Approved by {{ st.reviewer }}</span>{% endif -%}
+{% endmacro %}
+
+{% macro more(head, rest, label='Show more') %}
+<pre><code>{{ head }}</code></pre>
+{%- if rest %}
+<details class="code-more"><summary>{{ label }}</summary><pre><code>{{ rest }}</code></pre></details>
+{%- endif %}
+{% endmacro %}
+
+{% macro review(st, approve_label, decline_hint, who) %}
+<div class="code-review">
+  <form method="post" action="/code/steps/{{ st.id }}/approve">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="button small primary" type="submit">{{ approve_label }}</button>
+  </form>
+  <form method="post" action="/code/steps/{{ st.id }}/decline" class="code-decline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="visually-hidden" for="decline-{{ st.id }}">Note for {{ who }}</label>
+    <input id="decline-{{ st.id }}" name="note" maxlength="500" placeholder="{{ decline_hint }}" autocomplete="off">
+    <button class="button small quiet" type="submit">Decline</button>
+  </form>
+</div>
+{% endmacro %}
+
+{% macro step(st) %}
+{% if st.kind == 'text' %}
+<li class="code-step claude" data-key="s{{ st.id }}"><div class="prose">{{ st.html|safe }}</div></li>
+
+{% elif st.kind == 'note' %}
+{% if st.mentor_only %}
+<li class="code-step quiet" data-key="s{{ st.id }}"><details class="code-fold"><summary>Details for mentors</summary><div class="plain">{{ st.output }}</div></details></li>
+{% elif st.person %}
+<li class="code-step note" data-key="s{{ st.id }}">
+  {% if st.label %}<p class="code-label">{{ st.label }}</p>{% endif %}
+  <div class="plain">{{ st.output }}</div>
+  {% if st.note and st.status == 'pending' %}<p class="code-warning" role="note">{{ st.note }}</p>
+  {% elif st.note %}<p class="tag-reason">Note: {{ st.note }}</p>{% endif %}
+  {% if st.status == 'pending' and mentor %}
+  <div class="code-review">
+    <form method="post" action="/code/steps/{{ st.id }}/approve-follow-up">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button small primary" type="submit">Send to Claude</button>
+    </form>
+    <form method="post" action="/code/steps/{{ st.id }}/decline-follow-up" class="code-decline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="visually-hidden" for="decline-follow-{{ st.id }}">Note for the student</label>
+      <input id="decline-follow-{{ st.id }}" name="note" maxlength="500" placeholder="Why not, or what to ask instead (optional)" autocomplete="off">
+      <button class="button small quiet" type="submit">Decline</button>
+    </form>
+  </div>
+  {% endif %}
+</li>
+{% else %}
+<li class="code-step quiet" data-key="s{{ st.id }}"><p class="code-note">{{ st.output }}</p></li>
+{% endif %}
+
+{% elif st.shape == 'plan' %}
+<li class="code-step plan {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">Claude's plan {{ pills(st) }}</p>
+  <div class="prose">{{ st.plan_html|safe }}</div>
+  {% if st.note %}<p class="tag-reason">Note: {{ st.note }}</p>{% endif %}
+  {% if st.status == 'pending' %}
+    {% if mentor %}{{ review(st, 'Approve plan', 'Why not, or what to change (Claude reads this)', 'Claude') }}
+    {% else %}<p class="code-reason">A mentor is reading Claude's plan.</p>{% endif %}
+  {% endif %}
+</li>
+
+{% elif st.shape == 'line' %}
+<li class="code-step line {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">{{ st.label }} {{ pills(st) }}</p>
+  {% if st.status == 'error' and st.output %}<details class="code-output"><summary>Details</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
+</li>
+
+{% elif st.shape == 'shell' %}
+<li class="code-step tool {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">{{ st.label }} {{ pills(st) }}</p>
+  {% if st.detail %}<p class="code-reason">{{ st.detail }}</p>{% endif %}
+  <pre class="code-command"><code><span class="code-prompt" aria-hidden="true">$ </span>{{ st.command }}</code></pre>
+  {% if st.output %}<details class="code-output"><summary>Output</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
+</li>
+
+{% elif st.shape == 'edit' %}
+<li class="code-step tool {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">{{ st.label }} {{ pills(st) }}</p>
+  {% if st.lines %}
+  <details class="code-output"{% if st.lines|length <= 12 %} open{% endif %}><summary>The change</summary>
+    <pre class="code-diff"><code>{% for css, text in st.lines %}<span class="{{ css }}">{{ text }}</span>{% endfor %}</code></pre></details>
+  {% endif %}
+  {% if st.status == 'error' and st.output %}<details class="code-output"><summary>Details</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
+</li>
+
+{% elif st.shape == 'write' %}
+<li class="code-step tool {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">{{ st.label }} {{ pills(st) }}</p>
+  {% if st.content %}<details class="code-output"><summary>The file{% if st.detail %} ({{ st.detail }}){% endif %}</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
+</li>
+
+{% elif st.shape == 'todo' %}
+<li class="code-step tool todo" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">Task list</p>
+  <ul class="code-todo">
+    {% for t in st.tasks %}
+    <li class="{{ t.state }}"><span class="todo-mark" aria-hidden="true"></span> {{ t.text }}<span class="visually-hidden"> ({{ t.state|replace('_', ' ') }})</span></li>
+    {% else %}<li class="pending">No tasks yet.</li>
+    {% endfor %}
+  </ul>
+</li>
+
+{% elif st.shape == 'agent' %}
+<li class="code-step tool agent {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <details class="code-agent">
+    <summary><span class="code-label">{{ st.label }} {{ pills(st) }}</span>
+      <span class="fine">{{ st.children|length }} step{{ 's' if st.children|length != 1 }}</span></summary>
+    <ol class="code-steps nested">
+      {% for child in st.children %}{{ step(child) }}{% else %}<li class="code-step quiet"><p class="code-note">Nothing yet.</p></li>{% endfor %}
+    </ol>
+    {% if st.output %}<details class="code-output"><summary>The helper's report</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
+  </details>
+</li>
+
+{% elif st.shape == 'generic' %}
+<li class="code-step tool {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">{{ st.label }} {{ pills(st) }}</p>
+  {% if st.detail and st.detail != '{}' %}<details class="code-output"><summary>What it was given</summary>{{ more(st.detail[:1500], st.detail[1500:]) }}</details>{% endif %}
+  {% if st.output %}<details class="code-output"><summary>Output</summary>{{ more(st.head, st.rest) }}</details>{% endif %}
+</li>
+
+{% else %}
+{# The classic engine's steps: a mentor approves each change and command #}
+<li class="code-step tool {{ st.status }}" id="step{{ st.id }}" data-key="s{{ st.id }}">
+  <p class="code-label">{{ st.label }} {{ pills(st) }}</p>
+  {% if st.reason %}<p class="code-reason">{{ st.reason }}</p>{% endif %}
+  {% if st.command %}<pre class="code-command"><code><span class="code-prompt" aria-hidden="true">$ </span>{{ st.command }}</code></pre>{% endif %}
+  {% if st.runs_changes %}<p class="code-warning" role="note">This runs with the app's own permissions, including code Claude changed in this session ({{ st.runs_changes|join(', ') }}). Check those changes above before you run it.</p>{% endif %}
+  {% if st.diff %}<pre class="code-diff"><code>{% for line in st.diff.splitlines() %}<span class="{{ 'add' if line.startswith('+') and not line.startswith('+++') else 'del' if line.startswith('-') and not line.startswith('---') else 'hunk' if line.startswith('@@') else '' }}">{{ line }}</span>{% endfor %}</code></pre>{% endif %}
+  {% if st.note %}<p class="tag-reason">Note: {{ st.note }}</p>{% endif %}
+  {% if st.status == 'pending' %}
+    {% if mentor %}{{ review(st, 'Run it' if st.tool == 'run_command' else 'Approve change', 'Why not, or what to do instead (optional)', 'Claude') }}
+    {% else %}<p class="code-reason">Waiting for a mentor to look at this step.</p>{% endif %}
+  {% elif st.output and st.status in ('done', 'error') and not st.diff %}
+  <details class="code-output"><summary>{{ 'Output' if st.tool == 'run_command' else 'Details' }}</summary>{{ more(st.head, st.rest) }}</details>
+  {% endif %}
+</li>
+{% endif %}
+{% endmacro %}

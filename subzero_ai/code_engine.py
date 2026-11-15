@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import concurrent.futures
 import logging
+import re
 import shlex
 import shutil
 import sys
@@ -52,6 +54,15 @@ IDLE_SECONDS = 600  # a runner with nothing to do is closed this long after its 
 STOP_WAIT_SECONDS = 3.0  # how long a runner gets to stop by itself before it is cut off
 BASE_TAG = "subzero-base"  # the base commit the patch is compared with
 MAX_PATCH_BYTES = 5 * 1024 * 1024
+MAX_LINE_BYTES = 4 * 1024 * 1024  # the longest line a runner may write; a longer one is a protocol error
+EVENT_QUEUE_SIZE = 1000  # events waiting to be turned into steps; the reader thread waits when it is full
+BASE_FILE = "base.sha"  # in the session's folder: the base commit, recorded on the host when the sandbox was prepared
+TOO_BIG_FILE = "agent.patch.toobig"  # in the session's folder: the patch was too big to keep
+PATCH_TOO_BIG = ("The changes are too big to hand out as a patch. Download the workspace export instead.")
+SANDBOX_TROUBLE = ("Claude's sandbox couldn't be made or reached just now. A mentor can try again with a follow-up.")
+TOOLS_NOT_READY = ("The sandbox isn't ready for Code yet. An admin needs to finish setting up the sandbox image.")
+INTERNAL_FAIL = "Something went wrong inside the app. A mentor can try again with a follow-up."
+NOT_COPIED = "Couldn't copy the changes out of the sandbox. A mentor can look at the notes on this session."
 MAX_STEP_TEXT = 20_000  # the most of a tool's output kept in a step
 MAX_INPUT_VALUE = 4_000  # the most of one value in a tool's input kept in a step
 MAX_INPUT_JSON = 24_000
@@ -113,6 +124,7 @@ class AgentRun:
     skip_ids: set[str] = field(default_factory=set)  # tool calls shown another way (plan, task list)
     records_mark: int = 0  # gateway records counted when the current turn began
     timer: Any = None
+    closing: bool = False  # the idle timer fired: it is being closed and must not take a new turn
 
 
 def cut_text(text: str, limit: int) -> str:
@@ -141,11 +153,14 @@ def cap_text(cap: float) -> str:
     return CAP_NOTE.format(cap=cap)
 
 
-def patch_script() -> str:
-    """The shell line that writes the patch inside the sandbox (a constant: nothing a student typed is in it)."""
+def patch_script(base_sha: str) -> str:
+    """The shell line that writes the patch inside the sandbox. It compares with the base commit's SHA recorded on the
+    host, not a tag Claude could move. Nothing a student typed is in it (the SHA must be plain hexadecimal)."""
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base_sha or ""):
+        raise SandboxError("Couldn't work out what changed in the sandbox.")
     spec = shlex.join(PATCH_PATHSPEC)
     return (f"mkdir -p ../.szout && git add -A -- {spec} && "
-            f"git diff --binary --no-color --no-ext-diff --cached {BASE_TAG} -- {spec} > ../.szout/changes.patch")
+            f"git diff --binary --no-color --no-ext-diff --cached {base_sha} -- {spec} > ../.szout/changes.patch")
 
 
 def base_script() -> str:
@@ -291,7 +306,7 @@ class AgentEngine:
             if run is not None:
                 run.stopped = True
         if run is not None:
-            self._cancel_timer(run)
+            self._on_loop(lambda: self._cancel_timer(run))
             run.stream.terminate()
 
     async def shutdown(self) -> None:
@@ -511,7 +526,7 @@ class AgentEngine:
             raise
         except Exception as exc:  # keep the session readable whatever went wrong
             log.exception("Code session %s failed", sid)
-            self._fail(sid, f"Something went wrong ({type(exc).__name__}).")
+            self._fail(sid, INTERNAL_FAIL, f"{type(exc).__name__}: {exc}")
         finally:
             self._release(sid)
         row = self.cr.get(sid)
@@ -539,7 +554,7 @@ class AgentEngine:
                     return
                 run = await self._open_runner(sid, handle)
         except SandboxError as exc:
-            raise AgentFailure(cr.sandboxes.redact(str(exc))) from exc
+            raise AgentFailure(SANDBOX_TROUBLE, cr.sandboxes.redact(str(exc))) from exc
         if cr.get(sid)["status"] == "stopped":
             await asyncio.to_thread(self._close_blocking, run)
             return
@@ -600,7 +615,7 @@ class AgentEngine:
         env = {**AGENT_ENV, **manager.gateway_env(handle, base_url)}
         stream = await asyncio.to_thread(backend.open_stream, handle, self.runner_argv(backend), cwd="work", env=env)
         loop = asyncio.get_running_loop()
-        run = AgentRun(sid, handle, stream, asyncio.Queue())
+        run = AgentRun(sid, handle, stream, asyncio.Queue(maxsize=EVENT_QUEUE_SIZE))
         with self._lock:
             self._runs[sid] = run
         threading.Thread(target=self._read, args=(run, loop), daemon=True, name=f"code-runner-{sid}").start()
@@ -615,18 +630,43 @@ class AgentEngine:
 
     @staticmethod
     def _read(run: AgentRun, loop: asyncio.AbstractEventLoop) -> None:
-        """Worker thread: hand each line the runner writes to the event loop, and say when it ends."""
+        """Worker thread: hand each line the runner writes to the event loop, and say when it ends. The queue is
+        bounded: when the loop falls behind, this thread waits (the runner's pipe then fills and it waits too)."""
         def put(event: dict[str, Any]) -> bool:
             try:
-                loop.call_soon_threadsafe(run.events.put_nowait, event)
-                return True
+                future = asyncio.run_coroutine_threadsafe(run.events.put(event), loop)
             except RuntimeError:  # the loop is closed: the app is shutting down
                 return False
+            while True:
+                try:
+                    future.result(timeout=1)
+                    return True
+                except concurrent.futures.TimeoutError:
+                    if run.stopped or run.closed:  # nobody is reading any more
+                        future.cancel()
+                        return False
+                except Exception:
+                    return False
 
+        def put_last(event: dict[str, Any]) -> None:
+            """The end of the stream always gets through, even to a full queue (the oldest event makes room)."""
+            def now() -> None:
+                if run.events.full():
+                    run.events.get_nowait()
+                run.events.put_nowait(event)
+            try:
+                loop.call_soon_threadsafe(now)
+            except RuntimeError:
+                pass
+
+        limit = getattr(run.stream, "MAX_LINE", MAX_LINE_BYTES)
         while True:
             line = run.stream.readline()
             if not line:
                 break
+            if len(line) >= limit and not line.endswith(b"\n"):
+                put_last({"type": "_toolong"})
+                return
             try:
                 event = json.loads(line)
             except ValueError:
@@ -634,7 +674,7 @@ class AgentEngine:
             if isinstance(event, dict) and isinstance(event.get("type"), str):
                 if not put(event):
                     return
-        put({"type": "_exit", "code": run.stream.wait(5)})
+        put_last({"type": "_exit", "code": run.stream.wait(5)})
 
     async def _drive(self, sid: int, run: AgentRun) -> None:
         """Turn the runner's events into steps until its turn ends, it asks for a plan decision, or it exits."""
@@ -642,6 +682,9 @@ class AgentEngine:
         try:
             while True:
                 event = await run.events.get()
+                if event.get("type") == "_toolong":
+                    self._protocol_error(sid, run)
+                    return
                 outcome = self._apply(sid, run, event)
                 if outcome == "plan":
                     return
@@ -739,6 +782,18 @@ class AgentEngine:
                            "'The session ended before this finished.') WHERE session_id = ? AND status = 'running'",
                            (_now(), sid))
 
+    def _protocol_error(self, sid: int, run: AgentRun) -> None:
+        """The runner wrote a line over the limit: end it and fail the run with a plain message."""
+        with self._lock:
+            if self._runs.get(sid) is run:
+                del self._runs[sid]
+        run.closed = True
+        run.stopped = True
+        self._cancel_timer(run)
+        run.stream.terminate()
+        self._close_steps(sid)
+        self._fail(sid, CRASH_FAIL, "The helper program wrote a line longer than the limit, so it was stopped.")
+
     def _after_exit(self, sid: int, run: AgentRun, event: dict[str, Any]) -> None:
         with self._lock:
             if self._runs.get(sid) is run:
@@ -783,13 +838,24 @@ class AgentEngine:
                 raw = str(event.get("error") or "")
                 self._fail(sid, FRIENDLY_FAIL, f"The helper program said: {raw}" if raw else "")
             await asyncio.to_thread(self._close_blocking, run)  # settling the sandbox saves the patch and files
-            return True
+            return not self._queued_during(sid, run)
         for note in await asyncio.to_thread(self._snapshot_safely, sid, run.handle):
             cr._note(sid, run.turn, note)
+        if self._queued_during(sid, run):  # a follow-up arrived while the files were being saved: keep working
+            return False
         self.cr.db.execute("UPDATE code_sessions SET status = 'done', updated_at = ? WHERE id = ? AND status = "
                            "'running'", (_now(), sid))
         run.idle, run.idle_since = True, time.monotonic()
         self._arm_timer(sid, run)
+        return True
+
+    def _queued_during(self, sid: int, run: AgentRun) -> bool:
+        """False when the run is really over. True when a follow-up was sent during the end-of-turn work (the session
+        is still 'running'), so the caller goes on reading: that message must not be lost."""
+        if run.open_turns <= 0 or run.stopped:
+            return False
+        run.turn = self._next_turn(sid)
+        run.records_mark = self._records.get(sid, 0)
         return True
 
     def _fail(self, sid: int, message: str, raw: str = "") -> None:
@@ -823,7 +889,11 @@ class AgentEngine:
 
     def _idle_fire(self, sid: int, run: AgentRun) -> None:
         run.timer = None
-        if run.idle and not run.driving and not run.closed:
+        if run.idle and not run.driving and not run.closed and not run.closing:
+            run.closing = True  # from here a follow-up starts a fresh runner (with resume), never reuses this one
+            with self._lock:
+                if self._runs.get(sid) is run:
+                    del self._runs[sid]
             self.cr.tasks.spawn(self._close_and_settle(sid, run), name=f"code-{sid}")
 
     async def _close_and_settle(self, sid: int, run: AgentRun) -> None:
@@ -877,9 +947,9 @@ class AgentEngine:
             if handle.name not in self._tools_ok:
                 status = check_tools(backend, handle)
                 if not status.ok:
-                    raise AgentFailure(status.message)
+                    raise AgentFailure(TOOLS_NOT_READY, status.message)
                 self._tools_ok.add(handle.name)
-            self._ensure_base(backend, handle)
+            self._ensure_base(backend, handle, workspace)
         return handle
 
     def _create_sandbox(self, sid: int, workspace: Workspace) -> SandboxHandle:
@@ -903,16 +973,36 @@ class AgentEngine:
                          "ends.")
         return handle
 
-    def _ensure_base(self, backend: Any, handle: SandboxHandle) -> None:
-        """Make the base commit the patch is compared with (once: a sandbox that has it keeps it)."""
-        found = backend.run(handle, ["git", "rev-parse", "--verify", "-q", f"refs/tags/{BASE_TAG}"], cwd="work",
-                            env=GIT_ENV, timeout=60)
-        if found.exit_code == 0:
-            return
+    def _ensure_base(self, backend: Any, handle: SandboxHandle, workspace: Workspace) -> None:
+        """Make the base commit the patch is compared with (once: a sandbox that has it keeps it), and record its SHA on
+        the host. The patch is compared with that SHA, so nothing Claude does to a tag or branch can change it."""
+        recorded = self._base_sha(workspace)
+        if recorded:
+            found = backend.run(handle, ["git", "cat-file", "-e", f"{recorded}^{{commit}}"], cwd="work", env=GIT_ENV,
+                                timeout=60)
+            if found.exit_code == 0:
+                return
         made = backend.run(handle, ["sh", "-c", base_script()], cwd="work", env=GIT_ENV, timeout=600)
-        if made.exit_code != 0:
+        sha = backend.run(handle, ["git", "rev-parse", "--verify", "-q", f"refs/tags/{BASE_TAG}^{{commit}}"], cwd="work",
+                          env=GIT_ENV, timeout=60) if made.exit_code == 0 else made
+        text = sha.output.strip()
+        if made.exit_code != 0 or sha.exit_code != 0 or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", text):
             log.warning("Couldn't make the base commit in %s: %s", handle.name, made.output[-300:])
             raise AgentFailure("Couldn't get the sandbox ready for Claude. A mentor can try again with a follow-up.")
+        workspace.root.mkdir(parents=True, exist_ok=True)
+        (workspace.root / BASE_FILE).write_text(text, encoding="ascii")
+
+    @staticmethod
+    def _base_sha(workspace: Workspace) -> str:
+        try:
+            text = (workspace.root / BASE_FILE).read_text(encoding="ascii").strip()
+        except (OSError, ValueError):
+            return ""
+        return text if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", text) else ""
+
+    def patch_problem(self, sid: int) -> str:
+        """Why the session's patch can't be handed out ('' when it can): it was too big to keep."""
+        return PATCH_TOO_BIG if (self.cr.workspace(sid).root / TOO_BIG_FILE).exists() else ""
 
     def _restore_state(self, backend: Any, handle: SandboxHandle, workspace: Workspace) -> None:
         """A new sandbox for a session that already ran: give it back the SDK's saved conversation, so `resume` works."""
@@ -925,8 +1015,9 @@ class AgentEngine:
             return self.snapshot(sid, handle)
         except Exception as exc:
             log.warning("Code session %s: couldn't save the sandbox's files", sid, exc_info=True)
-            text = self.cr.sandboxes.redact(str(exc)) if isinstance(exc, SandboxError) else ""
-            return [("Couldn't copy the changes out of the sandbox. " + text).strip()]
+            if isinstance(exc, SandboxError):  # the sandbox's own words are for mentors only
+                self._mentor_note(sid, max(0, self._next_turn(sid) - 1), self.cr.sandboxes.redact(str(exc)))
+            return [NOT_COPIED]
 
     def snapshot(self, sid: int, handle: SandboxHandle) -> list[str]:
         """Worker thread, sandbox running: work out the patch (`git diff` against the base commit) and keep it on the host
@@ -936,19 +1027,27 @@ class AgentEngine:
         backend = cr.sandboxes.backend(handle.backend)
         workspace = cr.workspace(sid)
         notes: list[str] = []
-        made = backend.run(handle, ["sh", "-c", patch_script()], cwd="work", env=GIT_ENV, timeout=300)
+        made = backend.run(handle, ["sh", "-c", patch_script(self._base_sha(workspace))], cwd="work", env=GIT_ENV, timeout=300)
         if made.exit_code != 0:
             raise SandboxError("Couldn't work out what changed in the sandbox.")
         with zipfile.ZipFile(io.BytesIO(backend.get_archive(handle, src=".szout", exclude=frozenset()))) as archive:
             info = archive.getinfo("changes.patch")
             if info.file_size > MAX_PATCH_BYTES:
-                patch = b""
-                notes.append(f"The changes are too big to show as a patch here ({info.file_size // (1024 * 1024)} MB). "
-                             "Ask a mentor to look at the files in the session's saved copy.")
+                patch = b""  # nothing is kept as the patch; the mentor is told, and release_patch refuses
+                self._mentor_note(sid, max(0, self._next_turn(sid) - 1),
+                                  f"The changes are too big to keep as a patch ({info.file_size // (1024 * 1024)} MB). "
+                                  "Use the workspace export instead.")
+                too_big = True
             else:
                 patch = archive.read(info)
+                too_big = False
         workspace.root.mkdir(parents=True, exist_ok=True)
         (workspace.root / "agent.patch").write_bytes(patch)
+        marker = workspace.root / TOO_BIG_FILE
+        if too_big:
+            marker.write_text("1", encoding="ascii")
+        else:
+            marker.unlink(missing_ok=True)
         data = backend.get_archive(handle, src="work", exclude=COPY_SKIP)
         self._save_files(workspace, data)
         try:

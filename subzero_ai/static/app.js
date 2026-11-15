@@ -171,21 +171,150 @@
     }
   });
 
-  // Code sessions: redraw the steps every few seconds while Claude works, and stop once it waits or finishes
-  function pollCode() {
-    const box = document.querySelector("[data-code-steps]");
-    if (!box?.querySelector("[data-code-live]")) return;
-    setTimeout(async () => {
-      try {
-        const res = await fetch(box.dataset.url, { credentials: "same-origin" });
-        if (res.ok) box.innerHTML = await res.text();
-      } catch {
-        // try again on the next round
+  // ------------------------------------------------------------------ Code
+  // Ctrl+Enter (or Cmd+Enter) sends the box you are typing in
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && event.target.matches?.("[data-submit-on-enter]")) {
+      event.preventDefault();
+      event.target.form?.requestSubmit();
+    }
+  });
+
+  // A session page asks for itself again while it isn't finished: quickly while Claude works, slowly while it waits
+  // for a person, and rarely in a hidden tab. Only blocks that changed are swapped, so open folds, text typed in a
+  // note or the follow-up box, and the scroll position stay as they are. The follow-up box is outside the part that
+  // is redrawn; its enabled state follows the page's data-composer-state block.
+  const codeRegion = document.querySelector("[data-code-region]");
+  if (codeRegion) {
+    const scroller = document.querySelector("[data-scroller]");
+    const composer = document.querySelector("[data-composer]");
+    const offline = document.querySelector("[data-connection-note]");
+    const drawn = new WeakMap(); // each block's HTML as the server last sent it
+    const delays = { fast: 2500, slow: 6000 };
+    let timer = 0;
+    let busy = false;
+    const live = () => codeRegion.querySelector("[data-code-live]");
+    const remember = (root) => root.querySelectorAll("[data-key]").forEach((el) => drawn.set(el, el.outerHTML));
+
+    const hasUserState = (el) => {
+      const active = document.activeElement;
+      if (active && el.contains(active) && active.matches("input, textarea, select")) return true;
+      return Array.from(el.querySelectorAll("input[name=note], textarea")).some((f) => f.value !== f.defaultValue);
+    };
+    const carryOpen = (from, to) => {
+      const before = from.querySelectorAll("details");
+      to.querySelectorAll("details").forEach((d, i) => { if (before[i]) d.open = before[i].open; });
+    };
+    function morph(oldParent, freshParent) {
+      const olds = new Map();
+      for (const child of oldParent.children) if (child.dataset.key) olds.set(child.dataset.key, child);
+      const wanted = [];
+      for (const fresh of Array.from(freshParent.children)) {
+        const old = fresh.dataset.key ? olds.get(fresh.dataset.key) : null;
+        const html = fresh.outerHTML;
+        if (!old) {
+          drawn.set(fresh, html);
+          wanted.push(fresh);
+        } else if (drawn.get(old) === html || hasUserState(old)) {
+          wanted.push(old);
+        } else if (fresh.hasAttribute("data-morph") && old.hasAttribute("data-morph")) {
+          morph(old, fresh);
+          drawn.set(old, html);
+          wanted.push(old);
+        } else {
+          carryOpen(old, fresh);
+          drawn.set(fresh, html);
+          wanted.push(fresh);
+        }
       }
-      pollCode();
-    }, 2500);
+      for (const child of Array.from(oldParent.children)) if (!wanted.includes(child)) child.remove();
+      let ref = oldParent.firstElementChild;
+      for (const el of wanted) {
+        if (el === ref) ref = ref.nextElementSibling;
+        else oldParent.insertBefore(el, ref);
+      }
+    }
+
+    function applyComposer() {
+      const state = live()?.querySelector("[data-composer-state]");
+      if (!state || !composer) return;
+      const open = state.dataset.open === "yes";
+      composer.querySelector("textarea").disabled = !open;
+      composer.querySelector('button[type="submit"]').disabled = !open;
+      const hint = composer.querySelector("[data-composer-hint]");
+      if (hint) hint.textContent = state.dataset.hint || "";
+    }
+
+    function schedule() {
+      clearTimeout(timer);
+      const mode = live()?.dataset.poll;
+      if (!mode || mode === "off") return;
+      const base = delays[mode] || 6000;
+      timer = setTimeout(refresh, document.hidden ? Math.max(base * 6, 20000) : base);
+    }
+
+    async function refresh() {
+      if (busy) return;
+      busy = true;
+      clearTimeout(timer);
+      try {
+        const res = await fetch(codeRegion.dataset.url, { credentials: "same-origin", headers: { Accept: "text/html" } });
+        if (res.status === 404 || res.status === 403) return; // the session is gone: stop asking
+        if (!res.ok) throw new Error("bad answer");
+        const fresh = new DOMParser().parseFromString(await res.text(), "text/html").querySelector("[data-code-live]");
+        if (!fresh) throw new Error("not a session page");
+        offline.hidden = true;
+        const stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+        const root = live();
+        morph(root, fresh);
+        root.dataset.poll = fresh.dataset.poll;
+        root.dataset.state = fresh.dataset.state;
+        applyComposer();
+        if (stick) scroller.scrollTop = scroller.scrollHeight;
+      } catch {
+        offline.hidden = false; // the next round tries again
+      } finally {
+        busy = false;
+        schedule();
+      }
+    }
+
+    remember(live());
+    scroller.scrollTop = scroller.scrollHeight;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && live()?.dataset.poll !== "off") refresh();
+    });
+    schedule();
   }
-  pollCode();
+
+  // The Code home's "Needs a mentor" list refreshes now and then, and the counts in the sidebar and tab title with it
+  const needsBox = document.querySelector("[data-needs]");
+  if (needsBox) {
+    setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const res = await fetch(needsBox.dataset.url, { credentials: "same-origin" });
+        if (!res.ok) return;
+        const fresh = new DOMParser().parseFromString(await res.text(), "text/html").querySelector("[data-needs-list]");
+        const old = needsBox.querySelector("[data-needs-list]");
+        if (!fresh || !old) return;
+        const change = Number(fresh.dataset.count) - Number(old.dataset.count);
+        old.replaceWith(fresh);
+        document.querySelectorAll("[data-needs-count]").forEach((badge) => {
+          badge.textContent = fresh.dataset.count;
+          badge.hidden = fresh.dataset.count === "0";
+          badge.setAttribute("aria-label", `${fresh.dataset.count} waiting`);
+        });
+        if (change) {
+          const match = document.title.match(/^\((\d+)\) /);
+          const total = Math.max(0, (match ? Number(match[1]) : 0) + change);
+          document.title = (total ? `(${total}) ` : "") + document.title.replace(/^\(\d+\) /, "");
+        }
+      } catch {
+        // try again next time
+      }
+    }, 15000);
+  }
 
   // A model dropdown's "Other (type a model id)" choice shows the box for typing an id.
   document.addEventListener("change", (event) => {
@@ -270,10 +399,40 @@
   const settingsTabs = Array.from(document.querySelectorAll("[data-settings-tab]"));
   if (settingsTabs.length) {
     const tabLinks = Array.from(document.querySelectorAll('.settings-nav a[href^="#tab-"]'));
+    // Boxes that moved to another tab keep working from old links: the page lists old name -> new name
+    let anchors = {};
+    try {
+      anchors = JSON.parse(document.querySelector("[data-anchors]")?.dataset.anchors || "{}");
+    } catch {
+      /* no map: old names that still exist work as they are */
+    }
     const tabFor = (id) => {
       const el = id && document.getElementById(id);
       return el ? el.closest("[data-settings-tab]") : null;
     };
+    const openFolds = (el) => {
+      for (let d = el?.closest("details"); d; d = d.parentElement?.closest("details")) d.open = true;
+    };
+
+    // Unsaved edits: ask before leaving the page or another tab, but only if a box really changed
+    const forms = Array.from(document.querySelectorAll(".settings-page form")).filter((f) => f.querySelector('[name="csrf"]'));
+    const stateOf = (form) =>
+      JSON.stringify(Array.from(new FormData(form)).filter(([name, value]) => name !== "csrf" && typeof value === "string"));
+    const startState = new Map(forms.map((f) => [f, stateOf(f)]));
+    const isDirty = (form) => startState.get(form) !== stateOf(form);
+    const dirtyIn = (tab) => forms.filter((f) => tab.contains(f) && isDirty(f));
+    let submitting = false;
+    document.addEventListener("submit", () => {
+      submitting = true;
+      setTimeout(() => (submitting = false), 3000); // a submit that didn't leave the page guards again
+    });
+    window.addEventListener("beforeunload", (event) => {
+      if (!submitting && forms.some(isDirty)) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    });
+
     const showTab = (tab) => {
       for (const t of settingsTabs) t.hidden = t !== tab;
       for (const a of tabLinks) {
@@ -292,11 +451,13 @@
       } catch {
         /* a broken address: open the first section */
       }
+      if (id && !document.getElementById(id) && anchors[id]) id = anchors[id];
       // A form that came back with mistakes opens where the first mistake is
       const invalid = document.querySelector('[data-settings-tab] [aria-invalid="true"]');
       const tab = tabFor(id) || (invalid && invalid.closest("[data-settings-tab]")) || settingsTabs[0];
       showTab(tab);
       const target = id && document.getElementById(id);
+      openFolds(target || invalid);
       if (target && target !== tab) target.scrollIntoView();
       else if (invalid && !id) invalid.focus();
       else if (target) window.scrollTo(0, 0); // a whole section: start at the top, under the page title
@@ -306,6 +467,12 @@
         event.preventDefault();
         const tab = tabFor(a.getAttribute("href").slice(1));
         if (!tab) return;
+        const here = settingsTabs.find((t) => !t.hidden);
+        const dirty = here && here !== tab ? dirtyIn(here) : [];
+        if (dirty.length) {
+          if (!window.confirm("You changed something on this tab and haven't saved it. Leave without saving?")) return;
+          for (const f of dirty) f.reset();
+        }
         history.replaceState(null, "", a.getAttribute("href"));
         showTab(tab);
         window.scrollTo(0, 0);
@@ -316,5 +483,34 @@
     fromAddress();
     // The browser jumps to the address's box once the page has loaded, after this ran: put the right place back
     window.addEventListener("load", () => setTimeout(fromAddress, 0), { once: true });
+
+    // The old-chats archive or delete job: show how far it is, and show the result when it finishes
+    const job = document.querySelector("[data-archive-progress]");
+    if (job) {
+      const tick = async () => {
+        try {
+          const res = await fetch("/settings/archive/status", { credentials: "same-origin", headers: { Accept: "application/json" } });
+          const data = res.ok ? await res.json() : null;
+          if (data && data.state !== "running") {
+            if (forms.some(isDirty)) {
+              job.querySelector("[data-archive-step]").textContent = "Finished. Reload the page to see the result.";
+            } else {
+              submitting = true;
+              location.reload();
+            }
+            return;
+          }
+          if (data) {
+            job.querySelector("[data-archive-step]").textContent = data.step;
+            const bar = job.querySelector("[data-archive-bar]");
+            if (bar) bar.value = Math.min(100, Math.round((100 * data.done) / Math.max(data.total, 1)));
+          }
+        } catch {
+          /* try again on the next round */
+        }
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
+    }
   }
 })();

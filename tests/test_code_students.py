@@ -23,15 +23,17 @@ API = "https://api.github.com/repos/team/robot-code/zipball"
 
 class StudentAccessTest(CodeStudentTest):
     def test_students_see_no_code_when_access_is_off(self):
-        side = '</svg> Code</a>'  # the sidebar entry (the app name in the corner links to /code for everyone)
         self.h.services.settings.code_student_access = False
-        self.assertNotIn(side, self.ava.get("/about").text)
-        self.assertEqual(self.ava.get("/code").status_code, 403)
+        home = self.ava.get("/code")
+        self.assertEqual(home.status_code, 200, "the home page explains it instead of refusing")
+        self.assertIn("A mentor has to turn Code on for students.", home.text)
+        self.assertIn("message the bot in Slack", home.text)
+        self.assertNotIn('id="code-task"', home.text)
         self.assertEqual(self.ava.post("/code", {"task": "x"}).status_code, 403)
-        self.assertIn(side, self.kim.get("/about").text, "mentors keep Code")
+        self.assertEqual(self.ava.get("/code/1").status_code, 403)
+        self.assertIn('id="code-task"', self.kim.get("/code").text, "mentors keep Code")
         self.h.services.settings.code_student_access = True
-        self.assertIn(side, self.ava.get("/about").text)
-        self.assertEqual(self.ava.get("/code").status_code, 200)
+        self.assertIn('id="code-task"', self.ava.get("/code").text)
 
     def test_a_student_request_waits_for_a_mentor_and_makes_no_sandbox(self):
         sid, _ = self.ask(self.ava)
@@ -45,7 +47,7 @@ class StudentAccessTest(CodeStudentTest):
         self.assertFalse(self.root.exists() and any(self.root.iterdir()))
         self.assertIn("asked for a Code session", self.h.slack.posts[-1]["text"], "mentors hear about it in Slack")
         self.assertEqual(self.h.slack.posts[-1]["channel"], "CAPPROVALS")
-        self.assertIn("Student requests", self.kim.get("/code").text)
+        self.assertIn("Needs a mentor", self.kim.get("/code").text)
         self.assertIn(f'href="/code/{sid}"', self.kim.get("/code").text)
         self.assertIn("Approve and start", self.kim.get(f"/code/{sid}").text)
         self.assertIn("code_student_requested", self.actions())
@@ -219,7 +221,7 @@ class StudentPrivacyTest(CodeStudentTest):
         blocked = self.ava.get(f"/code/{sid}/changes.patch")
         self.assertEqual(blocked.status_code, 403)
         self.assertIn("A mentor is looking at your changes", blocked.text)
-        self.assertIn("Waiting for a mentor to look at your changes", self.ava.get(f"/code/{sid}").text)
+        self.assertIn("A mentor is looking at your changes", self.ava.get(f"/code/{sid}").text)
         self.assertNotIn("Download patch", self.ava.get(f"/code/{sid}").text, "no download before release")
         self.assertNotIn("changes-title", self.ava.get(f"/code/{sid}").text, "no file list before release")
         self.assertEqual(self.kim.get(f"/code/{sid}/changes.patch").status_code, 200, "mentors always can")

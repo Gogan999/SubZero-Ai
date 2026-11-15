@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf }}">
   <meta name="color-scheme" content="{{ theme or 'light dark' }}">
-  <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
+  <title>{% if pending_count %}({{ pending_count }}) {% endif %}{% block title %}{{ settings.app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <link rel="stylesheet" href="/assets/code.css?v={{ version }}">
   <script src="/static/app.js?v={{ version }}" defer></script>

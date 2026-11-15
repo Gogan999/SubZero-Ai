@@ -11,7 +11,7 @@ import ipaddress
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
@@ -145,6 +145,9 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "folder, and a mentor approves each command before it runs."),
         Field("code_command_timeout", "Stop a command after this many seconds", "int",
               "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
+        Field("code_keep_days", "Delete a finished session's files after this many days", "int",
+              "A finished session keeps its steps and transcript, but its copies of the repository (they take a lot of "
+              "disk space) are deleted after this long. Checked every night.", 1, 365),
         Field("code_sandbox", "Run Code commands in a sandbox", "choice",
               "Hyper-V gives each Code session its own virtual computer on an internal network, deleted when the "
               "session ends. Fake runs commands on this computer with no protection, so use it only for testing. "
@@ -220,7 +223,7 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("code_student_command_timeout", "Stop a student's command after this many seconds", "int",
               "Applies to commands in a student's sandbox.", 30, 3600),
     ]),
-    "people": ("Subteams and admins", [
+    "people": ("Admins", [
         Field("admin_slack_ids", "Admins' Slack member IDs", "ids",
               "One per line. In Slack, click a person's name, open the three-dot menu, and choose Copy member ID. "
               "Admins can change these settings and read the audit log."),
@@ -360,14 +363,17 @@ CHECKED_MODEL_SETTINGS = {"model_default": False, "model_hard": False, "model_sc
 
 
 def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
-             settings: Settings | None = None, db: Database | None = None) -> tuple[dict[str, Any], dict[str, str]]:
+             settings: Settings | None = None, db: Database | None = None,
+             only: Collection[str] | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """Check one section's form. Returns (values, errors), keyed by setting name.
+    Pass `only` to check just those fields of the section (a Settings page box that holds some of them): the others
+    are left alone, even a checkbox that is missing from the form.
     Pass the current settings so models are checked against the providers that are on and the AI backend.
     Pass the database to also require the Model safety check for a changed default, hard-problem or screener
     model (a value that isn't changing is left alone)."""
     values: dict[str, Any] = {}
     errors: dict[str, str] = {}
-    fields = SECTIONS[section][1]
+    fields = [f for f in SECTIONS[section][1] if only is None or f.name in only]
     providers: tuple[str, ...] = tuple(settings.ai_providers) if settings is not None else ("anthropic",)
     backend = resolve_backend(settings) if settings is not None else "anthropic"
     if any(f.name == "ai_providers" for f in fields) and "ai_providers" in form:  # absent means unchanged

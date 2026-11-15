@@ -8,13 +8,8 @@
   <div data-queue>
     {% include "_queue_items.html" %}
   </div>
-  {% if code_waiting %}
-  <section class="panel" id="code" aria-labelledby="code-title">
-    <h2 id="code-title">Code steps to approve</h2>
-    <ul class="simple-list">
-      {% for c in code_waiting %}<li><a href="/code/{{ c.id }}">{{ c.title }}</a> <span class="field-hint">{% if c.request %}New request from {{ c.owner }}{% else %}{{ c.pending }} step{{ 's' if c.pending != 1 else '' }}, started by {{ c.owner }}{% endif %}</span></li>{% endfor %}
-    </ul>
-  </section>
+  {% if needs_count %}
+  <p class="field-hint">{{ needs_count }} Code item{{ 's' if needs_count != 1 }} need{{ '' if needs_count != 1 else 's' }} a mentor. <a href="/code#needs">See Needs a mentor</a>.</p>
   {% endif %}
   {% if settings.approval_window_minutes or window %}
   <section class="panel" id="window" aria-labelledby="window-title">
