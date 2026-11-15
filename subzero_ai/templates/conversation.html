@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "_icons.html" import icon %}
 {% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
 {% block body_class %}chat-page{% endblock %}
 {# On phones the AI notice moves to the top of the messages and scrolls away with them, so it doesn't use up the
@@ -13,7 +12,7 @@
   <header class="thread-head">
     <div class="thread-title">
       <h1 data-title>{{ title }}</h1>
-      <p class="thread-meta">Started by <a href="/recents?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}{% if conv.project_name %} · in <a href="/projects/{{ conv.project_id }}">{{ conv.project_name }}</a>{% endif %}</p>
+      <p class="thread-meta">Started by <a href="/recents?owner={{ conv.owner_id }}">{{ conv.owner_name }}</a>{% if conv.subteam %}, {{ conv.subteam }}{% endif %}</p>
     </div>
     <div class="thread-actions">
       {% if viewer.is_mentor and not can_send %}
@@ -26,13 +25,10 @@
         <noscript><button class="button small" type="submit">Switch</button></noscript>
       </form>
       {% endif %}
-      {% if (own or viewer.is_mentor) and conv.visibility != 'private' %}
-      <a class="button small" href="/c/{{ conv.id }}/share">{{ icon('share') }} Share</a>
-      {% endif %}
       {% if viewer.is_admin %}
       <form method="post" action="/c/{{ conv.id }}/delete">
         <input type="hidden" name="csrf" value="{{ csrf }}">
-        <button class="button small reject" type="submit" data-confirm="Delete this chat for everyone? Its messages, files and share links are removed for good and can't be brought back. The audit log keeps a note that you deleted it.">Delete chat</button>
+        <button class="button small reject" type="submit" data-confirm="Delete this chat for everyone? Its messages and files are removed for good and can't be brought back. The audit log keeps a note that you deleted it.">Delete chat</button>
       </form>
       {% endif %}
     </div>
@@ -59,9 +55,7 @@
       <label class="visually-hidden" for="reply-text">Message</label>
       <textarea id="reply-text" name="text" rows="1" maxlength="20000" required
         placeholder="{{ composer_hint }}" {% if waiting %}disabled{% endif %}></textarea>
-      <ul class="chosen-files" data-chosen hidden></ul>
       <div class="composer-bar">
-        {% include "_composer_tools.html" %}
         <div class="composer-send">
           {% if viewer.is_mentor %}
           <label class="visually-hidden" for="model-select">Model</label>
@@ -77,14 +71,7 @@
       </div>
     </div>
     <p class="form-error" role="alert" hidden></p>
-    {% if viewer.is_mentor %}
-    {% set missing = [] %}
-    {% if not caps.web_search %}{% set _ = missing.append('search the web') %}{% endif %}
-    {% if not caps.thinking %}{% set _ = missing.append('think longer') %}{% endif %}
-    {% if not caps.images %}{% set _ = missing.append('read images') %}{% endif %}
-    {% if missing %}<p class="composer-note" data-model-note>This model can't {{ missing[:-1]|join(', ') ~ (' or ' if missing|length > 1 else '') ~ missing[-1] }}.</p>{% endif %}
-    {% endif %}
-    <p class="composer-note">Attach code, text, screenshots or videos, up to {{ max_files }} files of 50 MB. Don't attach photos or videos of people. Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
+    <p class="composer-note">Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
   </form>
   {% else %}
   <p class="read-only">You're reading {{ conv.owner_name }}'s chat. To ask something, <a href="/chats">start your own</a>.</p>

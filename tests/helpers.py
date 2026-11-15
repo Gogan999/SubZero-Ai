@@ -152,6 +152,28 @@ class Harness:
     def reply_to(self, message_id: int):
         return self.services.store.reply_for(message_id)
 
+    # ---- rows that older versions wrote and this one only reads (nothing in the app writes them now)
+    def add_old_attachment(self, message_id: int, name: str = "Arm.java", data: bytes = b"double kP = 0.1;\n",
+                           kind: str = "text") -> int:
+        """Store a file the way 0.10 did (a row in `attachments` and the file in DATA_DIR/files)."""
+        relative = f"{message_id}-old{name}"
+        (self.settings.data_dir / "files").mkdir(parents=True, exist_ok=True)
+        (self.settings.data_dir / "files" / relative).write_bytes(data)
+        return self.services.db.execute(
+            "INSERT INTO attachments (message_id, name, kind, media_type, size, path, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00+00:00')",
+            (message_id, name, kind, "text/plain" if kind == "text" else "image/png", len(data), relative)).lastrowid
+
+    def add_old_project(self, conversation_id: int, name: str = "Old project") -> int:
+        """A project row like 0.10 made, with one file row, and the chat pointed at it."""
+        db = self.services.db
+        pid = db.execute("INSERT INTO projects (name, instructions, created_at, updated_at) VALUES (?, ?, 'now', 'now')",
+                         (name, "Always answer in metric units.")).lastrowid
+        db.execute("INSERT INTO project_files (project_id, name, kind, media_type, size, path, created_at) "
+                   "VALUES (?, 'notes.txt', 'text', 'text/plain', 5, 'missing-file.txt', 'now')", (pid,))
+        db.execute("UPDATE conversations SET project_id = ? WHERE id = ?", (pid, conversation_id))
+        return pid
+
     # ---- driving the app through Slack only (the entry points Socket Mode uses)
     def slack_people(self) -> None:
         """Make the fake workspace: two mentors in the approvals channel, a student and a second student outside it."""

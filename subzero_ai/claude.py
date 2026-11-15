@@ -270,69 +270,11 @@ def _last_user_text(messages: list[dict]) -> str:
     return str(content)
 
 
-def _last_user_files(messages: list[dict]) -> tuple[int, int]:
-    """How many text files and images the latest message carries."""
-    content = messages[-1]["content"] if messages else ""
-    if not isinstance(content, list):
-        return 0, 0
-    texts = sum(1 for b in content if b.get("type") == "text" and b.get("text", "").startswith("<file"))
-    images = sum(1 for b in content if b.get("type") == "image")
-    return texts, images
-
-
-SAMPLE_EXPLAINER = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Arm with a P controller</title>
-<style>
-  body { font: 16px system-ui, sans-serif; margin: 0; padding: 16px; background: #f4f7f9; color: #142231; }
-  canvas { width: 100%; max-width: 520px; aspect-ratio: 4 / 3; background: #fff; border: 1px solid #d2dde5; border-radius: 8px; display: block; }
-  label { display: block; margin-top: 12px; }
-  input { width: 100%; max-width: 520px; }
-  #net { font-size: 14px; color: #4a5b6b; }
-</style>
-</head>
-<body>
-<h1 style="font-size:1.2rem">Arm holding an angle with a P controller</h1>
-<canvas id="c" width="520" height="390"></canvas>
-<label>kP (volts per degree): <strong id="kpv"></strong><input id="kp" type="range" min="0" max="0.6" step="0.01" value="0.15"></label>
-<label>Target angle (degrees): <strong id="tv"></strong><input id="t" type="range" min="0" max="90" step="1" value="45"></label>
-<p id="net">Checking network access...</p>
-<script>
-  const c = document.getElementById("c"), g = c.getContext("2d");
-  const kp = document.getElementById("kp"), t = document.getElementById("t");
-  let angle = 0, speed = 0;
-  function step() {
-    const target = +t.value, volts = Math.max(-12, Math.min(12, +kp.value * (target - angle)));
-    const accel = volts * 12 - 40 * Math.cos(angle * Math.PI / 180) - speed * 2.5;
-    speed += accel / 60; angle = Math.max(-10, Math.min(120, angle + speed / 60));
-    document.getElementById("kpv").textContent = (+kp.value).toFixed(2);
-    document.getElementById("tv").textContent = target;
-    g.clearRect(0, 0, 520, 390);
-    const x0 = 120, y0 = 300, len = 260;
-    g.strokeStyle = "#d2dde5"; g.setLineDash([6, 6]); g.beginPath(); g.moveTo(x0, y0);
-    g.lineTo(x0 + len * Math.cos(target * Math.PI / 180), y0 - len * Math.sin(target * Math.PI / 180)); g.stroke();
-    g.setLineDash([]); g.strokeStyle = "#1a5a86"; g.lineWidth = 14; g.lineCap = "round"; g.beginPath(); g.moveTo(x0, y0);
-    g.lineTo(x0 + len * Math.cos(angle * Math.PI / 180), y0 - len * Math.sin(angle * Math.PI / 180)); g.stroke();
-    g.lineWidth = 1; g.fillStyle = "#142231"; g.fillText("Angle " + angle.toFixed(1) + " deg, error " + (target - angle).toFixed(1) + " deg", 16, 24);
-    requestAnimationFrame(step);
-  }
-  step();
-  fetch("https://example.org/").then(() => { document.getElementById("net").textContent = "Network: reachable (it shouldn't be!)"; })
-    .catch(() => { document.getElementById("net").textContent = "Network: blocked, as it should be. Cookies visible to this page: " + (function () { try { return document.cookie || "none"; } catch (e) { return "none"; } })(); });
-</script>
-</body>
-</html>
-"""
-
-
 class FakeClaude:
     """Streams a canned reply. Lets you try the whole app without an API key.
 
     Include ALERT-TEST in a message to get a reply that starts with [MENTOR ALERT],
-    or ERROR-TEST to simulate a failed request. SCREEN-FLAG and SCREEN-ERROR do the same for the pre-screen. Ask for an interactive explainer to get a sample one."""
+    or ERROR-TEST to simulate a failed request. SCREEN-FLAG and SCREEN-ERROR do the same for the pre-screen."""
 
     def __init__(self, delay: float = 0.02):
         self.delay = delay
@@ -367,13 +309,6 @@ class FakeClaude:
             yield StreamEvent("error", error="Simulated failure for testing.")
             return
         reply = self.reply_for(question)
-        texts, images = _last_user_files(messages)
-        if texts or images:
-            reply += (f"\n\nYou attached {texts} text file{'s' if texts != 1 else ''} and "
-                      f"{images} image{'s' if images != 1 else ''}. The real Claude would read them.")
-        if system_extra and "interactive explainer" in system_extra:
-            reply += ("\n\nHere's a sample interactive explainer. Drag the sliders to see how kP changes the way "
-                      "the arm settles.\n\n```explainer\n" + SAMPLE_EXPLAINER + "```")
         if "ALERT-TEST" in question:
             reply = ("[MENTOR ALERT]\nThat sounds like a lot to carry. You don't have to handle it alone. "
                      "Please talk to a trusted adult today, like a parent, a mentor, or your school counselor. "

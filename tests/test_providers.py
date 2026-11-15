@@ -137,7 +137,7 @@ class ValidationTest(unittest.TestCase):
     def providers(self, form, **kw):
         base = {"model_default": "anthropic/claude-sonnet-5-5", "model_hard": "anthropic/claude-opus-5-5",
                 "model_titles": "anthropic/claude-haiku-5-5", "effort_default": "medium", "effort_high": "high",
-                "max_tokens_chat": "8000", "max_tokens_explainer": "16000", "long_chat_tokens": "150000",
+                "max_tokens_chat": "8000", "long_chat_tokens": "150000",
                 "web_search_daily_limit": "50"}
         base.update(form)
         return saved_settings.validate("claude", base, settings=self.settings(**kw))
@@ -276,8 +276,7 @@ class KeyRouteTest(unittest.TestCase):
     def test_model_form_saves_providers(self):
         form = {"ai_providers": ["anthropic", "openai"], "model_default": "claude-sonnet-5-5",
                 "model_hard": "openai/gpt-x", "model_titles": "claude-haiku-5-5", "effort_default": "medium",
-                "effort_high": "high", "max_tokens_chat": "8000", "max_tokens_explainer": "16000",
-                "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "effort_high": "high", "max_tokens_chat": "8000", "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
         # the offline backend takes any enabled provider, and a new hard-problem model needs a passing safety check
         model_check.save_result(self.h.services.db, model_check.CheckResult("openai/gpt-x", cases=[
             model_check.CaseResult(c, True) for c in model_check.CHAT_CASES + model_check.SCREENER_CASES]))
@@ -399,7 +398,7 @@ class EmptyProvidersTest(unittest.TestCase):
             self.assertIn('<input type="hidden" name="ai_providers" value="">', page)
             form = {"ai_providers": "", "model_default": "claude-sonnet-5-5", "model_hard": "claude-opus-5-5",
                     "model_titles": "claude-haiku-5-5", "effort_default": "medium", "effort_high": "high",
-                    "max_tokens_chat": "8000", "max_tokens_explainer": "16000", "long_chat_tokens": "150000",
+                    "max_tokens_chat": "8000", "long_chat_tokens": "150000",
                     "web_search_daily_limit": "50"}
             resp = admin.post("/settings/claude", form, headers=HTML)
             self.assertEqual(resp.status_code, 400)

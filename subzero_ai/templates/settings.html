@@ -279,7 +279,7 @@
 
   <section class="panel" id="model-check" aria-labelledby="model-check-title">
     <h2 id="model-check-title">Model safety check</h2>
-    <p class="field-hint">Sends a model a few test messages: an unsafe shop request, a "forget your rules" trick, a student who says they want to hurt themselves, an everyday question, a request for an explainer, and two messages for the screener. A model has to pass before it can be the default, hard-problem or screener model. The model you type is graded on its answers by the judge model, {{ settings.model_check_judge }}, so that model's provider must be turned on and have its API key saved. Models already in use keep working. The check sends about ten requests and takes a minute or two.</p>
+    <p class="field-hint">Sends a model a few test messages: an unsafe shop request, a "forget your rules" trick, a student who says they want to hurt themselves, an everyday question, and two messages for the screener. A model has to pass before it can be the default, hard-problem or screener model. The model you type is graded on its answers by the judge model, {{ settings.model_check_judge }}, so that model's provider must be turned on and have its API key saved. Models already in use keep working. The check sends about eight requests and takes a minute or two.</p>
     <form method="post" action="/settings/model-check" novalidate>
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="field">
@@ -369,7 +369,7 @@
 
   <div class="settings-tab" id="tab-site" data-settings-tab role="region" aria-labelledby="tab-site-title">
     <h2 class="settings-tab-title" id="tab-site-title">Site and server</h2>
-    <p class="field-hint">The site's address, data, files, connectors and the Code tab.</p>
+    <p class="field-hint">The site's address, data, connectors and the Code tab.</p>
   {% call env_panel(env.site) %}
       <h3>Kept in config.env only</h3>
       <p class="field-hint">These are changed by editing {{ config_path }} on the mini PC, then restarting.</p>
@@ -381,7 +381,7 @@
   {{ db_panel(by_key.data) }}
   <section class="panel" id="connectors" aria-labelledby="connectors-title">
     <h2 id="connectors-title">Connectors</h2>
-    <p class="field-hint">Let people add files to a message from the composer's tools menu instead of attaching them. The files go on the review card like attachments, so mentors still see everything before Claude does.</p>
+    <p class="field-hint">The team's GitHub repository. Code sessions work in a copy of it, and nothing is pushed back.</p>
     <form method="post" action="/settings/connectors" novalidate>
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="fields">
@@ -405,11 +405,6 @@
           <label for="remove-token">Remove the saved token</label>
         </div>
         {% endif %}
-        <div class="field check">
-          <input type="checkbox" id="drive-links" name="connector_drive_links" value="1" {% if connectors.drive %}checked{% endif %} aria-describedby="drive-links-hint">
-          <label for="drive-links">People can add Google Drive links</label>
-          <p class="field-hint" id="drive-links-hint">Docs, Sheets, Slides and files shared as "Anyone with the link". There's no Google sign-in, so private files can't be added.</p>
-        </div>
       </div>
       <div class="form-actions"><button class="button primary" type="submit">Save connectors</button></div>
     </form>

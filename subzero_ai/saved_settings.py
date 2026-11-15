@@ -76,20 +76,16 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "other models are safe enough for students."),
         Field("effort_default", "Everyday effort", "choice", "Higher effort gives more careful answers and costs more.",
               choices=EFFORT_CHOICES),
-        Field("effort_high", "Effort for explainers and files", "choice",
-              "Used for interactive explainers and messages with files attached, which are usually code reviews.",
+        Field("effort_high", "Effort for long replies (not used now)", "choice",
+              "Replies use the everyday effort above. This is kept so older settings stay valid.",
               choices=EFFORT_CHOICES),
         Field("max_tokens_chat", "Longest reply, in tokens", "int", "8,000 tokens is about 6,000 words.", 500, 64000),
-        Field("max_tokens_explainer", "Longest explainer reply, in tokens", "int",
-              "An explainer is a whole web page, so it needs more room.", 1000, 64000),
         Field("long_chat_tokens", "Suggest a fresh chat after this many tokens", "int",
               "Long chats cost more on every reply.", 10000, 1000000),
         Field("web_search_enabled", "Claude can search the web when asked", "bool",
-              "Web search and Research in the composer's tools menu. Each search costs about a cent."),
+              "Each search costs about a cent."),
         Field("web_search_daily_limit", "Web searches per day, for the whole team", "int",
-              "A web search reply uses up to 5, a Research report up to 20. Resets at midnight.", 0, 2000),
-        Field("research_for_students", "Students can ask for Research reports", "bool",
-              "Research runs many searches and writes a long report, so it starts as mentors only."),
+              "Resets at midnight.", 0, 2000),
     ]),
     "limits": ("Limits and review", [
         Field("limit_pending_per_student", "Waiting messages per student", "int",
@@ -214,7 +210,7 @@ PROMPT_LAYERS: list[tuple[str, str, str]] = [
      "The child-safety rules: age-appropriate content, honesty about being an AI, privacy, shop safety, "
      "and MENTOR ALERT. Ask a coach to review any change."),
     ("team.md", "Team context", "The robot code language and framework, units, shop rules, and conventions."),
-    ("formats.md", "Output formats", "How Claude formats code and interactive explainers."),
+    ("formats.md", "Output formats", "How Claude formats its replies."),
 ]
 assert [name for name, _, _ in PROMPT_LAYERS] == list(PROMPT_FILES)
 

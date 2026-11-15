@@ -152,7 +152,7 @@ class PickerTest(unittest.TestCase):
     def claude_form(self, **changes) -> dict:
         form = {"ai_providers": ["anthropic"], "model_default": SONNET, "model_hard": OPUS, "model_titles": HAIKU,
                 "effort_default": "medium", "effort_high": "high", "max_tokens_chat": "8000",
-                "max_tokens_explainer": "16000", "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
         form.update(changes)
         return form
 

@@ -12,7 +12,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from subzero_ai.claude import FakeClaude, StreamEvent
-from subzero_ai.web import COMING_SOON
 
 from .backends import RecordingClaudeClient, RecordingPiClient, add_variants
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness, pass_model_check
@@ -389,19 +388,17 @@ class FlowTest(unittest.TestCase):
         self.assertNotIn("<script>alert(1)", page)
         self.assertNotIn('href="javascript:', page)
 
-    def test_sidebar_and_coming_soon_pages(self):
+    def test_sidebar_links(self):
         mid, cid = self.start("My own question")
         page = self.ava.get("/chats").text
         self.assertIn('href="/recents"', page)
         self.assertIn(f'href="/c/{cid}"', page, "the sidebar's Recents lists the student's own chats")
         self.assertIn("1 waiting", page)
-        for path in ("/projects", "/artifacts"):
-            self.assertIn(f'href="{path}"', page)
-            self.assertEqual(self.ava.get(path).status_code, 200)
+        for path in ("/projects", "/artifacts"):  # removed in 0.11 (F3b turns these into redirects)
+            self.assertNotIn(f'href="{path}"', page)
+            self.assertEqual(self.ava.get(path).status_code, 404)
         self.assertNotIn('href="/code"', page, "Code is for mentors")
         self.assertIn('href="/code"', self.kim.get("/chats").text)
-        for key in COMING_SOON:  # the ones not built yet
-            self.assertIn("Coming soon", self.ava.get(f"/{key}").text)
         self.assertNotIn('href="/queue"', page, "students don't get mentor tools")
         self.assertIn('href="/queue"', self.kim.get("/chats").text)
         # Old chat-list links still work

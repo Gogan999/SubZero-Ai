@@ -119,15 +119,6 @@ class WindowTest(unittest.TestCase):
         self.assertTrue(any("Mentor alert" in p["text"] for p in self.h.slack.posts), "the alert still reaches mentors")
         self.assertEqual(self.status(self.send(cid, "Anyway")), "pending")
 
-    def test_messages_with_files_always_wait(self):
-        mid, cid = self.start()
-        self.approve(mid)
-        resp = self.ava.post(f"/c/{cid}/messages", {"text": "Here's the code"},
-                             files=[("files", ("Arm.java", b"class Arm {}", "text/plain"))])
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.h.idle()
-        self.assertEqual(self.status(resp.json()["message_id"]), "pending")
-
     def test_students_set_to_always_wait(self):
         self.h.settings.always_review_slack_ids = frozenset({STUDENT})
         mid, cid = self.start()

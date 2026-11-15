@@ -68,11 +68,10 @@ class SettingsValuesTest(TempDirTest):
         values, errors = saved_settings.validate("claude", {
             "model_default": "claude-fable-5-1", "model_hard": "gpt-4", "model_titles": "claude-haiku-5-5",
             "effort_default": "extreme", "effort_high": "high", "max_tokens_chat": "8,000",
-            "max_tokens_explainer": "10", "long_chat_tokens": "150000"})
+            "long_chat_tokens": "150000"})
         self.assertIn("Fable", errors["model_default"])
         self.assertIn("provider/model", errors["model_hard"])
         self.assertIn("effort_default", errors)
-        self.assertIn("max_tokens_explainer", errors)
         self.assertEqual(values["max_tokens_chat"], 8000)
 
     def test_admins_cant_remove_themselves(self):
@@ -130,7 +129,7 @@ class SettingsPageTest(unittest.TestCase):
         resp = self.coach.post("/settings/claude", {"model_default": "claude-mythos-1", "model_hard": "claude-opus-5-5",
                                                     "model_titles": "claude-haiku-5-5", "effort_default": "medium",
                                                     "effort_high": "high", "max_tokens_chat": "8000",
-                                                    "max_tokens_explainer": "16000", "long_chat_tokens": "150000"},
+                                                    "long_chat_tokens": "150000"},
                                headers=HTML)
         self.assertEqual(resp.status_code, 400)
         self.assertIn("kept off", resp.text)
@@ -333,10 +332,10 @@ class BackupTest(unittest.TestCase):
         self.h.close()
 
     def chat(self, text):
-        resp = self.ava.post("/chats/new", {"text": text, "subteam": "Programming"},
-                             files=[("files", ("notes.txt", b"kP = 0.2\n", "text/plain"))])
+        resp = self.ava.post("/chats/new", {"text": text, "subteam": "Programming"})
         self.assertEqual(resp.status_code, 200, resp.text)
         self.h.idle()
+        self.h.add_old_attachment(resp.json()["message_id"], "notes.txt", b"kP = 0.2\n")  # a file from 0.10
         return int(resp.json()["url"].rsplit("/", 1)[1])
 
     def test_backup_and_restore_round_trip(self):
@@ -361,13 +360,14 @@ class BackupTest(unittest.TestCase):
         self.assertEqual((self.settings.data_dir / "prompts" / "team.md").read_text(encoding="utf-8"), "Team layer v1")
         files = self.h.services.attachments.for_conversation(first)
         row = next(iter(files.values()))[0]
-        self.assertEqual(self.h.services.attachments.read(row), b"kP = 0.2\n")
+        self.assertEqual(self.h.services.attachments.path(row).read_bytes(), b"kP = 0.2\n")
 
     def test_videos_stay_out_of_backups_and_survive_a_restore(self):
         mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2000
-        resp = self.ava.post("/chats/new", {"text": "Look at this"}, files=[("files", ("clip.mp4", mp4, "video/mp4"))])
+        resp = self.ava.post("/chats/new", {"text": "Look at this"})
         self.assertEqual(resp.status_code, 200, resp.text)
         self.h.idle()
+        self.h.add_old_attachment(resp.json()["message_id"], "clip.mp4", mp4, "video")  # a video from 0.10
         videos = list((self.settings.data_dir / "files").glob("*.mp4"))
         self.assertEqual(len(videos), 1)
         made = backup.make_backup(self.settings, now=datetime(2026, 10, 25, 2, 0, 0))
@@ -474,11 +474,11 @@ class NightlyTest(unittest.TestCase):
 
     def test_old_chats_are_deleted_with_their_files(self):
         ava = self.h.login(STUDENT)
-        old = ava.post("/chats/new", {"text": "Old", "subteam": "Programming"},
-                       files=[("files", ("old.txt", b"old", "text/plain"))]).json()
+        old = ava.post("/chats/new", {"text": "Old", "subteam": "Programming"}).json()
         new = ava.new_chat("New").json()
         old_id, new_id = (int(x["url"].rsplit("/", 1)[1]) for x in (old, new))
         self.h.idle()
+        self.h.add_old_attachment(old["message_id"], "old.txt", b"old")
         row = next(iter(self.s.attachments.for_conversation(old_id).values()))[0]
         path = self.h.settings.data_dir / "files" / row["path"]
         self.assertTrue(path.exists())

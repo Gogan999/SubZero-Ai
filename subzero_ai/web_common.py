@@ -20,24 +20,22 @@ from starlette.templating import Jinja2Templates
 from . import __version__
 from .ai_backend import Capabilities, capabilities_for, resolve_backend
 from .approvals import ApprovalService, Outcome
-from .attachments import MAX_FILES, Attachments
+from .attachments import Attachments
 from .bridge_login import BridgeLogin
 from .auth import SlackLogin
 from .claude import ClaudeClient
 from .code_runner import CodeRunner
 from .config import Settings, normalize_model_id
-from .connectors import Drive, GitHub
+from .connectors import GitHub
 from .db import Database
 from .egress_proxy import EgressProxy
 from .generation import ReplyRunner
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly
-from .projects import Projects
 from .roles import RECOVERY_USER, Directory
 from .sandbox import SandboxManager
 from .screener import Screener
-from .shares import Shares
 from .slack_api import SlackWebApi
 from .slack_dm import SlackDMs
 from .slack_handlers import SlackInteractions
@@ -49,7 +47,7 @@ HERE = Path(__file__).parent
 # How many of a person's own chats the sidebar lists before "All chats"
 RECENTS = 25
 
-SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|projects(?:/\d+)?|code(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:chats|recents|code(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -73,16 +71,11 @@ class Services:
     attachments: Attachments
     health: Health
     nightly: Nightly
-    projects: Projects
-    shares: Shares
     github: GitHub
-    drive: Drive
     code: CodeRunner
     screener: Screener  # the one screener: the approval window and Code requests both use it
     # A Claude subscription sign-in started on the Settings page, waiting for its code
     bridge_login: BridgeLogin = field(default_factory=BridgeLogin)
-    # Explainer titles and sizes per finished reply, for the Artifacts gallery (a finished reply never changes)
-    artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Model names from the Pi gateway, by provider/model id, for labels (filled once at startup, may stay empty)
     model_names: dict[str, str] = field(default_factory=dict)
     # The gateway's full record per model id (`images`, `reasoning`, ...), for what each non-Claude model can do
@@ -264,7 +257,7 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         "csrf": csrf_token(request),
         "dev_mode": s.settings.dev_login,
         "version": __version__,
-        "pending_count": (len(s.store.pending_messages()) + s.shares.count_pending() + s.code.count_waiting()
+        "pending_count": (len(s.store.pending_messages()) + s.code.count_waiting()
                           if viewer and viewer.is_mentor else 0),
         "setting_alert": viewer is not None and viewer.is_admin and any(
             row.get("alert") for row in _health_alerts(s)),
@@ -299,7 +292,7 @@ class SecurityHeaders:
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                # Explainer pages and attachments set their own policy; explainers are framed by the chat page.
+                # Old attached files set their own policy.
                 own_policy = any(name.lower() == b"content-security-policy" for name, _ in headers)
                 if not own_policy:
                     headers.append((b"content-security-policy", CSP.encode()))
@@ -307,7 +300,6 @@ class SecurityHeaders:
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"SAMEORIGIN" if own_policy else b"DENY"),
                 ]
-                # Share links send no referrer at all, so the link never leaks to a site a reply links to
                 if not any(name.lower() == b"referrer-policy" for name, _ in headers):
                     headers.append((b"referrer-policy", b"same-origin"))
                 if self.https:
@@ -319,7 +311,7 @@ class SecurityHeaders:
 
 
 class LimitBody:
-    """Refuse request bodies bigger than any real message with attachments, before reading them all."""
+    """Refuse request bodies bigger than any real form or message, before reading them all."""
 
     def __init__(self, app, max_bytes: int):
         self.app = app
@@ -349,8 +341,8 @@ class LimitBody:
 
     @staticmethod
     async def _too_big(send):
-        response = JSONResponse({"ok": False, "error": f"That's too much to send at once. Attach up to {MAX_FILES} "
-                                                       "files of up to 50 MB each, and less than 90 MB in all."}, status_code=413)
+        response = JSONResponse({"ok": False, "error": "That's too much to send at once. Shorten it and try again."},
+                                status_code=413)
         await response({"type": "http"}, None, send)
 
 

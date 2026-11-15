@@ -11,9 +11,7 @@
         <label class="visually-hidden" for="new-text">Message</label>
         <textarea id="new-text" name="text" rows="4" required maxlength="20000"
           placeholder="How can Claude help with your robot today?"></textarea>
-        <ul class="chosen-files" data-chosen hidden></ul>
         <div class="composer-bar">
-          {% include "_composer_tools.html" %}
           <div class="composer-send">
             {% if viewer.is_mentor and model_options %}
             <label class="visually-hidden" for="new-model">Model for this chat</label>
@@ -28,7 +26,7 @@
         </div>
       </div>
       <p class="form-error" role="alert" hidden></p>
-      <p class="composer-note">Attach code, text, screenshots or videos, up to {{ max_files }} files of 50 MB. Don't attach photos or videos of people. Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
+      <p class="composer-note">Claude is an AI and can make mistakes, so check important answers with a mentor.</p>
     </form>
   </div>
 </section>

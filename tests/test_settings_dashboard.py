@@ -23,7 +23,7 @@ CLIENT_SECRET = "SECRETCLIENTSECRET0123456789"
 OPENAI_KEY = "sk-openaiSECRETSECRET123456"
 
 SITE = {"public_url": "https://ai.team.org", "app_name": "SubZero AI", "timezone": "America/Chicago",
-        "max_text_file_kb": "200", "backup_dir": "", "backup_hour": "2", "check_for_updates": "1",
+        "backup_dir": "", "backup_hour": "2", "check_for_updates": "1",
         "update_repo": "Gogan999/SubZero-Ai"}
 ENGINE = {"ai_backend": "fake", "pi_request_timeout": "300", "pi_idle_timeout": "120", "pi_node": "",
           "pi_gateway_script": "", "anthropic_base_url": "https://api.anthropic.com"}
@@ -105,17 +105,16 @@ class AccessTest(Base):
 
 class SiteTest(Base):
     def test_live_and_restart_settings(self):
-        form = {**SITE, "app_name": "Shop AI", "timezone": "America/New_York", "max_text_file_kb": "300",
-                "backup_hour": "4"}
+        form = {**SITE, "app_name": "Shop AI", "timezone": "America/New_York", "backup_hour": "4"}
         resp = self.post("/settings/env/site", form)
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Time zone applies after a restart.", resp.text)
         self.assertIn("Restart to finish saving", resp.text)
         config = self.config()
-        self.assertEqual((config["APP_NAME"], config["TIMEZONE"], config["MAX_TEXT_FILE_KB"], config["BACKUP_HOUR"]),
-                         ("Shop AI", "America/New_York", "300", "4"))
+        self.assertEqual((config["APP_NAME"], config["TIMEZONE"], config["BACKUP_HOUR"]),
+                         ("Shop AI", "America/New_York", "4"))
         s = self.h.settings
-        self.assertEqual((s.app_name, s.max_text_file_kb, s.backup_hour), ("Shop AI", 300, 4))  # live right away
+        self.assertEqual((s.app_name, s.backup_hour), ("Shop AI", 4))  # live right away
         self.assertEqual(s.timezone, "America/Chicago")  # waits for the restart
         self.assertEqual(self.h.services.pending_restart, {"timezone": "America/New_York"})
         self.assertIn('value="America/New_York"', resp.text)
@@ -140,7 +139,7 @@ class SiteTest(Base):
 
     def test_bad_values_are_refused(self):
         for name, value in (("public_url", "https://ai.yourdomain.org"), ("timezone", "Mars/Olympus"),
-                            ("max_text_file_kb", "lots"), ("backup_hour", "25"), ("update_repo", "not a repo"),
+                            ("backup_hour", "25"), ("update_repo", "not a repo"),
                             ("backup_dir", "relative/folder"), ("app_name", "x" * 41), ("app_name", "")):
             resp = self.post("/settings/env/site", {**SITE, name: value})
             self.assertEqual(resp.status_code, 400, name)
@@ -295,8 +294,7 @@ class JudgeTest(Base):
         s = self.h.settings
         return {"ai_providers": list(s.ai_providers), "model_default": s.model_default, "model_hard": s.model_hard,
                 "model_titles": s.model_titles, "model_check_judge": judge, "effort_default": "medium",
-                "effort_high": "high", "max_tokens_chat": "8000", "max_tokens_explainer": "16000",
-                "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "effort_high": "high", "max_tokens_chat": "8000", "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
 
     def test_judge_must_be_claude(self):
         resp = self.post("/settings/claude", self.form("openai/gpt-x"))
@@ -372,8 +370,7 @@ class UnitTest(unittest.TestCase):
         from subzero_ai.config import Settings
         from subzero_ai.pi_client import KEY_SETTINGS
         on_page = (set(saved_settings.FIELDS) | set(server_settings.ENV_FIELDS) | set(KEY_SETTINGS.values())
-                   | {"connector_github_repo", "connector_github_branch", "connector_github_token",
-                      "connector_drive_links"})
+                   | {"connector_github_repo", "connector_github_branch", "connector_github_token"})
         not_settings = {"config_file", "fake_claude", "slack_team_id"}  # fake_claude is part of the AI engine
         file_only = {"data_dir", "host", "port", "dev_login", "session_secret"}
         missing = {f.name for f in fields(Settings)} - on_page - not_settings - file_only

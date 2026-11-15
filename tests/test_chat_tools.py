@@ -48,11 +48,11 @@ class ScrollingChatTest(ChatTest):
 
 class DeleteChatTest(ChatTest):
     def student_chat_with_file(self):
-        resp = self.ava.post("/chats/new", {"text": "Why won't my intake spin?"},
-                             files=[("files", ("Intake.java", b"class Intake {}", "text/x-java"))])
+        resp = self.ava.post("/chats/new", {"text": "Why won't my intake spin?"})
         self.assertEqual(resp.status_code, 200, resp.text)
         body = resp.json()
         self.h.idle()
+        self.h.add_old_attachment(body["message_id"], "Intake.java", b"class Intake {}")  # a file from 0.10
         return body["message_id"], int(body["url"].rsplit("/", 1)[1])
 
     def delete(self, actor, cid):
@@ -87,7 +87,7 @@ class DeleteChatTest(ChatTest):
         self.assertFalse(any(b.get("type") == "actions" for b in update["blocks"]))
         self.assertIn("Chat deleted", str(update["blocks"]))
 
-    def test_deleting_a_chat_with_replies_and_a_share(self):
+    def test_deleting_a_chat_with_replies_and_an_old_share_row(self):
         _, cid = self.start("How do I tune a PID loop?")
         self.kim.send(cid, "And for an elevator?")
         self.h.idle()

@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from subzero_ai.claude import FakeClaude
-from subzero_ai.slack_dm import CHUNK_LIMIT, _hard_split, escape, from_slack, replace_explainers, to_slack
+from subzero_ai.claude import FakeClaude, StreamEvent
+from subzero_ai.slack_dm import CHUNK_LIMIT, _hard_split, escape, flatten_explainers, from_slack, to_slack
 
 from .helpers import Harness
 from .test_slack_interactions import block_action
@@ -211,21 +211,32 @@ class DirectMessageFlowTest(DMTestBase):
         self.assertIn("couldn't finish that reply", final)
         self.assertIn("http://localhost:8787/c/", final)
 
-    def test_explainer_reply_links_to_the_website(self):
-        ts = self.send("Make me an interactive simulation of an arm")
+    def test_a_reply_with_an_explainer_fence_posts_as_code_without_a_website_link(self):
+        page = "<!doctype html><html><body><script>go()</script></body></html>"
+        reply = f"Here is a simulation.\n\n```explainer\n{page}\n```\n\nDrag the slider."
+
+        class Scripted(FakeClaude):
+            async def stream(self, **kw):
+                yield StreamEvent("text", text=reply)
+                yield StreamEvent("done")
+
+        self.h.services.claude = self.h.services.runner.claude = Scripted(delay=0)
+        ts = self.send("How does kP change an arm?")
         mid = self.message_for(ts)
         self.tap("approve", mid)
         placeholder = self.thread_posts(ts)[1]["ts"]
-        final = "\n".join(u["text"] for u in self.slack.updates if u["ts"] == placeholder)
+        final = [u for u in self.slack.updates if u["ts"] == placeholder][-1]["text"]
         extra = "\n".join(p["text"] for p in self.thread_posts(ts)[2:])
         text = final + extra
-        self.assertNotIn("<html", text.lower())
-        self.assertNotIn("explainer\n", text)
-        self.assertIn("interactive explainer. Open it on the website>", text)
+        self.assertIn("```\n&lt;!doctype html&gt;", text, "the explainer is shown as an ordinary code block")
+        self.assertIn("Drag the slider.", text)
+        self.assertNotIn("```explainer", text)
+        self.assertNotIn("website", text.lower())
+        self.assertNotIn("http://localhost:8787", text)
 
     def test_sources_listed_at_the_end(self):
         chunks = self.h.services.dms.reply_chunks(
-            "Answer", json.dumps([{"url": "https://docs.wpilib.org/", "title": "WPILib <docs>"}]), "http://x/c/1")
+            "Answer", json.dumps([{"url": "https://docs.wpilib.org/", "title": "WPILib <docs>"}]))
         self.assertEqual(chunks, ["Answer\n\nSources:\n• <https://docs.wpilib.org/|WPILib &lt;docs&gt;>"])
 
     def test_approval_hook_failure_does_not_stop_the_reply(self):
@@ -576,13 +587,14 @@ class FormattingTest(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(to_slack(""), [])
 
-    def test_replace_explainers(self):
+    def test_flatten_explainers(self):
         text = "Before\n\n```explainer\n<html>big</html>\n```\n\nAfter ```java\nx\n```"
-        out = replace_explainers(text, "http://site/c/4")
-        self.assertNotIn("<html>", out)
-        self.assertIn("(http://site/c/4)", out)
+        out = flatten_explainers(text)
+        self.assertIn("```html\n<html>big</html>\n```", out)
+        self.assertNotIn("```explainer", out)
+        self.assertNotIn("http", out)
         self.assertIn("Before", out)
-        kept = replace_explainers("```java\nint x;\n```", "http://site/c/4")
+        kept = flatten_explainers("```java\nint x;\n```")
         self.assertEqual(kept, "```java\nint x;\n```")
 
 

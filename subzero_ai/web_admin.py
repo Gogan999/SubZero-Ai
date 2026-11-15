@@ -186,7 +186,7 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
     backups = [{"name": b.name, "time": f"{b.created:%b} {b.created.day}, {b.created:%I:%M %p}".replace(" 0", " "),
                 "size": size_text(b.size)} for b in list_backups(s.settings)[:5]]
     connectors = {"repo": s.settings.connector_github_repo, "branch": s.settings.connector_github_branch,
-                  "token_set": bool(s.settings.connector_github_token), "drive": s.settings.connector_drive_links}
+                  "token_set": bool(s.settings.connector_github_token)}
     ai_keys = []
     for p in PROVIDERS:
         saved = getattr(s.settings, KEY_SETTINGS[p], "") if p in KEY_SETTINGS else ""
@@ -446,8 +446,8 @@ GITHUB_URL_RE = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/\s]+/[^/#?\
 
 @page(require="admin")
 async def save_connectors(request: Request, viewer: Viewer) -> Response:
-    """The GitHub repository and Google Drive links for the composer's connectors. The token goes in config.env
-    with the other secrets and is never shown again."""
+    """The GitHub repository Code works in. The token goes in config.env with the other secrets and is never
+    shown again."""
     s = services(request)
     form = {k: str(v).strip() for k, v in (await request.form()).items() if isinstance(v, str)}
     repo, branch = form.get("connector_github_repo", ""), form.get("connector_github_branch", "")
@@ -455,7 +455,6 @@ async def save_connectors(request: Request, viewer: Viewer) -> Response:
     if match:
         repo = match.group(1).removesuffix(".git")
     token = "" if form.get("remove_token") == "1" else (form.get("connector_github_token") or s.settings.connector_github_token)
-    drive = form.get("connector_drive_links") == "1"
     problem = ""
     if any("\n" in value or "\r" in value for value in form.values()):
         problem = "A value has a line break in it. Paste it again on one line."
@@ -474,21 +473,19 @@ async def save_connectors(request: Request, viewer: Viewer) -> Response:
         flash(request, f"Connectors weren't saved. {problem}")
         return RedirectResponse("/settings#connectors", status_code=303)
     before = {"repository": s.settings.connector_github_repo, "branch": s.settings.connector_github_branch,
-              "token": "saved" if s.settings.connector_github_token else "none", "drive links": s.settings.connector_drive_links}
-    after = {"repository": repo, "branch": branch, "token": "saved" if token else "none", "drive links": drive}
+              "token": "saved" if s.settings.connector_github_token else "none"}
+    after = {"repository": repo, "branch": branch, "token": "saved" if token else "none"}
     token_changed = token != s.settings.connector_github_token
     if before == after and not token_changed:
         flash(request, "Nothing changed in connectors.")
         return RedirectResponse("/settings#connectors", status_code=303)
-    _save_config(s, {"CONNECTOR_GITHUB_REPO": repo, "CONNECTOR_GITHUB_BRANCH": branch, "CONNECTOR_GITHUB_TOKEN": token,
-                     "CONNECTOR_DRIVE_LINKS": "true" if drive else "false"})
+    _save_config(s, {"CONNECTOR_GITHUB_REPO": repo, "CONNECTOR_GITHUB_BRANCH": branch, "CONNECTOR_GITHUB_TOKEN": token})
     s.settings.connector_github_repo, s.settings.connector_github_branch, s.settings.connector_github_token = repo, branch, token
-    s.settings.connector_drive_links = drive
     changes = {key: {"from": before[key], "to": after[key]} for key in before if before[key] != after[key]}
     if token_changed and "token" not in changes:
         changes["token"] = {"from": "saved", "to": "replaced"}
     s.db.audit("connectors_changed", actor_id=viewer.id, details=changes)
-    flash(request, "Saved connectors." + (f" Everyone can now add files from {repo}." if repo else ""))
+    flash(request, "Saved connectors." + (f" Code now works in a copy of {repo}." if repo else ""))
     return RedirectResponse("/settings#connectors", status_code=303)
 
 

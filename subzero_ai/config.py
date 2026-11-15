@@ -91,9 +91,8 @@ class Settings:
     model_hard: str = "anthropic/claude-opus-5-5"  # mentors can switch a conversation to this for hard problems
     model_titles: str = "anthropic/claude-haiku-5-5"
     effort_default: str = "medium"
-    effort_high: str = "high"  # for explainers and messages with files attached (usually code reviews)
+    effort_high: str = "high"  # kept for old settings; replies use effort_default
     max_tokens_chat: int = 8000
-    max_tokens_explainer: int = 16000
     long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
     ai_backend: str = "anthropic"  # anthropic, pi, or fake (FAKE_CLAUDE=1 also means fake)
@@ -104,7 +103,6 @@ class Settings:
     # Web search costs extra for each search, so the whole team shares a daily limit
     web_search_enabled: bool = True
     web_search_daily_limit: int = 50
-    research_for_students: bool = False  # Research runs many searches, so it starts as mentors only
 
     # Slack
     slack_bot_token: str = field(default="", repr=False)
@@ -133,12 +131,11 @@ class Settings:
     # The model that grades the Model safety check's open-ended cases (refusals). Must be a Claude model.
     model_check_judge: str = "anthropic/claude-sonnet-5-5"
 
-    # Connectors: add files to a message from the team's GitHub repository or a shared Google Drive link
+    # Connector: the team's GitHub repository, which Code downloads
     connector_github_repo: str = ""  # owner/name
     connector_github_branch: str = ""  # empty means the repository's default branch
     # only for a private repository: a fine-grained token with read-only Contents
     connector_github_token: str = field(default="", repr=False)
-    connector_drive_links: bool = True
 
     # Code: Claude works in a copy of the GitHub repository above; a mentor approves each change and command
     code_commands: tuple[str, ...] = ("gradlew",)  # programs Claude may ask to run, by name
@@ -177,9 +174,6 @@ class Settings:
     code_student_daily_sessions: int = 3  # a student's requests (new sessions and follow-ups) in 24 hours
     code_student_max_turns: int = 40  # Claude replies per run in a student's session
     code_student_command_timeout: int = 600  # seconds a command in a student's sandbox may run
-
-    # Attachments (images and other files are capped at 5 MB each, 5 per message)
-    max_text_file_kb: int = 200
 
     subteams: tuple[str, ...] = ("Programming", "Fab and design", "Business and outreach")
 

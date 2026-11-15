@@ -292,7 +292,7 @@ class BridgeClaude(FakeClaude):
 class AdminPageTest(unittest.TestCase):
     FORM = {"model_default": "anthropic/claude-sonnet-5-5", "model_hard": "anthropic/claude-opus-5-5",
             "model_titles": "anthropic/claude-haiku-5-5", "effort_default": "medium", "effort_high": "high",
-            "max_tokens_chat": "8000", "max_tokens_explainer": "16000", "long_chat_tokens": "150000",
+            "max_tokens_chat": "8000", "long_chat_tokens": "150000",
             "web_search_daily_limit": "50"}
 
     def make(self, backend):

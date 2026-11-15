@@ -99,13 +99,14 @@ def _split_blocks(text: str) -> list[tuple[bool, str, str]]:
     return blocks
 
 
-def replace_explainers(text: str, link: str) -> str:
-    """Interactive explainers only run on the website: swap each one for a line pointing there."""
+def flatten_explainers(text: str) -> str:
+    """Interactive explainers aren't made any more. An old reply that has one shows it as an ordinary code block."""
     out: list[str] = []
     for is_code, info, body in _split_blocks(text):
-        if is_code and info.split(" ")[0].lower() == EXPLAINER_TAG:
-            out.append(f"[This reply has an interactive explainer. Open it on the website]({link})")
-        elif is_code:
+        if is_code:
+            words = info.split(" ")
+            if words[0].lower() == EXPLAINER_TAG:
+                info = " ".join(["html", *words[1:]]).strip()
             out.append(f"```{info}\n{body}\n```")
         else:
             out.append(body)
@@ -388,7 +389,7 @@ class SlackDMs:
                 continue
             state.last_text = text
             try:
-                first = to_slack(replace_explainers(text, self.approvals.link(state.conversation_id)))
+                first = to_slack(flatten_explainers(text))
                 if first:
                     await self.slack.update_message(state.channel, state.ts, first[0])
             except Exception:
@@ -419,7 +420,7 @@ class SlackDMs:
         if reply["status"] == ERROR:
             chunks = [f"Sorry, the AI couldn't finish that reply. You can try again on the website: {link}"]
         else:
-            chunks = self.reply_chunks(reply["content"], reply["sources"], link)
+            chunks = self.reply_chunks(reply["content"], reply["sources"])
         for index, chunk in enumerate(chunks):
             try:
                 if index == 0 and state.ts:
@@ -434,9 +435,9 @@ class SlackDMs:
                 log.warning("Couldn't post part %s of reply %s in Slack", index + 1, reply_id, exc_info=True)
 
     @staticmethod
-    def reply_chunks(content: str, sources_json: str | None, link: str) -> list[str]:
-        """The reply as Slack posts: explainers swapped for a link, and the sources listed at the end."""
-        chunks = to_slack(replace_explainers(content, link))
+    def reply_chunks(content: str, sources_json: str | None) -> list[str]:
+        """The reply as Slack posts: an old explainer shown as a code block, and the sources listed at the end."""
+        chunks = to_slack(flatten_explainers(content))
         try:
             sources = [s for s in json.loads(sources_json or "[]") if s.get("url")][:MAX_SOURCES]
         except ValueError:
