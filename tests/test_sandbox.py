@@ -1321,11 +1321,11 @@ class SandboxSettingsTest(unittest.TestCase):
 
     def test_defaults(self):
         fresh = Settings()
-        self.assertEqual(fresh.code_sandbox, "off")
-        self.assertEqual((fresh.sandbox_ttl_hours, fresh.sandbox_max_sessions), (48, 3))
-        self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (2048, 2, 31))
+        self.assertEqual(fresh.code_sandbox, "hyperv")  # on by default since 0.11 (D57)
+        self.assertEqual((fresh.sandbox_ttl_hours, fresh.sandbox_max_sessions), (48, 2))
+        self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (6144, 2, 31))
         self.assertEqual((fresh.sandbox_min_free_gb, fresh.sandbox_switch), (20, "szsandbox-internal"))
-        self.assertEqual(fresh.sandbox_proxy_port, 3128)
+        self.assertEqual((fresh.sandbox_proxy_port, fresh.sandbox_gateway_port), (3128, 3129))
         self.assertFalse(fresh.sandbox_guest_sudo, "no sudo in the sandbox unless an admin turns it on")
 
     def test_valid_values_are_accepted(self):

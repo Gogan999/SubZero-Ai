@@ -66,16 +66,17 @@ See `docs/CODE_SANDBOX_PLAN.md`.
 
 | Setting | config.env key |
 | --- | --- |
-| Run Code commands in a sandbox (off, hyperv, fake) | `CODE_SANDBOX` |
+| Run Code commands in a sandbox (off, hyperv, fake) | `CODE_SANDBOX` (default hyperv) |
 | Delete a sandbox this many hours after it was made (1 to 168) | `SANDBOX_TTL_HOURS` |
-| Sandboxes that can run at the same time (1 to 10) | `SANDBOX_MAX_SESSIONS` |
-| Memory per sandbox, processors per sandbox, disk per sandbox | `SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_DISK_GB` |
+| Sandboxes that can run at the same time (1 to 10) | `SANDBOX_MAX_SESSIONS` (default 2) |
+| Memory per sandbox, processors per sandbox, disk per sandbox | `SANDBOX_MEMORY_MB` (default 6144), `SANDBOX_CPUS`, `SANDBOX_DISK_GB` |
 | Delete a sandbox that grows past (GB) | `SANDBOX_DISK_CAP_GB` |
 | Keep this much disk free before a new sandbox is made, in GB | `SANDBOX_MIN_FREE_GB` |
 | Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
 | Internal network switch (the host's vNIC is 10.77.0.1/24) | `SANDBOX_SWITCH` (default `szsandbox-internal`) |
 | Host port sandboxes may reach, for the egress proxy (default 3128). Restart after changing | `SANDBOX_PROXY_PORT` |
 | This PC's address on the sandbox switch, where the proxy listens (default 10.77.0.1, a private IPv4 address). Restart after changing | `SANDBOX_HOST_ADDRESS` |
+| Host port sandboxes may reach, for the Claude gateway (default 3129). Restart after changing | `SANDBOX_GATEWAY_PORT` |
 | Websites a sandbox may reach, separated by commas (`*.example.com` covers names under it; empty allows none) | `SANDBOX_ALLOWED_HOSTS` |
 | Ports a sandbox may use through the proxy (default 443) | `SANDBOX_ALLOWED_PORTS` |
 | Data a sandbox may move through the proxy over its whole life, in MB (default 2048, both directions) | `SANDBOX_PROXY_MB_LIMIT` |
@@ -135,7 +136,15 @@ audit log (`code_student_requested`, `code_student_approved`, `code_student_decl
 
 | Setting | config.env key |
 | --- | --- |
-| Students may ask for Code sessions (needs the Hyper-V or fake sandbox) | `CODE_STUDENT_ACCESS` (default off) |
+| Students may ask for Code sessions (needs the Hyper-V or fake sandbox) | `CODE_STUDENT_ACCESS` (default on; every request still needs a mentor) |
+| Which engine new Code sessions use (`agent` runs in the sandbox only; `classic` is the older step-by-step one). Running sessions keep theirs | `CODE_ENGINE` (default agent) |
+| How Code signs in: `api_key`, or `subscription` (testing only, uses `CODE_SUBSCRIPTION_TOKEN` in config.env, never shown on the page) | `CODE_AUTH`, `CODE_SUBSCRIPTION_TOKEN` |
+| Code sessions working at once (1 to 8); the rest wait in line | `CODE_MAX_RUNNING` (default 2) |
+| Ask for a plan before changing anything: students, mentors | `CODE_PLAN_FIRST_STUDENTS` (default on), `CODE_PLAN_FIRST_MENTORS` (default off) |
+| Claude may search and read the web: students, mentors | `CODE_WEB_TOOLS_STUDENTS`, `CODE_WEB_TOOLS_MENTORS` (default on) |
+| Claude may use helper agents | `CODE_SUB_AGENTS` (default on) |
+| Most one session may spend, in dollars: students, mentors (0 means no cap) | `CODE_CAP_STUDENT_USD` (default 5), `CODE_CAP_MENTOR_USD` (default 15) |
+| Most steps Claude may take in one request (5 to 1000) | `CODE_AGENT_MAX_TURNS` (default 200) |
 | Inside a student's sandbox, changes and commands run without a mentor's click | `CODE_STUDENT_FREE_REIN` (default on) |
 | Inside a mentor's sandbox, changes and commands run without a click (sandbox only) | `CODE_MENTOR_FREE_REIN` (default off) |
 | Programs Claude may run inside a sandbox, on top of `CODE_COMMANDS` | `CODE_SANDBOX_COMMANDS` (default gradlew, python3, pip, npm, node, java, git) |

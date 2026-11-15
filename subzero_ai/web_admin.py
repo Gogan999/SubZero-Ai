@@ -86,6 +86,10 @@ def health_rows(s: Services) -> list[dict[str, Any]]:
         rows.append({"label": label, "state": state, "kind": kind, "detail": detail,
                      "alert": item["state"] == "failing"})
 
+    gateway = code_gateway_row(s)
+    if gateway is not None:
+        rows.append(gateway)
+
     last = s.db.get_kv("last_backup_at")
     if s.db.get_kv("last_backup_ok") == "0":
         error = (s.db.get_kv("last_backup_error") or "").split(" ", 1)[-1]
@@ -111,6 +115,27 @@ def health_rows(s: Services) -> list[dict[str, Any]]:
     return rows
 
 
+def code_gateway_row(s: Services) -> dict[str, Any] | None:
+    """The Code gateway's health: whether it is running, and whether the chosen Code sign-in has anything to sign in with.
+    Only shown when the new Code engine uses Hyper-V sandboxes (the only case that needs the gateway)."""
+    st = s.settings
+    if st.code_sandbox != "hyperv" or s.code.engine_now() != "agent" or resolve_backend(st) == "fake":
+        return None
+    gateway = s.gateway
+    if gateway is None or not gateway.running:
+        why = (gateway.error if gateway is not None and gateway.error else "It hasn't started yet.")
+        return {"label": "Code gateway", "state": "Not running", "kind": "bad", "alert": True,
+                "detail": f"Claude in the sandboxes can't reach the AI service. {why} Restart SubZero AI after "
+                          "fixing the sandbox settings."}
+    problem = s.code.agent.credential_problem()
+    if problem:
+        return {"label": "Code gateway", "state": "Not signed in", "kind": "bad", "alert": True, "detail": problem}
+    how = "the team subscription" if st.code_auth == "subscription" else "the API key"
+    return {"label": "Code gateway", "state": "Working", "kind": "ok", "alert": False,
+            "detail": f"Claude in the sandboxes reaches the AI service through {gateway.host}:{gateway.port}, signed in "
+                      f"with {how}."}
+
+
 def _names_for(s: Services, slack_ids) -> str:
     """Who a list of Slack member IDs is, for the hint under the field."""
     names = []
@@ -127,6 +152,8 @@ KEY_HELP = {
     "google": "Make a key at aistudio.google.com, with Get API key.",
     "openrouter": "Make a key at openrouter.ai, under Keys.",
 }
+# The team subscription token for Code sessions (from `claude setup-token`). It is saved with the API keys below.
+CODE_KEY, CODE_KEY_ENV = "code_subscription_token", "CODE_SUBSCRIPTION_TOKEN"
 KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY",
            "openrouter": "OPENROUTER_API_KEY"}
 
@@ -188,7 +215,11 @@ def settings_context(s: Services, errors: dict[str, str] | None = None,
             ai_keys.append({"id": p, "label": saved_settings.PROVIDER_LABELS[p], "field": KEY_SETTINGS[p],
                             "set": bool(saved), "hint": server_settings.secret_hint(saved), "help": KEY_HELP[p],
                             "on": p in s.settings.ai_providers, "locked": KEY_ENV[p] in os.environ})
-    return {"health": health_rows(s), "sections": sections, "ai_keys": ai_keys, "safety": safety_context(s),
+    code_key = {"field": CODE_KEY, "set": bool(s.settings.code_subscription_token),
+                "hint": server_settings.secret_hint(s.settings.code_subscription_token),
+                "locked": CODE_KEY_ENV in os.environ}
+    return {"health": health_rows(s), "sections": sections, "ai_keys": ai_keys, "code_key": code_key,
+            "safety": safety_context(s),
             "prompts": prompts, "history": history,
             "backups": backups, "backup_folder": str(s.settings.backups_path), "connectors": connectors,
             "env_sections": env_sections_context(s, env_section, errors, submitted),
@@ -392,7 +423,13 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
     typed = {p: key for p, key in typed.items() if key}
     removed = [p for p in KEY_SETTINGS if form.get(f"remove_{p}") == "1" and getattr(s.settings, KEY_SETTINGS[p])
                and p not in typed]
+    code_typed = str(form.get(CODE_KEY, "") or "").strip() if CODE_KEY_ENV not in os.environ else ""
+    code_removed = (form.get(f"remove_{CODE_KEY}") == "1" and bool(s.settings.code_subscription_token)
+                    and not code_typed and CODE_KEY_ENV not in os.environ)
     problem = ""
+    if code_typed and (re.search(r"\s", code_typed) or not 16 <= len(code_typed) <= 512):
+        problem = ("The subscription token has a space in it or doesn't look complete. Copy the whole token again "
+                   "(it comes from running claude setup-token).")
     for provider in removed:
         using = [saved_settings.FIELDS[n].label.lower() for n in MODEL_ID_SETTINGS
                  if provider in s.settings.ai_providers and model_provider(getattr(s.settings, n)) == provider]
@@ -410,12 +447,18 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
             problem = key_problem(provider, key)
         if problem:
             break
-    if not typed and not removed and not problem:
+    if not typed and not removed and not code_typed and not code_removed and not problem:
         problem = "Paste a key into at least one box."
     if problem:
         flash(request, f"Keys weren't saved. {problem}")
         return RedirectResponse("/settings#ai-keys", status_code=303)
-    _save_config(s, {**{KEY_ENV[p]: key for p, key in typed.items()}, **{KEY_ENV[p]: "" for p in removed}})
+    updates = {**{KEY_ENV[p]: key for p, key in typed.items()}, **{KEY_ENV[p]: "" for p in removed}}
+    if code_typed or code_removed:
+        updates[CODE_KEY_ENV] = code_typed  # empty when removed
+    _save_config(s, updates)
+    if code_typed or code_removed:
+        s.settings.code_subscription_token = code_typed
+        s.db.audit("code_token_saved" if code_typed else "code_token_removed", actor_id=viewer.id, details={})
     for provider, key in typed.items():
         setattr(s.settings, KEY_SETTINGS[provider], key)
     for provider in removed:
@@ -430,6 +473,10 @@ async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
     if removed:
         s.db.audit("ai_key_removed", actor_id=viewer.id, details={"providers": removed})
         parts.append("Removed the key for " + ", ".join(saved_settings.PROVIDER_LABELS[p] for p in removed) + ".")
+    if code_typed:
+        parts.append("Saved the team subscription token for Code. It works from the next request.")
+    if code_removed:
+        parts.append("Removed the team subscription token for Code.")
     flash(request, " ".join(parts))
     return RedirectResponse("/settings#ai-keys", status_code=303)
 
@@ -591,7 +638,10 @@ async def _run_checks(s: Services, actor_id: int, actor_name: str) -> None:
     """The background job behind Run checks. Saves the results for the Settings page; always clears the mark."""
     from .checks import run_checks
     try:
-        results = await run_checks(s.settings, slack=s.slack, claude=s.claude, egress=s.egress)
+        engine = s.code.engine_now() == "agent"
+        results = await run_checks(s.settings, slack=s.slack, claude=s.claude, egress=s.egress,
+                                   gateway=s.gateway if engine else None,
+                                   credential_problem=s.code.agent.credential_problem() if engine else "")
         s.db.set_kv("settings_checks", json.dumps({
             "at": utcnow(), "by": actor_name,
             "results": [{"status": r.status, "title": r.title, "detail": r.detail} for r in results]}))

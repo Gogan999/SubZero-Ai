@@ -69,6 +69,7 @@ MAX_OPEN_SESSIONS = 5  # per mentor: sessions waiting or running at the same tim
 STUCK_SESSION_DAYS = 3  # waiting, running or preparing this long with no activity: stopped, copy deleted
 REAP_SECONDS = 5  # after a command exits, how long its output may stay open (a background child process)
 SKIP_DIRS = {".git", ".gradle", "build", "bin", "node_modules", "__pycache__", ".idea", ".vscode"}
+PATCH_FILE = "agent.patch"  # in a new-engine session's folder: the patch made inside its sandbox
 FINISHED = ("done", "stopped", "failed")  # a session in one of these states has no more commands to run
 AWAITING = "awaiting_approval"  # a student's request that a mentor hasn't answered yet
 OPEN_STUDENT_STATES = (AWAITING, "preparing", "running", "waiting")
@@ -343,8 +344,17 @@ class Workspace:
             fh.write(content)
         return f"Saved {self.rel(target)}."
 
+    def patch_text(self) -> str | None:
+        """The patch the new Code engine made inside the sandbox (code_engine.py), or None for a classic session."""
+        path = self.root / PATCH_FILE
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+
     def changes(self) -> list[dict[str, str]]:
-        """Files that differ between the downloaded copy and Claude's copy."""
+        """Files that differ between the downloaded copy and Claude's copy. A new-engine session keeps its patch
+        from the sandbox, and this reads that."""
+        patch = self.patch_text()
+        if patch is not None:
+            return parse_patch(patch)
         names = set()
         for root in (self.base, self.work):
             if root.is_dir():
@@ -369,6 +379,21 @@ class Workspace:
                     diff += "\n\\ No newline at end of file\n"
             out.append({"name": name, "kind": kind, "diff": diff})
         return out
+
+
+def parse_patch(text: str) -> list[dict[str, str]]:
+    """The files in a `git diff` patch, each with what happened to it and its part of the patch (a binary file's
+    data isn't shown: the download has it)."""
+    out = []
+    for block in re.split(r"(?m)^(?=diff --git )", text):
+        header = re.match(r"diff --git a/(.*) b/(.*)", block)
+        if not header:
+            continue
+        name = header.group(2)
+        kind = "added" if "\nnew file mode" in block else "deleted" if "\ndeleted file mode" in block else "changed"
+        binary = "\nGIT binary patch" in block or "\nBinary files " in block
+        out.append({"name": name, "kind": kind, "diff": f"Binary file {name} {kind}.\n" if binary else block})
+    return out
 
 
 def split_command(command: str, allowed: tuple[str, ...]) -> tuple[str, list[str]]:
@@ -534,6 +559,8 @@ class CodeRunner:
         self.sandboxes = sandboxes
         self.slack = slack  # tells the approvals channel when a student asks for a session (None: no Slack)
         self._busy: set[int] = set()
+        from .code_engine import AgentEngine  # imported here: code_engine imports this module
+        self.agent = AgentEngine(self)  # the new engine; a session's `engine` column says which one runs it
 
     @property
     def available(self) -> bool:
@@ -600,6 +627,17 @@ class CodeRunner:
             return STUDENT_NEEDS_SANDBOX
         return None
 
+    def engine_now(self) -> str:
+        """The engine new sessions get: "agent" (the new one, the default) or "classic"."""
+        return "classic" if str(self.settings.code_engine).strip().lower() == "classic" else "agent"
+
+    def engine_problem(self) -> str | None:
+        """Why no session can start because of the engine setting: the new engine needs a sandbox. None when fine."""
+        if self.engine_now() == "agent" and not self.sandboxed:
+            from .code_engine import NEEDS_SANDBOX
+            return NEEDS_SANDBOX
+        return None
+
     def student_problem(self) -> str | None:
         """Why students can't start a session right now, in plain words. None when they can."""
         if not self.settings.code_student_access:
@@ -607,6 +645,22 @@ class CodeRunner:
         if not self.available:
             return NO_REPO
         return self.sandbox_problem()
+
+    def _check_capacity(self) -> None:
+        """Refuse a new sandbox when the limit is reached. A new-engine session's idle sandbox doesn't count: it is
+        closed when the room is needed."""
+        try:
+            self.sandboxes.check_capacity(ignore=self.agent.idle_count())
+        except SandboxError as exc:
+            raise CodeError(str(exc)) from exc
+
+    def _cap_for(self, student: bool) -> float | None:
+        return self.agent.role_cap(student) if self.engine_now() == "agent" else None
+
+    def _plan_first_default(self, student: bool) -> int:
+        if self.engine_now() != "agent":
+            return 0
+        return int(bool(self.settings.code_plan_first_students if student else self.settings.code_plan_first_mentors))
 
     def _clean_task(self, task: str) -> str:
         task = (task or "").replace("\r\n", "\n").strip()
@@ -617,41 +671,47 @@ class CodeRunner:
         return task
 
     # ---- starting and steering
-    def start(self, viewer: Viewer, task: str, model: str) -> int:
+    def start(self, viewer: Viewer, task: str, model: str, plan_first: bool | None = None) -> int:
         if not viewer.is_mentor:
             raise CodeError("Code is for mentors.")
         if not self.available:
             raise CodeError(NO_REPO)
+        problem = self.engine_problem()
+        if problem:
+            raise CodeError(problem)
         if not capabilities_for(model, resolve_backend(self.settings)).code:
             raise CodeError(NO_CODE_MODEL)
         task = self._clean_task(task)
         self._check_open_limit(viewer.id)
         if self.sandboxed:
-            try:
-                self.sandboxes.check_capacity()
-            except SandboxError as exc:
-                raise CodeError(str(exc)) from exc
+            self._check_capacity()
         now = utcnow()
         transcript = [{"role": "user", "content": task}]
         free_rein = int(self.sandboxed and bool(self.settings.code_mentor_free_rein))
+        engine = self.engine_now()
+        plan = self._plan_first_default(False) if plan_first is None else int(bool(plan_first) and engine == "agent")
         with self.db.transaction() as conn:
             cur = conn.execute(
                 "INSERT INTO code_sessions (title, task, status, model, repo, ref, transcript, created_by, "
-                "created_at, updated_at, free_rein) VALUES (?, ?, 'preparing', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, updated_at, free_rein, engine, plan_first, cap_usd) "
+                "VALUES (?, ?, 'preparing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (short_title(task), task, model, self.settings.connector_github_repo,
-                 self.settings.connector_github_branch, json.dumps(transcript), viewer.id, now, now, free_rein))
+                 self.settings.connector_github_branch, json.dumps(transcript), viewer.id, now, now, free_rein,
+                 engine, plan, self._cap_for(False)))
             session_id = cur.lastrowid
             self.db.audit("code_session_started", actor_id=viewer.id, target_type="code", target_id=session_id,
                           details={"task": task, "repo": self.settings.connector_github_repo, "model": model,
-                                   "free_rein": bool(free_rein)}, conn=conn)
+                                   "free_rein": bool(free_rein), "engine": engine, "plan_first": bool(plan)},
+                          conn=conn)
         self.tasks.spawn(self._prepare_and_run(session_id), name=f"code-{session_id}")
         return session_id
 
-    def request(self, viewer: Viewer, task: str, model: str, screen_note: str | None = None) -> int:
+    def request(self, viewer: Viewer, task: str, model: str, screen_note: str | None = None,
+                plan_first: bool | None = None) -> int:
         """A student asks for a Code session. Nothing starts and no sandbox is made until a mentor approves it."""
         if viewer.is_mentor:
             raise CodeError("Mentors start sessions with Start.")
-        problem = self.student_problem()
+        problem = self.student_problem() or self.engine_problem()
         if problem:
             raise CodeError(problem)
         if not capabilities_for(model, resolve_backend(self.settings)).code:
@@ -661,18 +721,21 @@ class CodeRunner:
         self._check_daily_limit(viewer.id)
         self._check_sandbox_ready()
         now = utcnow()
+        engine = self.engine_now()
+        plan = self._plan_first_default(True) if plan_first is None else int(bool(plan_first) and engine == "agent")
         with self.db.transaction() as conn:
             cur = conn.execute(
                 "INSERT INTO code_sessions (title, task, status, model, repo, ref, transcript, created_by, "
-                "created_at, updated_at, owner_is_student, screen_note) "
-                "VALUES (?, ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                "created_at, updated_at, owner_is_student, screen_note, engine, plan_first, cap_usd) "
+                "VALUES (?, ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
                 (short_title(task), task, model, self.settings.connector_github_repo,
                  self.settings.connector_github_branch, json.dumps([{"role": "user", "content": task}]),
-                 viewer.id, now, now, screen_note))
+                 viewer.id, now, now, screen_note, engine, plan, self._cap_for(True)))
             session_id = cur.lastrowid
             self.db.audit("code_student_requested", actor_id=viewer.id, target_type="code", target_id=session_id,
                           details={"task": task, "repo": self.settings.connector_github_repo, "model": model,
-                                   "screen_note": screen_note or ""}, conn=conn)
+                                   "screen_note": screen_note or "", "engine": engine, "plan_first": bool(plan)},
+                          conn=conn)
         self._tell_approvals(session_id, viewer.name, short_title(task))
         return session_id
 
@@ -680,9 +743,9 @@ class CodeRunner:
         """Refuse a student's request now, in plain words, when the sandbox can't be used (network check, limits)."""
         try:
             self.sandboxes.backend(self.settings.code_sandbox).check_network()
-            self.sandboxes.check_capacity()
         except SandboxError as exc:
             raise CodeError(str(exc)) from exc
+        self._check_capacity()
 
     def _tell_approvals(self, session_id: int, who: str, title: str) -> None:
         if self.slack is None or not self.settings.slack_approvals_channel:
@@ -762,6 +825,9 @@ class CodeRunner:
         row = self.get(session_id)
         if row is None:
             raise CodeError("That session doesn't exist.")
+        if row["engine"] == "agent":
+            self.agent.follow_up(row, text, actor_id, step_id)
+            return
         text = self._clean_follow_up(row, text)
         self._check_open_limit(row["created_by"], student=bool(row["owner_is_student"]))
         if json.loads(row["transcript"])[-1]["role"] == "assistant":
@@ -837,10 +903,7 @@ class CodeRunner:
         problem = self.sandbox_problem()
         if problem:
             raise CodeError(problem)
-        try:
-            self.sandboxes.check_capacity()
-        except SandboxError as exc:
-            raise CodeError(str(exc)) from exc
+        self._check_capacity()
         free_rein = int(bool(self.settings.code_student_free_rein))
         now = utcnow()
         with self.db.transaction() as conn:
@@ -871,6 +934,9 @@ class CodeRunner:
             self.db.audit("code_session_stopped", actor_id=viewer.id, target_type="code", target_id=session_id,
                           conn=conn)
         self._set(session_id, status="stopped")
+        if row["engine"] == "agent":
+            self.agent.stop(session_id)  # ends the runner, saves the patch and files, deletes the sandbox
+            return
         if row["status"] == "waiting":
             self._answer_turn(session_id)  # so the transcript stays valid for a follow-up
         if self.sandboxes is not None:
@@ -885,6 +951,8 @@ class CodeRunner:
         if row is None:
             raise CodeError("That session doesn't exist.")
         stop_command(session_id)
+        if row["engine"] == "agent":
+            self.agent.abort(session_id)
         if row["status"] not in FINISHED:
             with self.db.transaction() as conn:
                 conn.execute("UPDATE code_steps SET status = 'declined', review_note = 'The session was deleted.', "
@@ -945,9 +1013,14 @@ class CodeRunner:
         self.db.audit("code_step_approved" if approve else "code_step_declined", actor_id=viewer.id,
                       target_type="code", target_id=step["session_id"],
                       details={"tool": step["tool"], "input": json.loads(step["input"] or "{}"), "note": note})
+        session = self.get(step["session_id"])
+        if session["engine"] == "agent":
+            if step["tool"] == "plan":
+                self.agent.decide_plan(step["session_id"], approve, note)  # the runner carries on, or a new one resumes
+            return step["session_id"]
         left = self.db.one("SELECT COUNT(*) AS n FROM code_steps WHERE session_id = ? AND status = 'pending'",
                            (step["session_id"],))["n"]
-        if not left and self.get(step["session_id"])["status"] == "waiting":
+        if not left and session["status"] == "waiting":
             self._set(step["session_id"], status="running")
             self.tasks.spawn(self._resume(step["session_id"]), name=f"code-{step['session_id']}")
         return step["session_id"]
@@ -964,6 +1037,10 @@ class CodeRunner:
         branch = self.settings.connector_github_branch
         branch_note = f" ({branch})" if branch else ""
         self._note(session_id, 0, f"Copied {count:,} files from {self.settings.connector_github_repo}{branch_note}.")
+        row = self.get(session_id)
+        if row is not None and row["engine"] == "agent":
+            self.agent.begin(session_id)  # waits its turn if all places are taken; stays 'preparing' until then
+            return
         self._set(session_id, status="running")
         if self.sandboxed:
             try:
@@ -1154,7 +1231,12 @@ class CodeRunner:
 
     def _export_sandbox(self, session_id: int, workspace: Workspace, handle: SandboxHandle) -> None:
         """Keep a copy of the sandbox's repository on the host, and say which files commands changed there.
-        The patch still comes from the host copy, which only holds approved edits."""
+        The patch still comes from the host copy, which only holds approved edits. (A new-engine session's patch comes
+        from its sandbox, so that engine saves it here instead.)"""
+        row = self.get(session_id)
+        if row is not None and row["engine"] == "agent":
+            self.agent.export(session_id, handle)
+            return
         data = self.sandboxes.backend(handle.backend).get_archive(handle, src="work", exclude=COPY_SKIP)
         if len(data) > MAX_SESSION_BYTES:  # each backend already refuses this; checked again before anything is written
             raise SandboxError("The sandbox's files are too big to save, so they weren't kept.")

@@ -100,6 +100,11 @@ class Harness:
             slack_approvals_channel="CAPPROVALS", slack_team_id="TDEV", timezone="America/Chicago",
             # Most tests check that every student message waits; the approval window tests turn it on.
             approval_window_minutes=0,
+            # The defaults for Code changed in 0.11 (new engine, Hyper-V sandboxes, students allowed). Most tests were
+            # written for the classic engine with the sandbox off, so they start there; a test that needs another
+            # setting passes it, and tests/test_code_engine.py uses the new engine.
+            code_engine="classic", code_sandbox="off", code_student_access=False, sandbox_memory_mb=2048,
+            sandbox_max_sessions=3,
         )
         options.update(overrides)
         self.settings = load_settings(search_cwd=False, **options)

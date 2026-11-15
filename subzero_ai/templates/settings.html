@@ -233,6 +233,17 @@
         </div>
         {% endif %}
         {% endfor %}
+        <div class="field">
+          <label for="key-code">Team subscription token for Code <span class="pill {{ 'ok' if code_key.set else 'unknown' }}">{{ 'Saved' if code_key.set else 'Not set' }}</span>{% if code_key.hint %} <span class="field-hint">{{ code_key.hint }}</span>{% endif %}</label>
+          <input id="key-code" name="{{ code_key.field }}" type="password" autocomplete="off" spellcheck="false" aria-describedby="key-code-hint" placeholder="{{ 'Leave empty to keep the saved token' if code_key.set else 'Paste the token here' }}" {% if code_key.locked %}disabled{% endif %}>
+          <p class="field-hint" id="key-code-hint">{% if code_key.locked %}Set by an environment variable on the mini PC, which wins over this page. Change it there.{% else %}Only used when Code sign-in (in the Code settings) is set to Team subscription, which is for testing only. It comes from running <span class="mono">claude setup-token</span>.{% endif %}</p>
+        </div>
+        {% if code_key.set and not code_key.locked %}
+        <div class="field check">
+          <input type="checkbox" id="remove-key-code" name="remove_{{ code_key.field }}" value="1">
+          <label for="remove-key-code">Remove the saved team subscription token</label>
+        </div>
+        {% endif %}
       </div>
       <div class="form-actions"><button class="button primary" type="submit">Save keys</button></div>
     </form>

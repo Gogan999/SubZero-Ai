@@ -29,6 +29,8 @@ EFFORT_CHOICES = (("low", "Low"), ("medium", "Medium"), ("high", "High"))
 SANDBOX_CHOICES = (("off", "Off: commands run on the computer (as before)"),
                    ("hyperv", "Hyper-V: each session gets its own virtual computer"),
                    ) + ((("fake", "Fake: this computer, no isolation (testing only)"),) if fake_sandbox_allowed() else ())
+ENGINE_CHOICES = (("agent", "New engine (sandbox only)"), ("classic", "Classic engine"))
+AUTH_CHOICES = (("api_key", "API key"), ("subscription", "Team subscription (testing only)"))
 SWITCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}")
 # The dropdown value that means "type the model id under Other"; never a real model id
 OTHER_MODEL = "__other__"
@@ -52,10 +54,10 @@ BLOCKED_MODEL_WORDS = ("fable", "mythos")
 class Field:
     name: str
     label: str
-    kind: str  # model, choice, int, bool, lines, ids, providers, path, name
+    kind: str  # model, choice, int, float, bool, lines, ids, providers, path, name
     help: str = ""
-    minimum: int = 0
-    maximum: int = 0
+    minimum: float = 0
+    maximum: float = 0
     optional: bool = False  # for ids and path: an empty value is allowed
     choices: tuple[tuple[str, str], ...] = ()  # for choice: (saved value, label) pairs
     error: str = ""  # for path and name: what a value that isn't allowed looks like, in plain words
@@ -108,6 +110,36 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("backup_keep_days", "Keep nightly backups for this many days", "int", "", 1, 365),
     ]),
     "code": ("Code", [
+        Field("code_engine", "Code engine", "choice",
+              "The new engine lets Claude use a full shell inside the session's sandbox, so it needs the sandbox below "
+              "turned on. The classic engine is the older one, where a mentor approves each change and command. "
+              "Sessions already started keep the engine they began with. Changing this applies to the next session.",
+              choices=ENGINE_CHOICES),
+        Field("code_auth", "Code sign-in", "choice",
+              "How Code signs in to Anthropic. API key uses the team's Anthropic key from API keys. Team subscription "
+              "uses a Claude subscription token and is for testing only. Changing this applies to the next request.",
+              choices=AUTH_CHOICES),
+        Field("code_max_running", "Code sessions working at the same time", "int",
+              "The others wait their turn and start by themselves. Each working session uses a sandbox's memory.", 1, 8),
+        Field("code_plan_first_students", "Students' sessions start with a plan a mentor approves", "bool",
+              "The starting tick of the plan-first choice on a student's session. With it, Claude writes a plan and "
+              "waits for a mentor before it changes anything."),
+        Field("code_plan_first_mentors", "Mentors' sessions start with a plan to approve", "bool",
+              "The starting tick of the plan-first choice on a mentor's session."),
+        Field("code_web_tools_students", "Let Claude search the web in students' sessions", "bool",
+              "Turn it off to keep students' sessions off the open web. Applies to the next request."),
+        Field("code_web_tools_mentors", "Let Claude search the web in mentors' sessions", "bool",
+              "Applies to the next request."),
+        Field("code_sub_agents", "Let Claude hand parts of a task to helpers", "bool",
+              "Helpers (sub-agents) work on one part of a task each. They count toward the session's cost."),
+        Field("code_cap_student_usd", "Most one student session may cost, in dollars", "float",
+              "At the model's price list. The session stops when it reaches this. 0 means no limit. Applies to new "
+              "sessions, and to a session when a mentor sends its next follow-up.", 0, 1000),
+        Field("code_cap_mentor_usd", "Most one mentor session may cost, in dollars", "float",
+              "The same, for mentors' sessions. 0 means no limit.", 0, 1000),
+        Field("code_agent_max_turns", "Claude replies in one run, new engine", "int",
+              "A run stops after this many replies, so a confused session can't spend without limit. Send a "
+              "follow-up to carry on.", 5, 1000),
         Field("code_commands", "Commands Claude can ask to run", "lines",
               "One program name per line, like gradlew. Claude can only ask to run these, from the repository "
               "folder, and a mentor approves each command before it runs."),
@@ -144,6 +176,10 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("sandbox_proxy_port", "Host port sandboxes may reach", "int",
               "The one port on this PC that a sandbox may reach over the internal switch, for the egress proxy. "
               "The sandbox network setup script and the check both use it. Applies after a restart.", 1, 65535),
+        Field("sandbox_gateway_port", "Host port for the Code gateway", "int",
+              "The second port on this PC that a sandbox may reach. Claude in the sandbox talks to Anthropic only "
+              "through it, and the real key never enters the sandbox. The sandbox network setup script and the "
+              "check both use it. Applies after a restart.", 1, 65535),
         Field("sandbox_host_address", "This PC's address on the sandbox switch", "address",
               "The proxy listens only on this address. It is 10.77.0.1 unless the sandbox network was set up "
               "differently. Applies after a restart.",
@@ -360,6 +396,16 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 errors[f.name] = f"Enter a number from {f.minimum:,} to {f.maximum:,}."
                 continue
             values[f.name] = number
+        elif f.kind == "float":
+            try:
+                amount = float(raw.replace(",", "").lstrip("$"))
+            except ValueError:
+                errors[f.name] = "Enter a number, like 5 or 7.50."
+                continue
+            if not f.minimum <= amount <= f.maximum:  # also false for nan
+                errors[f.name] = f"Enter a number from {f.minimum:,.0f} to {f.maximum:,.0f}."
+                continue
+            values[f.name] = round(amount, 2)
         elif f.kind == "model":
             if f.name == "model_check_judge" and f.name not in form:
                 continue  # added in 0.7: a form from before then leaves it alone

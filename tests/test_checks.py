@@ -41,7 +41,8 @@ class ChecksTest(unittest.TestCase):
     def settings(self, **overrides):
         values = dict(data_dir=self.tmp, public_url="https://ai.example.org", anthropic_api_key="sk-x",
                       slack_bot_token="xoxb-1", slack_app_token="xapp-1", slack_client_id="1.2",
-                      slack_client_secret="s", slack_approvals_channel="CAPPROVALS", admin_slack_ids=frozenset({"U1"}))
+                      slack_client_secret="s", slack_approvals_channel="CAPPROVALS", admin_slack_ids=frozenset({"U1"}),
+                      code_sandbox="off")  # the default is Hyper-V now; tests that need it ask for it
         values.update(overrides)
         return load_settings(search_cwd=False, **values)
 

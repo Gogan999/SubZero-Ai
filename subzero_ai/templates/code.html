@@ -16,7 +16,7 @@
     <h2>Connect the repository first</h2>
     <p class="field-hint">Code works in the team's GitHub repository. {% if viewer.is_admin %}Add it in <a href="/settings#connectors">Settings, Connectors</a>.{% else %}An admin can add it in Settings, Connectors.{% endif %}</p>
   </section>
-  {% elif not mentor and problem %}
+  {% elif problem %}
   <section class="panel">
     <h2>Code isn't ready yet</h2>
     <p class="field-hint">{{ problem }}</p>

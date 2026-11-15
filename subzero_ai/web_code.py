@@ -42,7 +42,8 @@ def step_view(s: Services, row, *, student_session: bool = False, shown: int | N
     view = {"id": row["id"], "kind": row["kind"], "tool": row["tool"], "status": row["status"],
             "time": fmt_time(s.store, row["created_at"]), "reviewer": row["reviewer_name"],
             "note": row["review_note"], "reason": _arg(args, "reason"), "output": output,
-            "html": None, "label": "", "detail": "", "diff": None, "command": None, "runs_changes": []}
+            "html": None, "label": "", "detail": "", "diff": None, "command": None, "runs_changes": [],
+            "plan": None, "tasks": None, "parent": ""}
     if row["kind"] == "text":
         view["html"] = markdown_html(output)
         return view
@@ -74,8 +75,42 @@ def step_view(s: Services, row, *, student_session: bool = False, shown: int | N
         view["label"] = "Ran a command" if done else "Wants to run a command"
         view["command"] = _arg(args, "command")
     else:
-        view["label"] = f"Asked for {tool}"
+        _engine_label(view, tool, args, done)
     return view
+
+
+def _engine_label(view: dict[str, Any], tool: str, args: dict, done: bool) -> None:
+    """The label for a step from the new Code engine (its tool names are the Agent SDK's). A tool this page doesn't know
+    is shown by its name, so nothing the engine does can break the page."""
+    path = _arg(args, "file_path") or _arg(args, "path") or _arg(args, "notebook_path")
+    if tool == "plan":
+        view["label"] = "Plan"
+        view["plan"] = _arg(args, "plan")
+    elif tool == "todo":
+        items = [i for i in args.get("items", []) if isinstance(i, dict)]
+        view["label"] = "Task list"
+        view["tasks"] = [{"text": str(i.get("content") or i.get("activeForm") or ""),
+                          "state": str(i.get("status") or "pending")} for i in items]
+    elif tool == "Bash":
+        view["label"] = "Ran a command" if done else "Running a command"
+        view["command"] = _arg(args, "command")
+    elif tool in ("Read", "NotebookRead"):
+        view["label"] = f"Read {path or 'a file'}"
+    elif tool in ("Write", "NotebookEdit"):
+        view["label"] = f"Wrote {path or 'a file'}"
+    elif tool in ("Edit", "MultiEdit"):
+        view["label"] = f"Edited {path or 'a file'}"
+    elif tool in ("Glob", "Grep", "LS"):
+        view["label"] = f"Searched for {_arg(args, 'pattern') or _arg(args, 'path') or 'files'}"
+    elif tool in ("Agent", "Task"):
+        view["label"] = f"Handed work to a helper: {_arg(args, 'description') or 'a part of the task'}"
+    elif tool == "WebSearch":
+        view["label"] = f"Searched the web for {_arg(args, 'query')}"
+    elif tool == "WebFetch":
+        view["label"] = f"Read a web page: {_arg(args, 'url')}"
+    else:
+        view["label"] = f"Used {tool}"
+    view["parent"] = _arg(args, "_parent")
 
 
 def session_view(s: Services, row) -> dict[str, Any]:
@@ -144,7 +179,7 @@ async def code_page(request: Request, viewer: Viewer) -> Response:
     mentor = viewer.is_mentor
     rows = s.code.list(owner_id=None if mentor else viewer.id)
     sessions = [session_view(s, r) for r in rows if visible(viewer, r)]
-    problem = None if mentor else s.code.student_problem()
+    problem = (s.code.engine_problem() if mentor else s.code.student_problem() or s.code.engine_problem())
     return render(request, "code.html", viewer, sessions=sessions, mentor=mentor, problem=problem,
                   awaiting=[session_view(s, r) for r in s.code.awaiting()] if mentor else [],
                   available=s.code.available, models=code_models(s), commands=s.code.command_programs(),
@@ -185,7 +220,9 @@ def _session_context(s: Services, row, viewer: Viewer) -> dict[str, Any]:
     mentor = viewer.is_mentor
     student_session = bool(row["owner_is_student"])
     shown = None if mentor else STUDENT_SHOWN_CHARS
-    steps = [step_view(s, r, student_session=student_session, shown=shown) for r in s.code.steps(row["id"])]
+    # A note whose tool is "mentor" (the new engine's details about a failure) is for mentors only
+    steps = [step_view(s, r, student_session=student_session, shown=shown) for r in s.code.steps(row["id"])
+             if mentor or r["tool"] != "mentor"]
     workspace = s.code.workspace(row["id"])
     released = bool(row["patch_released"])
     ready = workspace.ready() and row["status"] not in LIVE
@@ -356,7 +393,9 @@ async def code_patch(request: Request, viewer: Viewer) -> Response:
     if not viewer.is_mentor and not row["patch_released"]:
         return error_page(request, viewer, 403, "Not released yet", "A mentor is looking at your changes. You can "
                                                                     "download them once a mentor releases them.")
-    patch = "".join(change["diff"] for change in workspace.changes())
+    patch = workspace.patch_text()  # a new-engine session's patch comes from its sandbox, whole
+    if patch is None:
+        patch = "".join(change["diff"] for change in workspace.changes())
     s.db.audit("code_patch_downloaded", actor_id=viewer.id, target_type="code", target_id=row["id"])
     return Response(patch, media_type="text/x-diff; charset=utf-8", headers={
         "Content-Disposition": f'attachment; filename="code-session-{row["id"]}.patch"',

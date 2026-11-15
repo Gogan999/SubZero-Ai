@@ -46,6 +46,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from .config import Settings, fake_sandbox_allowed
 from .db import Database, utcnow
@@ -127,6 +128,8 @@ class SandboxBackend(Protocol):
     def run(self, handle: SandboxHandle, argv: list[str], *, cwd: str, env: dict[str, str], timeout: int,
             on_output: Callable[[str], None] | None = None) -> ExitResult: ...
     def kill(self, handle: SandboxHandle) -> None: ...
+    def open_stream(self, handle: SandboxHandle, argv: list[str], *, cwd: str, env: dict[str, str]) -> SandboxStream: ...
+    def abs_path(self, handle: SandboxHandle, rel: str) -> str: ...  # a path as the program inside the sandbox sees it
     def put_file(self, handle: SandboxHandle, rel: str, data: bytes) -> None: ...
     def get_file(self, handle: SandboxHandle, rel: str) -> bytes: ...
     def list_dir(self, handle: SandboxHandle, rel: str) -> list[str]: ...
@@ -331,6 +334,74 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+class SandboxStream:
+    """A program running in a sandbox with its input and output left open (SandboxBackend.open_stream): write lines to
+    stdin, read lines from stdout. Its error output is kept (the end of it) for the log. There is no time limit here: the
+    caller decides when to stop it."""
+
+    MAX_LINE = 4 * 1024 * 1024
+
+    def __init__(self, proc: subprocess.Popen):
+        self.proc = proc
+        self._err = OutputTail(MAX_OUTPUT_CHARS * 4)
+        if proc.stderr is not None:
+            threading.Thread(target=read_output, args=(proc.stderr, self._err, None), daemon=True).start()
+        self._write_lock = threading.Lock()
+
+    def write_line(self, text: str) -> None:
+        """Send one line. Raises SandboxError when the program has gone."""
+        data = text.rstrip("\n").encode("utf-8") + b"\n"
+        try:
+            with self._write_lock:
+                self.proc.stdin.write(data)
+                self.proc.stdin.flush()
+        except (OSError, ValueError) as exc:
+            raise SandboxError("The program in the sandbox isn't running any more.") from exc
+
+    def readline(self) -> bytes:
+        """The next line of output (b'' once the program has ended). A line over MAX_LINE bytes is cut there."""
+        try:
+            line = self.proc.stdout.readline(self.MAX_LINE)
+            if len(line) >= self.MAX_LINE and not line.endswith(b"\n"):
+                while True:  # drop the rest of the oversized line
+                    rest = self.proc.stdout.readline(self.MAX_LINE)
+                    if not rest or rest.endswith(b"\n"):
+                        break
+            return line
+        except (OSError, ValueError):
+            return b""
+
+    def close_stdin(self) -> None:
+        try:
+            self.proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+    def poll(self) -> int | None:
+        return self.proc.poll()
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        """The exit code, or None if the program is still running after `timeout` seconds."""
+        try:
+            return self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def terminate(self) -> None:
+        """Stop the program and everything it started."""
+        kill_process_tree(self.proc)
+
+    def stderr_text(self) -> str:
+        return self._err.text()
+
+
+def _popen_pipes(argv: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.Popen:
+    kwargs: dict[str, Any] = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {
+        "start_new_session": True}
+    return subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, **kwargs)
+
+
 # --------------------------------------------------------------------------- FakeSandbox
 @dataclass(eq=False)  # compared by identity, so it can live in a set
 class _Run:
@@ -419,6 +490,29 @@ class FakeSandbox:
             run.stopped = True
             if run.proc is not None:
                 kill_process_tree(run.proc)
+
+    def open_stream(self, handle, argv, *, cwd, env) -> SandboxStream:
+        folder = self._path(handle, cwd)
+        if not folder.is_dir():
+            raise SandboxError(f"{cwd} doesn't exist in the sandbox.")
+        try:
+            proc = _popen_pipes(argv, folder, env)
+        except OSError as exc:
+            raise SandboxError(f"Couldn't start the program: {exc}") from exc
+        run = _Run(proc=proc)
+        with self._lock:
+            self._runs.setdefault(handle.name, set()).add(run)
+
+        def forget() -> None:
+            proc.wait()
+            with self._lock:
+                self._runs.get(handle.name, set()).discard(run)
+
+        threading.Thread(target=forget, daemon=True).start()
+        return SandboxStream(proc)
+
+    def abs_path(self, handle, rel) -> str:
+        return str(self._path(handle, rel))
 
     def put_file(self, handle, rel, data) -> None:
         target = self._path(handle, rel)
@@ -1118,6 +1212,14 @@ def guest_run_command(argv: list[str], cwd: str, env: dict[str, str], timeout: i
             f"timeout -k 5 {int(timeout)} {shlex.join(argv)}")
 
 
+def guest_stream_command(argv: list[str], cwd: str, env: dict[str, str]) -> str:
+    """Like guest_run_command, for a program that stays open (the Code runner): the same folder and clean environment,
+    every value quoted, and no time limit. `exec` makes the program replace the shell, so closing the connection ends it."""
+    full_env = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, **env}
+    assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in sorted(full_env.items()))
+    return f"cd {shlex.quote(guest_path(cwd))} && exec env -i {assignments} {shlex.join(argv)}"
+
+
 # The guest runs these with python3 (the Ubuntu cloud image has it, and the Code tools image adds more). They only use
 # the standard library.
 GUEST_PACK = (
@@ -1299,6 +1401,7 @@ class HyperVSandbox:
                  run_icacls: Callable[[list[str]], None] | None = None,
                  run_whoami: Callable[[], str] | None = None,
                  run_ssh: Callable[..., tuple[int, bytes, bytes]] | None = None,
+                 popen_ssh: Callable[[list[str]], subprocess.Popen] | None = None,
                  ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep,
                  archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128):
         if not base_image:
@@ -1321,6 +1424,7 @@ class HyperVSandbox:
         self.run_keygen = run_keygen or default_run_keygen
         self.run_icacls = run_icacls or default_run_icacls
         self.run_ssh = run_ssh or make_default_run_ssh(self.ssh_key)
+        self.popen_ssh = popen_ssh or _popen_pipes  # opens the ssh command for open_stream (a test can fake it)
         self.ready_seconds = ready_seconds
         self.sleep = sleep
         self.archive_limit = archive_limit
@@ -1557,6 +1661,24 @@ class HyperVSandbox:
         with self._lock:
             self._killed.add(handle.name)
         self._ssh(handle.name, f"pkill -KILL -u {GUEST_USER} || true", timeout=30)
+
+    def open_stream(self, handle, argv, *, cwd, env) -> SandboxStream:
+        """Start a program in the sandbox that stays open, over the same ssh login as run (pinned host key, the same
+        user and clean environment). The caller ends it: there is no time limit."""
+        with self._lock:
+            self._killed.discard(handle.name)
+        remote = guest_stream_command(argv, cwd, env)
+        command = ssh_argv(self._address(handle.name), remote, key=self.ssh_key,
+                           known_hosts=self._known_hosts(handle.name))
+        try:
+            return SandboxStream(self.popen_ssh(command))
+        except SandboxError:
+            raise
+        except Exception as exc:
+            raise SandboxError(f"Couldn't reach the sandbox: {exc}") from exc
+
+    def abs_path(self, handle, rel) -> str:
+        return guest_path(rel)
 
     def put_file(self, handle, rel, data) -> None:
         path = guest_path(rel)
@@ -1805,6 +1927,17 @@ class SandboxManager:
                                                                           self.settings.sandbox_proxy_port)
         return proxy_env(handle.name, token, host, port)
 
+    def gateway_env(self, handle: SandboxHandle, base_url: str) -> dict[str, str]:
+        """The extra environment for the Code runner in this sandbox: the Code gateway's address, with the sandbox's own
+        token as its login (the gateway checks it with the same token store as the proxy), and the usual proxy
+        settings, except that the gateway's address is reached directly. Never log, audit or show it."""
+        token = self._token_for(handle)
+        env = self.command_env(handle)
+        env.update({"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": token})
+        direct = urlsplit(base_url).hostname or ""
+        env["NO_PROXY"] = env["no_proxy"] = direct
+        return env
+
     def redact(self, text: str) -> str:
         """Replace every proxy token this app issued recently (in the plain or the Basic-login form) with [hidden]."""
         with self._token_lock:
@@ -1832,14 +1965,15 @@ class SandboxManager:
             raise SandboxRefused("The computer is nearly out of disk space, so commands are paused. Ask an admin to "
                                  "free some space.")
 
-    def check_capacity(self) -> None:
-        """Refuse a new sandbox when the limit is reached, the disk is low, or the base image isn't set."""
+    def check_capacity(self, ignore: int = 0) -> None:
+        """Refuse a new sandbox when the limit is reached, the disk is low, or the base image isn't set. `ignore` is how
+        many running sandboxes can be closed on demand (the new Code engine's idle ones), so they don't count."""
         if self.settings.code_sandbox == "hyperv" and not self.settings.sandbox_base_image:
             raise SandboxRefused("Set the sandbox base image in Settings before Code can use sandboxes.")
         if self.settings.code_sandbox == "hyperv" and not self.proxy_ready():  # fail closed: no proxy, no sandbox
             raise SandboxRefused(self.proxy_problem())
         limit = self.settings.sandbox_max_sessions
-        if self.store.alive_count() >= limit:
+        if self.store.alive_count() - max(0, ignore) >= limit:
             raise SandboxRefused(f"All {limit} sandboxes are in use right now. Ask a mentor to finish or stop a Code "
                                  "session, then try again.")
         free = self.free_gb()

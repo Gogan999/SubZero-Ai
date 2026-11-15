@@ -90,6 +90,7 @@ class Services:
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
     sandboxes: SandboxManager | None = None  # where Code sessions' commands run (sandbox.py)
+    gateway: Any = None  # the Code gateway (anthropic_gateway.py): how the new Code engine's sandboxes reach Anthropic
 
     def capabilities(self, model: str) -> Capabilities:
         """What this model can do with the backend in use: the one place templates and routes ask."""

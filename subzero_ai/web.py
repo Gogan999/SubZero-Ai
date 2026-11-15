@@ -30,7 +30,9 @@ from . import __version__, saved_settings, setup_flow
 from .approvals import ApprovalService
 from .attachments import Attachments, size_label
 from .auth import LoginError, SlackLogin, profile_from_claims
-from .ai_backend import make_client
+from .ai_backend import make_client, resolve_backend
+from .anthropic_gateway import AnthropicGateway
+from .code_engine import RESTARTED
 from .code_runner import CodeRunner
 from .egress_proxy import EgressProxy, TokenStore
 from .sandbox import SandboxManager, reap_sandboxes, watch_sandbox_disks
@@ -117,10 +119,18 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     directory = Directory(settings, slack)
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
+    code = CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks, sandboxes=sandboxes,
+                      slack=slack)
+    # The Code gateway: where the new Code engine's sandboxes reach Anthropic. Built here, started with the app only for
+    # Hyper-V sandboxes and the new engine (and when a session needs it, if an admin switched the engine on later).
+    gateway = AnthropicGateway(host=settings.sandbox_host_address, port=settings.sandbox_gateway_port,
+                               authenticate=code.agent.authenticate, policy=code.agent.policy,
+                               record=code.agent.record, credential=code.agent.credential,
+                               upstream_base=settings.anthropic_base_url or "https://api.anthropic.com")
+    code.agent.gateway = gateway
     svc = Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
-                   SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), github,
-                   CodeRunner(settings=settings, db=db, claude=claude, github=github, tasks=tasks,
-                              sandboxes=sandboxes, slack=slack), screener, sandboxes=sandboxes)
+                   SlackLogin(settings), attachments, health, Nightly(settings, db, store.tz), github, code, screener,
+                   sandboxes=sandboxes, gateway=gateway)
     svc.nightly.reap = lambda: reap_sandboxes(svc)
     svc.nightly.watch_disks = lambda: watch_sandbox_disks(svc)
     svc.egress = egress
@@ -609,11 +619,17 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                      "WHERE status = 'streaming'")
         s.db.execute("UPDATE code_steps SET status = 'error', output = 'The server restarted while this was running.' "
                      "WHERE status = 'running'")
+        for row in s.db.all("SELECT id FROM code_sessions WHERE engine = 'agent' AND status IN ('preparing', "
+                            "'running')"):  # the new engine's runner is gone too: say what to do next
+            s.code._note(row["id"], 0, RESTARTED)
         s.db.execute("UPDATE code_sessions SET status = 'failed', error = 'The server restarted while Claude was "
                      "working. Send a follow-up to carry on.' WHERE status IN ('preparing', 'running')")
         await ensure_team_id(s)
         if settings.code_sandbox == "hyperv" and s.egress is not None:
             await s.egress.start()  # a failure is kept as a plain message: sandboxes then refuse to start
+        if (settings.code_sandbox == "hyperv" and s.code.engine_now() == "agent" and s.gateway is not None
+                and resolve_backend(settings) != "fake"):  # test mode (pretend Claude) never needs the network
+            await s.gateway.start()  # a failure is kept as a plain message the Settings overview shows
         try:
             await asyncio.to_thread(reap_sandboxes, s)  # sandboxes left by the last run, before any session starts
         except Exception:
@@ -645,7 +661,10 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                 task.cancel()
             await asyncio.gather(*loops, return_exceptions=True)
             await s.tasks.cancel_all()
+            await s.code.agent.shutdown()  # cuts off the new engine's runners
             s.bridge_login.cancel()  # a Claude subscription sign-in nobody finished
+            if s.gateway is not None:
+                await s.gateway.stop()
             if s.egress is not None:
                 await s.egress.stop()  # closes any sandbox connection still open
             closer = getattr(s.claude, "aclose", None)

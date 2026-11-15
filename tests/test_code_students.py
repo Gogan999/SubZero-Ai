@@ -13,6 +13,7 @@ from unittest import mock
 
 from subzero_ai import sandbox, saved_settings
 from subzero_ai.code_runner import build_system_prompt
+from subzero_ai.config import Settings
 from subzero_ai.db import MIGRATIONS, Database
 
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, CodeStudentTest, FakeResponse, FakeWeb, Harness, repo_zip
@@ -390,17 +391,15 @@ class SettingsValidationTest(unittest.TestCase):
         values.update(overrides)
         return values
 
-    def test_defaults_are_off_and_safe(self):
-        fresh = Harness()
-        try:
-            s = fresh.services.settings
-            self.assertFalse(s.code_student_access)
-            self.assertTrue(s.code_student_free_rein)
-            self.assertFalse(s.code_mentor_free_rein)
-            self.assertEqual((s.code_student_max_open, s.code_student_daily_sessions, s.code_student_max_turns,
-                              s.code_student_command_timeout), (1, 3, 40, 600))
-        finally:
-            fresh.close()
+    def test_defaults_are_on_but_every_request_still_needs_a_mentor(self):
+        """0.11 ships with Code enabled (D57): new engine, Hyper-V sandboxes, students allowed to ask. The limits stay."""
+        s = Settings()
+        self.assertTrue(s.code_student_access)
+        self.assertEqual((s.code_engine, s.code_sandbox), ("agent", "hyperv"))
+        self.assertTrue(s.code_student_free_rein)
+        self.assertFalse(s.code_mentor_free_rein)
+        self.assertEqual((s.code_student_max_open, s.code_student_daily_sessions, s.code_student_max_turns,
+                          s.code_student_command_timeout), (1, 3, 40, 600))
 
     def test_students_need_a_sandbox_to_be_switched_on(self):
         values, errors = saved_settings.validate("code", self.form(code_student_access="1", code_sandbox="off"),

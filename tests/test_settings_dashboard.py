@@ -370,7 +370,8 @@ class UnitTest(unittest.TestCase):
         from subzero_ai.config import Settings
         from subzero_ai.pi_client import KEY_SETTINGS
         on_page = (set(saved_settings.FIELDS) | set(server_settings.ENV_FIELDS) | set(KEY_SETTINGS.values())
-                   | {"connector_github_repo", "connector_github_branch", "connector_github_token"})
+                   | {"connector_github_repo", "connector_github_branch", "connector_github_token"}
+                | {"code_subscription_token"})  # entered in the API keys box, with the provider keys
         not_settings = {"config_file", "fake_claude", "slack_team_id"}  # fake_claude is part of the AI engine
         file_only = {"data_dir", "host", "port", "dev_login", "session_secret"}
         missing = {f.name for f in fields(Settings)} - on_page - not_settings - file_only

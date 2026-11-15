@@ -71,6 +71,8 @@
       {% elif step.reviewer %}<span class="pill ok">Approved by {{ step.reviewer }}</span>{% endif %}
     </p>
     {% if step.reason %}<p class="code-reason">{{ step.reason }}</p>{% endif %}
+    {% if step.plan %}<div class="plain">{{ step.plan }}</div>{% endif %}
+    {% if step.tasks %}<ul class="simple-list">{% for t in step.tasks %}<li>{{ t.text }} <span class="field-hint">{{ t.state|replace('_', ' ') }}</span></li>{% endfor %}</ul>{% endif %}
     {% if step.command %}<pre class="code-command"><code>{{ step.command }}</code></pre>{% endif %}
     {% if step.runs_changes %}<p class="code-warning" role="note">This runs with the app's own permissions, including code Claude changed in this session ({{ step.runs_changes|join(', ') }}). Check those changes above before you run it.</p>{% endif %}
     {% if step.diff %}<pre class="code-diff"><code>{% for line in step.diff.splitlines() %}<span class="{{ 'add' if line.startswith('+') and not line.startswith('+++') else 'del' if line.startswith('-') and not line.startswith('---') else 'hunk' if line.startswith('@@') else '' }}">{{ line }}</span>
@@ -81,7 +83,7 @@
       <div class="code-review">
         <form method="post" action="/code/steps/{{ step.id }}/approve">
           <input type="hidden" name="csrf" value="{{ csrf }}">
-          <button class="button small primary" type="submit">{{ 'Run it' if step.tool == 'run_command' else 'Approve change' }}</button>
+          <button class="button small primary" type="submit">{{ 'Run it' if step.tool == 'run_command' else 'Approve plan' if step.tool == 'plan' else 'Approve change' }}</button>
         </form>
         <form method="post" action="/code/steps/{{ step.id }}/decline" class="code-decline">
           <input type="hidden" name="csrf" value="{{ csrf }}">

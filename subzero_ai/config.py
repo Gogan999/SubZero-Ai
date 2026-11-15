@@ -135,10 +135,10 @@ class Settings:
     code_command_timeout: int = 600  # seconds
     # Each Code session runs its commands in its own sandbox (sandbox.py): off, hyperv, or fake (this computer,
     # with no isolation, for tests only)
-    code_sandbox: str = "off"
+    code_sandbox: str = "hyperv"
     sandbox_ttl_hours: int = 48  # a sandbox is deleted this long after it was made, whatever its session is doing
-    sandbox_max_sessions: int = 3  # sandboxes alive at once; a new one waits for a slot
-    sandbox_memory_mb: int = 2048
+    sandbox_max_sessions: int = 2  # sandboxes alive at once; a new one waits for a slot
+    sandbox_memory_mb: int = 6144
     sandbox_cpus: int = 2
     sandbox_disk_gb: int = 31  # the biggest base disk allowed (the base image is 30 GB; a sandbox's own disk grows as used)
     sandbox_disk_cap_gb: int = 8  # a running sandbox whose own disk grows past this is deleted (0: no limit)
@@ -147,6 +147,8 @@ class Settings:
     # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24
     sandbox_switch: str = "szsandbox-internal"
     sandbox_proxy_port: int = 3128  # the one host TCP port a sandbox may reach: the egress proxy (egress_proxy.py)
+    # the second host port a sandbox may reach: the Code gateway (anthropic_gateway.py), which holds the real credential
+    sandbox_gateway_port: int = 3129
     sandbox_host_address: str = "10.77.0.1"  # the host's address on the sandbox switch; the proxy listens here only
     # names a sandbox may open a secure (443) connection to, through the proxy. `*.x` matches names under x.
     sandbox_allowed_hosts: str = ("repo.maven.apache.org, repo1.maven.org, plugins.gradle.org, services.gradle.org, "
@@ -159,7 +161,7 @@ class Settings:
     sandbox_guest_sudo: bool = False  # the sandbox's user may use sudo: root inside that disposable VM only
     # Students and Code (M6). A student's session is started only after a mentor approves the request, and needs a
     # sandbox. Inside a student's sandbox, file changes and commands run without a mentor's click (free rein).
-    code_student_access: bool = False  # students may ask for Code sessions (off until a mentor or admin turns it on)
+    code_student_access: bool = True  # students may ask for Code sessions (each one waits for a mentor)
     code_student_free_rein: bool = True  # inside a student's sandbox, changes and commands run without a click
     code_mentor_free_rein: bool = False  # the same for mentors' own sessions, when the sandbox is on
     code_sandbox_commands: tuple[str, ...] = ("gradlew", "python3", "pip", "npm", "node", "java", "git")  # in a sandbox
@@ -167,6 +169,19 @@ class Settings:
     code_student_daily_sessions: int = 3  # a student's requests (new sessions and follow-ups) in 24 hours
     code_student_max_turns: int = 40  # Claude replies per run in a student's session
     code_student_command_timeout: int = 600  # seconds a command in a student's sandbox may run
+    # The new Code engine (code_engine.py): "agent" runs the Agent SDK inside a sandbox; "classic" is the older engine
+    code_engine: str = "agent"
+    code_max_running: int = 2  # Code sessions (new engine) working at the same time; the others wait their turn
+    code_plan_first_students: bool = True  # default tick of "plan first" on a student's session
+    code_plan_first_mentors: bool = False  # the same for a mentor's session
+    code_web_tools_students: bool = True  # web search and fetch inside a student's session (the gateway enforces it)
+    code_web_tools_mentors: bool = True
+    code_sub_agents: bool = True  # Claude may hand part of a task to a helper (sub-agent)
+    code_cap_student_usd: float = 5.0  # the most one student session may cost, at API prices (0 = no cap)
+    code_cap_mentor_usd: float = 15.0
+    code_agent_max_turns: int = 200  # Claude replies per run in the new engine
+    code_auth: str = "api_key"  # how the gateway signs in to Anthropic for Code: api_key or subscription
+    code_subscription_token: str = field(default="", repr=False)  # from `claude setup-token`; config.env only
 
     # Data kept on the mini PC
     retention_days: int = 730  # delete chats with no activity for this long (two seasons); 0 keeps them forever
@@ -218,9 +233,11 @@ class Settings:
 _CONVERTERS = {
     bool: _as_bool,
     int: int,
+    float: float,
     frozenset[str]: _as_set,
     "bool": _as_bool,
     "int": int,
+    "float": float,
     "frozenset[str]": _as_set,
     "tuple[str, ...]": _as_list,
     "Path": Path,
