@@ -10,6 +10,8 @@
     python -m subzero_ai restore NAME  put a backup back (stop the app first; "latest" picks the newest)
     python -m subzero_ai recovery-code make a new recovery code for signing in on the mini PC
     python -m subzero_ai reset-setup   open the setup page again (it only answers on the mini PC)
+    python -m subzero_ai sandbox-provision [--force]   put the Code tools into a new sandbox base disk
+                                       (run it with prepare-sandbox-image.cmd, with the app stopped)
 """
 
 from __future__ import annotations
@@ -30,7 +32,8 @@ from .config import Settings, load_settings
 
 # Exit code that asks for a restart: the Windows service starts the app again, and run.ps1 loops on it.
 RESTART_EXIT_CODE = 3
-COMMANDS = ["run", "check", "claude-login", "backup", "backups", "restore", "recovery-code", "reset-setup"]
+COMMANDS = ["run", "check", "claude-login", "backup", "backups", "restore", "recovery-code", "reset-setup",
+            "sandbox-provision"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("name", nargs="?",
                         help="for restore: the backup's file name or path, or latest; for backup: a label")
     parser.add_argument("--model", help="for check: run only the model safety check on this model (provider/id)")
+    parser.add_argument("--force", action="store_true",
+                        help="for sandbox-provision: build the sandbox image again even if it is already current")
     parser.add_argument("--config", help="path to config.env")
     parser.add_argument("--test-mode", action="store_true",
                         help="sample sign-ins on this PC, data in ./test-data, and a pretend Claude without an API key")
@@ -89,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         return print_report(asyncio.run(run_checks(settings)))
     if args.command == "claude-login":
         return claude_login_tool(settings)
+    if args.command == "sandbox-provision":
+        return sandbox_provision_tool(settings, force=args.force)
     if args.command != "run":
         return run_tool(args.command, args.name, settings)
 
@@ -201,6 +208,25 @@ def claude_login_tool(settings: Settings, run=None) -> int:
     print("Signed in. Turn on \"Claude subscription (Claude Code)\" under AI providers in Settings to use it"
           + ("." if settings_bridge_env(settings) else " (it needs AI_BACKEND=pi)."))
     return 0
+
+
+def sandbox_provision_tool(settings: Settings, force: bool = False, provision=None) -> int:
+    """Make a new sandbox base disk with the Code tools in it and switch the setting to it (sandbox_image.py). It takes
+    about 20 minutes, and the app must be stopped (prepare-sandbox-image.cmd stops it). `provision` stands in for
+    sandbox_image.provision_image in tests."""
+    from . import saved_settings
+    from .db import Database
+
+    if provision is None:
+        from .sandbox_image import provision_image as provision
+    db = Database(settings.db_path)
+    saved_settings.load_into(settings, db)  # the base disk an admin chose on the Settings page
+    result = provision(settings, db, force=force, say=print, app_running=lambda: app_is_running(settings))
+    print("")
+    print(result.message)
+    if result.log_path and result.status != "current":
+        print(f"The log is in {result.log_path}")
+    return result.exit_code
 
 
 def run_tool(command: str, name: str | None, settings: Settings) -> int:

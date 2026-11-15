@@ -148,7 +148,7 @@ $AppParts = @("app", "python", "node", "scripts", "service")
 # Parts that older releases don't have. Copying from a release without one removes it from the destination.
 $OptionalParts = @("node")
 $AppFiles = @("VERSION", "release.json", "README.txt", "update.cmd", "restore.cmd", "back-up-now.cmd",
-              "check-settings.cmd", "recovery-code.cmd", "uninstall.cmd")
+              "check-settings.cmd", "recovery-code.cmd", "uninstall.cmd", "prepare-sandbox-image.cmd")
 
 function Copy-AppFiles([string]$From, [string]$To) {
     New-Item -ItemType Directory -Force -Path $To | Out-Null

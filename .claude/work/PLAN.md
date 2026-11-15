@@ -138,7 +138,12 @@ Provisioning that puts Node, JDK, Python, git and the runner in the base disk; v
 plain message when the image is too old.
 
 ## Minor findings (for the clean-up pass)
-(none yet)
+- G5 M1: `sandbox_provision.sh` finish should also `rm -rf /root/.ssh`.
+- G5 M2: `sandbox_image.py` ~558 `log.exception` may log an unredacted ssh argv; log the cleaned reason instead.
+- G5 M4: finish should truncate /var/log/*.log, wtmp, lastlog.
+- G5 M5: docs note the builder token is visible in the ssh command line to local admins during the run.
+- F3a M5: model_check.py:22 comment over 120 columns.
+- CLAUDE.md test counts are stale (H1).
 
 ## Open questions / for Logan at the end
 - Mini PC steps (image, sign-in token, sandbox test, deploy).

@@ -18,8 +18,9 @@ FakeSandbox does the same job with folders and subprocesses on this computer. It
 isolated at all. HyperVSandbox builds its PowerShell, SSH and key commands with pure functions and takes its runners
 as parameters, so the tests can check every command without touching a real host.
 
-Guest image details that are not known yet are marked TODO (python3 and the base disk's path). The base image must
-have NoCloud enabled (the image script does this once). See docs/CODE_SANDBOX_PLAN.md, milestones M3, M3b and M4.
+The base image must have NoCloud enabled (the image script does this once) and the Code tools (Node.js, Java 17, git,
+Python and the runner), which `python -m subzero_ai sandbox-provision` bakes into a new base disk (sandbox_image.py).
+See docs/CODE_SANDBOX_PLAN.md, milestones M3, M3b and M4.
 """
 
 from __future__ import annotations
@@ -342,8 +343,11 @@ class FakeSandbox:
 
     name = "fake"
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, tools: str = "ok"):
         self.root = Path(root)
+        # Stands in for the Code tools in the base image (sandbox_image.check_tools): "ok" (the default), "missing" or
+        # "outdated". The fake sandbox runs on this computer, so there is no image to look inside.
+        self.tools = tools
         self._runs: dict[str, set[_Run]] = {}
         self._reserved: set[int] = set()  # slots of sandboxes being made right now
         self._lock = threading.Lock()
@@ -1114,7 +1118,8 @@ def guest_run_command(argv: list[str], cwd: str, env: dict[str, str], timeout: i
             f"timeout -k 5 {int(timeout)} {shlex.join(argv)}")
 
 
-# The guest runs these with python3 (TODO: the base image must have it). They only use the standard library.
+# The guest runs these with python3 (the Ubuntu cloud image has it, and the Code tools image adds more). They only use
+# the standard library.
 GUEST_PACK = (
     "import io,os,sys,zipfile\n"
     "root=sys.argv[1]; skip=set(sys.argv[2:])\n"

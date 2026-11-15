@@ -4,7 +4,12 @@ must stay in the script, in the order they must run."""
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -266,7 +271,9 @@ class SandboxImageScriptTest(unittest.TestCase):
         for other in list(SCRIPTS.glob("*.ps1")) + list(SCRIPTS.parent.glob("cmd/*.cmd")) + [ROOT / "packaging" / "build_windows.py"]:
             if other.name == SCRIPT.name:
                 continue
-            self.assertNotIn("sandbox-image", other.read_text(encoding="utf-8", errors="replace"), other.name)
+            # prepare-sandbox-image.* is a different script (it bakes the Code tools in; docs/SANDBOX_IMAGE.md)
+            self.assertIsNone(re.search(r"(?<!prepare-)sandbox-image", other.read_text(encoding="utf-8", errors="replace")),
+                              other.name)
         for py in (ROOT / "subzero_ai").rglob("*.py"):
             self.assertNotIn("sandbox-image.ps1", py.read_text(encoding="utf-8"), py.name)
 
@@ -472,3 +479,278 @@ class BaseDiskPermissionsKeptTest(unittest.TestCase):
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("S-1-5-83-0", text[text.index("function Show-ImageCheck"):])
         self.assertTrue(text.isascii())
+
+# --------------------------------------------------------------------------- the Code tools in the image
+from subzero_ai import sandbox_image  # noqa: E402
+from subzero_ai.sandbox import ExitResult, FakeSandbox, SandboxHandle  # noqa: E402
+
+PROVISION_SH = ROOT / "subzero_ai" / "sandbox_provision.sh"
+# What each TOOLS_VERSION was built from. Changing the Node.js pin, the runner or the Agent SDK without bumping
+# sandbox_image.TOOLS_VERSION would leave old images looking current, so this table has to change with it.
+PINS = {1: {"node": "22.23.4", "runner": "0.1.0", "sdk": "0.3.316"}}
+
+
+def load_build():
+    spec = importlib.util.spec_from_file_location("build_windows", ROOT / "packaging" / "build_windows.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ToolsVersionPinsTest(unittest.TestCase):
+    def test_the_pins_match_the_tools_version(self):
+        self.assertEqual(PINS[sandbox_image.TOOLS_VERSION], {
+            "node": sandbox_image.NODE_VERSION, "runner": sandbox_image.expected_runner_version(),
+            "sdk": sandbox_image.expected_sdk_version()},
+            "something baked into the image changed: bump sandbox_image.TOOLS_VERSION and add a row to PINS")
+
+    def test_node_is_the_version_the_windows_build_pins(self):
+        self.assertEqual(sandbox_image.NODE_VERSION, load_build().NODE_VERSION)
+        self.assertRegex(sandbox_image.NODE_LINUX_X64_SHA256, r"^[0-9a-f]{64}$")
+
+    def test_expected_versions_come_from_the_runner_package(self):
+        data = json.loads((ROOT / "sandbox_runner" / "package.json").read_text())
+        self.assertEqual(sandbox_image.expected_runner_version(), data["version"])
+        self.assertEqual(sandbox_image.expected_sdk_version(), data["dependencies"]["@anthropic-ai/claude-agent-sdk"])
+        self.assertRegex(sandbox_image.expected_sdk_version(), r"^\d+\.\d+\.\d+$", "an exact version")
+
+    def test_expected_versions_work_from_the_windows_install_layout(self):
+        tmp = Path(tempfile.mkdtemp(prefix="layout-test-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        app = tmp / "app"
+        shutil.copytree(ROOT / "subzero_ai", app / "subzero_ai", ignore=shutil.ignore_patterns("__pycache__"))
+        build = load_build()
+        build.add_sandbox_runner(app)
+        self.assertEqual(sandbox_image.expected_runner_version(app / "sandbox_runner"),
+                         sandbox_image.expected_runner_version())
+        # the module finds the runner folder beside the package, in the source tree and in app\
+        self.assertEqual(sandbox_image.RUNNER_SOURCE, ROOT / "sandbox_runner")
+        self.assertEqual((app / "subzero_ai" / "sandbox_image.py").parent.parent / "sandbox_runner", app / "sandbox_runner")
+
+    def test_messages_are_plain_and_name_neither_the_product_nor_the_team(self):
+        for text in (sandbox_image.MISSING_MESSAGE, sandbox_image.OUTDATED_MESSAGE, sandbox_image.CURRENT_MESSAGE):
+            self.assertNotIn("Claude Code", text)
+            self.assertNotRegex(text, r"5690|SubZero Robotics")
+        self.assertEqual(sandbox_image.MISSING_MESSAGE, "The sandbox image doesn't have the Code tools yet. Run "
+                         "prepare-sandbox-image.cmd on the server, then try again.")
+        self.assertIn("out of date", sandbox_image.OUTDATED_MESSAGE)
+        self.assertIn("prepare-sandbox-image.cmd", sandbox_image.OUTDATED_MESSAGE)
+
+
+class ScriptedBackend:
+    """A backend whose `run` answers from a table, to test check_tools on the real (non-fake) path."""
+    name = "scripted"
+
+    def __init__(self, answers: dict[str, tuple[int, str]]):
+        self.answers = answers
+        self.calls: list[list[str]] = []
+
+    def run(self, handle, argv, *, cwd, env, timeout, on_output=None):
+        self.calls.append(list(argv))
+        for key, (code, text) in self.answers.items():
+            if key in " ".join(argv):
+                return ExitResult(code, text)
+        return ExitResult(127, "command not found")
+
+
+HANDLE = SandboxHandle("szsandbox-1-s000-aaaaaa", "scripted", "")
+
+
+def runner_line(runner=None, sdk=None) -> str:
+    return json.dumps({"runner_version": runner or sandbox_image.expected_runner_version(),
+                       "sdk_version": sdk or sandbox_image.expected_sdk_version()})
+
+
+class CheckToolsTest(unittest.TestCase):
+    def test_a_current_image_is_ok(self):
+        backend = ScriptedBackend({"TOOLS_VERSION": (0, f"{sandbox_image.TOOLS_VERSION}\n"),
+                                   "runner.mjs --version": (0, runner_line() + "\n")})
+        status = sandbox_image.check_tools(backend, HANDLE)
+        self.assertEqual((status.state, status.ok), ("ok", True))
+        self.assertEqual(backend.calls[0], ["cat", "/opt/subzero-runner/TOOLS_VERSION"])
+        self.assertEqual(backend.calls[1], ["node", "/opt/subzero-runner/runner.mjs", "--version"])
+
+    def test_an_image_without_the_tools_is_missing(self):
+        for answers in ({}, {"TOOLS_VERSION": (1, "cat: No such file")},
+                        {"TOOLS_VERSION": (0, "1"), "runner.mjs --version": (127, "node: command not found")},
+                        {"TOOLS_VERSION": (0, "1"), "runner.mjs --version": (0, "garbage")},
+                        {"TOOLS_VERSION": (0, "banana")}):
+            status = sandbox_image.check_tools(ScriptedBackend(answers), HANDLE)
+            self.assertEqual(status.state, "missing", answers)
+            self.assertEqual(status.message, sandbox_image.MISSING_MESSAGE)
+
+    def test_an_old_image_is_out_of_date(self):
+        for answers in (
+                {"TOOLS_VERSION": (0, str(sandbox_image.TOOLS_VERSION - 1)), "runner.mjs --version": (0, runner_line())},
+                {"TOOLS_VERSION": (0, str(sandbox_image.TOOLS_VERSION)),
+                 "runner.mjs --version": (0, runner_line(runner="0.0.1"))},
+                {"TOOLS_VERSION": (0, str(sandbox_image.TOOLS_VERSION)),
+                 "runner.mjs --version": (0, runner_line(sdk="0.0.1"))}):
+            status = sandbox_image.check_tools(ScriptedBackend(answers), HANDLE)
+            self.assertEqual(status.state, "outdated", answers)
+            self.assertEqual(status.message, sandbox_image.OUTDATED_MESSAGE)
+
+    def test_the_fake_sandbox_has_the_tools_unless_told_otherwise(self):
+        tmp = Path(tempfile.mkdtemp(prefix="fake-tools-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        backend = FakeSandbox(tmp)
+        handle = backend.create(1)
+        self.assertTrue(sandbox_image.check_tools(backend, handle).ok)
+        backend.tools = "missing"
+        self.assertEqual(sandbox_image.check_tools(backend, handle).state, "missing")
+        backend.tools = "outdated"
+        self.assertEqual(sandbox_image.check_tools(backend, handle).state, "outdated")
+        self.assertEqual(FakeSandbox(tmp, tools="missing").tools, "missing")
+
+
+class ProvisionScriptTest(unittest.TestCase):
+    def text(self) -> str:
+        return PROVISION_SH.read_text(encoding="utf-8")
+
+    def test_it_is_valid_bash_with_lf_line_endings(self):
+        self.assertNotIn(b"\r", PROVISION_SH.read_bytes())
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash isn't installed here")
+        done = subprocess.run([bash, "-n", str(PROVISION_SH)], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_it_is_strict_and_never_traces(self):
+        text = self.text()
+        self.assertIn("set -euo pipefail", text)
+        self.assertNotRegex(text, r"(?m)^\s*set\s+-[a-z]*x")
+        self.assertNotIn("bash -x", text)
+        self.assertIn("DEBIAN_FRONTEND=noninteractive", text)
+
+    def test_it_contains_no_token_or_key(self):
+        text = self.text()
+        for pattern in (r"sk-ant-[A-Za-z0-9_-]{10,}", r"xox[bap]-", r"ghp_[A-Za-z0-9]{20,}", r"[A-Za-z0-9_-]{43}=?\b",
+                        r"BEGIN [A-Z ]*PRIVATE KEY", r"://[^/\s:$]+:[^@\s$]+@"):
+            self.assertIsNone(re.search(pattern, text), pattern)
+        # the proxy login is read from the environment, and only ever tested for being there
+        self.assertIn("https_proxy", text)
+        self.assertNotRegex(text, r"echo[^\n]*\$\{?https?_proxy|echo[^\n]*HTTPS_PROXY")
+        self.assertNotRegex(text, r">\s*/etc/[^\n]*\$\{?https?_proxy")
+
+    def test_apt_goes_over_https_only(self):
+        text = self.text()
+        self.assertIn("s#http://#https://#g", text)
+        self.assertLess(text.index("use_https_sources\n  apt-get"), text.index("update"))
+        self.assertNotRegex(text, r"https?://[a-z.]*ubuntu\.com")
+
+    def test_it_installs_the_required_packages(self):
+        text = self.text()
+        for package in ("git", "python3", "python3-pip", "python3-venv", "unzip", "zip", "curl", "ca-certificates",
+                        "build-essential", "openjdk-17-jdk-headless"):
+            self.assertRegex(text, rf"\b{re.escape(package)}\b", package)
+
+    def test_node_is_checked_against_its_hash_before_it_is_unpacked(self):
+        text = self.text()
+        self.assertIn("sha256sum -c", text)
+        self.assertLess(text.index("sha256sum -c"), text.index("tar -xzf"))
+        self.assertIn("https://nodejs.org/dist/v${NODE_VERSION}/", text)
+        self.assertNotIn(sandbox_image.NODE_LINUX_X64_SHA256, text, "the pin is defined once, in Python")
+        self.assertNotRegex(text, r"\b[0-9a-f]{64}\b")
+
+    def test_the_runner_is_installed_from_the_lock_file_and_locked_down(self):
+        text = self.text()
+        self.assertIn("npm ci --omit=dev", text)
+        self.assertIn("claude-agent-sdk-linux-x64", text)
+        self.assertIn("chown -R root:root", text)
+        self.assertIn("chmod -R go-w", text)
+        self.assertIn("/opt/subzero-runner", text)
+        self.assertLess(text.index("npm ci"), text.index('> "$RUNNER_DIR/TOOLS_VERSION"'), "the version is written last")
+
+    def test_managed_settings_turn_off_background_traffic(self):
+        text = self.text()
+        start = text.index("<<'JSON'") + len("<<'JSON'")
+        block = text[start:text.index("\nJSON\n", start)]
+        settings = json.loads(block)
+        self.assertEqual(settings["permissions"], {"deny": []})
+        self.assertEqual(settings["allowManagedHooksOnly"], True)
+        self.assertLessEqual(settings["cleanupPeriodDays"], 3)
+        for key in ("DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_AUTOUPDATER",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"):
+            self.assertEqual(settings["env"][key], "1")
+        self.assertIn("/etc/claude-code/managed-settings.json", text)
+        self.assertIn("chmod 0644 /etc/claude-code/managed-settings.json", text)
+
+    def test_git_and_the_caches_are_set_up_without_a_baked_proxy(self):
+        text = self.text()
+        self.assertIn("safe.directory '*'", text)
+        self.assertIn("user.name 'Code'", text)
+        self.assertIn("user.email 'code@localhost'", text)
+        self.assertIn(".gradle", text)
+        self.assertIn(".npm", text)
+        self.assertNotRegex(text, r"(?i)git config[^\n]*proxy|npm config set[^\n]*proxy|proxy\s*=")
+
+    def test_the_finish_step_makes_the_next_boot_a_fresh_one(self):
+        text = self.text()
+        finish = text[text.index("do_finish() {"):]
+        for needed in ("rm -f /etc/sudoers.d/90-cloud-init-users", "cloud-init clean --logs --seed",
+                       "/etc/ssh/ssh_host_*", "truncate -s 0 /etc/machine-id", "/etc/netplan/50-cloud-init.yaml",
+                       "apt-get clean", "systemctl poweroff"):
+            self.assertIn(needed, finish)
+        self.assertNotRegex(text, r"dd if=/dev/zero|zerofree|fstrim", "no long disk wipes")
+        self.assertLess(finish.index("sudoers.d/90-cloud-init-users"), finish.index("poweroff"))
+
+    def test_the_script_takes_everything_it_needs_from_the_environment(self):
+        for name in ("TOOLS_VERSION", "NODE_VERSION", "NODE_SHA256"):
+            self.assertIn(name, self.text())
+        env = sandbox_image.script_env("http://x:y@10.77.0.1:3128")
+        self.assertTrue({"TOOLS_VERSION", "NODE_VERSION", "NODE_SHA256", "HTTPS_PROXY", "https_proxy"} <= set(env))
+        self.assertNotIn("JAVA_TOOL_OPTIONS", env)
+
+
+class ReleaseZipTest(unittest.TestCase):
+    """What goes into SubZeroAI-windows.zip for the image step. The full build (255 MB) isn't run here."""
+
+    def test_the_runner_is_copied_as_source_and_lock_file_only(self):
+        build = load_build()
+        tmp = Path(tempfile.mkdtemp(prefix="zip-test-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (ROOT / "sandbox_runner" / "node_modules").mkdir(exist_ok=True)  # as on a dev PC after npm ci
+        marker = ROOT / "sandbox_runner" / "node_modules" / ".marker"
+        marker.write_text("x")
+        self.addCleanup(lambda: (marker.unlink(missing_ok=True), shutil.rmtree(ROOT / "sandbox_runner" / "node_modules", True)))
+        build.add_sandbox_runner(tmp)
+        files = sorted(p.relative_to(tmp / "sandbox_runner").as_posix() for p in (tmp / "sandbox_runner").rglob("*")
+                       if p.is_file())
+        for needed in ("package.json", "package-lock.json", "runner.mjs", "lib/run.mjs", "lib/events.mjs",
+                       "lib/options.mjs"):
+            self.assertIn(needed, files)
+        self.assertFalse([f for f in files if "node_modules" in f or f.startswith("test/")])
+        self.assertEqual(sandbox_image.runner_archive.__name__, "runner_archive")
+
+    def test_the_new_scripts_ship_and_are_copied_by_the_updater(self):
+        scripts = sorted(p.name for p in SCRIPTS.glob("*.ps1"))
+        cmds = sorted(p.name for p in (SCRIPTS.parent / "cmd").glob("*.cmd"))
+        self.assertIn("prepare-sandbox-image.ps1", scripts)
+        self.assertIn("prepare-sandbox-image.cmd", cmds)
+        self.assertIn("sandbox_provision.sh", [p.name for p in (ROOT / "subzero_ai").iterdir()])
+        common = (SCRIPTS / "common.ps1").read_text(encoding="utf-8")
+        self.assertIn('"prepare-sandbox-image.cmd"', common[common.index("$AppFiles"):], "update.cmd copies it too")
+        build = (ROOT / "packaging" / "build_windows.py").read_text(encoding="utf-8")
+        self.assertIn("add_sandbox_runner(app)", build)
+        self.assertIn('glob("*.cmd")', build)
+        self.assertIn('glob("*.ps1")', build)
+        self.assertIn("copytree(ROOT / \"subzero_ai\"", build, "sandbox_provision.sh travels inside the app folder")
+
+    def test_the_wrapper_stops_the_app_and_always_starts_it_again(self):
+        text = (SCRIPTS / "prepare-sandbox-image.ps1").read_text(encoding="utf-8")
+        self.assertTrue(text.isascii())
+        self.assertIn("Assert-Admin", text)
+        self.assertIn("Stop-AppService", text)
+        self.assertIn('"sandbox-provision"', text)
+        self.assertLess(text.index("Stop-AppService"), text.index("Invoke-AppTool"))
+        finally_block = text[text.index("} finally {"):]
+        self.assertIn("Start-AppService", finally_block)
+        cmd = (SCRIPTS.parent / "cmd" / "prepare-sandbox-image.cmd").read_text(encoding="utf-8")
+        self.assertIn("scripts\\prepare-sandbox-image.ps1", cmd)
+
+    def test_the_image_script_points_at_the_next_step_and_the_readme_explains_it(self):
+        self.assertIn("prepare-sandbox-image.cmd", script_text()[script_text().index("Built the base disk"):])
+        readme = (SCRIPTS.parent / "README.txt").read_text(encoding="utf-8")
+        self.assertIn("prepare-sandbox-image.cmd", readme)
+        self.assertNotIn("Claude Code", readme)
+
