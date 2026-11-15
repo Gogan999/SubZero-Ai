@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf }}">
   <meta name="color-scheme" content="{{ theme or 'light dark' }}">
-  <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
+  <title>{% if pending_count %}({{ pending_count }}) {% endif %}{% block title %}{{ settings.app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <link rel="stylesheet" href="/assets/code.css?v={{ version }}">
   <script src="/static/app.js?v={{ version }}" defer></script>
@@ -20,11 +20,10 @@
   <header class="mobile-bar">
     <button class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false"
       data-sidebar-toggle data-open-label="Open menu" data-close-label="Close menu" aria-label="Open menu">{{ icon('menu') }}</button>
-    <a class="brand" href="/chats">
+    <a class="brand" href="/code">
       <span class="brand-mark" aria-hidden="true">SZ</span>
       <span class="brand-name">{{ settings.app_name }}</span>
     </a>
-    <a class="icon-button" href="/chats" aria-label="New chat">{{ icon('plus') }}</a>
   </header>
   <div class="shell">
     {% include "_sidebar.html" %}
@@ -32,14 +31,13 @@
   {% else %}
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="/chats">
+      <a class="brand" href="/code">
         <span class="brand-mark" aria-hidden="true">SZ</span>
         <span class="brand-name">{{ settings.app_name }}</span>
       </a>
     </div>
   </header>
   {% endif %}
-  {% block notice %}{% set notice_class = "" %}{% include "_notice.html" %}{% endblock %}
   {% if dev_mode %}<p class="devbar">Test mode: anyone on this PC can sign in as a sample person. Turn off DEV_LOGIN before students use the app.</p>{% endif %}
   <main id="main">
     {% block main %}{% endblock %}

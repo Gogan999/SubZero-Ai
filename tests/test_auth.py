@@ -2,59 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import time
 import unittest
 from urllib.parse import parse_qs, urlparse
 
-import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
+from subzero_ai.auth import LoginError, SlackLogin
 
-from subzero_ai.auth import ISSUER, LoginError, SlackLogin
-
-from .helpers import Harness
-
-CLIENT_ID = "1234.5678"
-PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-
-def jwks():
-    key = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(PRIVATE_KEY.public_key()))
-    key.update({"kid": "slack-key-1", "alg": "RS256", "use": "sig"})
-    return {"keys": [key]}
-
-
-def id_token(nonce, *, team="TDEV", user="U0AVA", aud=CLIENT_ID, key=PRIVATE_KEY, expires_in=300, **extra):
-    now = int(time.time())
-    claims = {"iss": ISSUER, "sub": user, "aud": aud, "iat": now, "exp": now + expires_in, "nonce": nonce,
-              "https://slack.com/team_id": team, "https://slack.com/user_id": user,
-              "name": "Ava Martinez", "email": "ava@example.org", **extra}
-    return jwt.encode(claims, key, algorithm="RS256", headers={"kid": "slack-key-1"})
-
-
-class FakeResponse:
-    def __init__(self, body):
-        self.body = body
-        self.content = json.dumps(body).encode()
-
-    def json(self):
-        return self.body
-
-
-class FakeSession:
-    """Stands in for requests.Session when the app exchanges the sign-in code."""
-
-    def __init__(self):
-        self.token = None
-        self.posts = []
-
-    def post(self, url, data=None, timeout=None):
-        self.posts.append({"url": url, "data": data})
-        if self.token is None:
-            return FakeResponse({"ok": False, "error": "invalid_code"})
-        return FakeResponse({"ok": True, "access_token": "xoxp-1", "id_token": self.token})
-
+from .helpers import CLIENT_ID, OTHER_KEY, Harness, id_token, jwks
+from .helpers import FakeSlackSession as FakeSession
 
 class VerifyTokenTest(unittest.TestCase):
     def setUp(self):
@@ -122,14 +76,14 @@ class SignInFlowTest(unittest.TestCase):
         self.session.token = id_token(nonce)
         resp = self.client.get(f"/auth/slack/callback?code=abc&state={state}", follow_redirects=False)
         self.assertEqual(resp.status_code, 303)
-        self.assertEqual(resp.headers["location"], "/chats")
+        self.assertEqual(resp.headers["location"], "/code")
         user = self.h.services.store.user_by_slack_id("U0AVA")
         self.assertEqual(user["name"], "Ava Martinez")
         self.assertEqual(user["role"], "student")
         self.assertEqual(user["slack_team_id"], "TDEV")
         self.assertEqual(user["avatar_url"], "https://avatars.slack-edge.com/ava.png")
         self.assertEqual(self.session.posts[0]["data"]["code"], "abc")
-        page = self.client.get("/chats")
+        page = self.client.get("/about")
         self.assertEqual(page.status_code, 200)
         self.assertIn("Ava Martinez", page.text)
 
@@ -153,7 +107,7 @@ class SignInFlowTest(unittest.TestCase):
         resp = self.client.get(f"/auth/slack/callback?code=abc&state={state}")
         self.assertIn("Sign in with the team&#39;s Slack workspace", resp.text)
         self.assertIsNone(self.h.services.store.user_by_slack_id("U0OUT"))
-        self.assertEqual(self.client.get("/chats", follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.get("/queue", follow_redirects=False).status_code, 303)
 
     def test_guests_and_bots_are_refused(self):
         for user, info in [("U0GUEST", {"is_restricted": True}), ("U0SCG", {"is_ultra_restricted": True}),
@@ -166,7 +120,7 @@ class SignInFlowTest(unittest.TestCase):
                 resp = self.client.get(f"/auth/slack/callback?code=abc&state={state}")
                 self.assertIn("Guest accounts can&#39;t sign in", resp.text)
                 self.assertIsNone(self.h.services.store.user_by_slack_id(user))
-                self.assertEqual(self.client.get("/chats", follow_redirects=False).status_code, 303)
+                self.assertEqual(self.client.get("/queue", follow_redirects=False).status_code, 303)
 
     def test_guests_can_be_allowed(self):
         self.h.settings.allow_slack_guests = True
@@ -193,7 +147,7 @@ class SignInFlowTest(unittest.TestCase):
         self.client.get(f"/auth/slack/callback?code=abc&state={state}")
         self.h.slack.users["U0AVA"]["is_restricted"] = True
         self.assertEqual(self.h.call(self.h.services.approvals.check_accounts), 1)
-        self.assertEqual(self.client.get("/chats", follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.get("/queue", follow_redirects=False).status_code, 303)
 
     def test_forged_state_is_refused(self):
         _, nonce = self.begin()
@@ -221,9 +175,9 @@ class SignInFlowTest(unittest.TestCase):
 
     def test_never_returns_to_another_site(self):
         from subzero_ai.web import SAFE_NEXT
-        for target in ("/\\evil.example", "//evil.example", "https://evil.example", "/c/1/../../x", "/chats?x=1"):
+        for target in ("/\\evil.example", "//evil.example", "https://evil.example", "/c/1/../../x", "/chats?x=1", "/chats", "/recents"):
             self.assertIsNone(SAFE_NEXT.fullmatch(target), target)
-        for target in ("/chats", "/c/12", "/queue"):
+        for target in ("/code", "/code/7", "/c/12", "/queue"):
             self.assertIsNotNone(SAFE_NEXT.fullmatch(target), target)
 
     def test_network_trouble_during_sign_in(self):
@@ -253,7 +207,7 @@ class SignInFlowTest(unittest.TestCase):
         page = self.client.get(f"/auth/slack/callback?code=abc&state={state}")
         csrf = page.text.split('name="csrf-token" content="')[1].split('"')[0]
         self.client.post("/logout", data={"csrf": csrf})
-        self.assertEqual(self.client.get("/chats", follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.get("/queue", follow_redirects=False).status_code, 303)
 
 
 if __name__ == "__main__":

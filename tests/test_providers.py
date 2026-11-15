@@ -17,9 +17,9 @@ from subzero_ai.claude import ClaudeClient, ClaudeError, FakeClaude
 from subzero_ai.config import Settings, load_settings
 from subzero_ai.db import MIGRATIONS, Database
 from subzero_ai.pi_client import PiClient, child_env, provider_keys
-from subzero_ai.web import model_label
+from subzero_ai.model_choices import model_label
 
-from .helpers import ADMIN, MENTOR, STUDENT, Harness, pass_model_check
+from .helpers import ADMIN, MENTOR, STUDENT, Harness
 
 FAKE = str(Path(__file__).with_name("fake_pi_gateway.py"))
 HTML = {"Accept": "text/html"}
@@ -136,9 +136,8 @@ class ValidationTest(unittest.TestCase):
 
     def providers(self, form, **kw):
         base = {"model_default": "anthropic/claude-sonnet-5-5", "model_hard": "anthropic/claude-opus-5-5",
-                "model_titles": "anthropic/claude-haiku-5-5", "effort_default": "medium", "effort_high": "high",
-                "max_tokens_chat": "8000", "max_tokens_explainer": "16000", "long_chat_tokens": "150000",
-                "web_search_daily_limit": "50"}
+                "model_titles": "anthropic/claude-haiku-5-5", "effort_default": "medium",
+                "max_tokens_chat": "8000"}
         base.update(form)
         return saved_settings.validate("claude", base, settings=self.settings(**kw))
 
@@ -275,9 +274,7 @@ class KeyRouteTest(unittest.TestCase):
 
     def test_model_form_saves_providers(self):
         form = {"ai_providers": ["anthropic", "openai"], "model_default": "claude-sonnet-5-5",
-                "model_hard": "openai/gpt-x", "model_titles": "claude-haiku-5-5", "effort_default": "medium",
-                "effort_high": "high", "max_tokens_chat": "8000", "max_tokens_explainer": "16000",
-                "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "model_hard": "openai/gpt-x", "model_titles": "claude-haiku-5-5", "effort_default": "medium", "max_tokens_chat": "8000"}
         # the offline backend takes any enabled provider, and a new hard-problem model needs a passing safety check
         model_check.save_result(self.h.services.db, model_check.CheckResult("openai/gpt-x", cases=[
             model_check.CaseResult(c, True) for c in model_check.CHAT_CASES + model_check.SCREENER_CASES]))
@@ -306,26 +303,6 @@ class SetupKeyStepTest(unittest.TestCase):
         page = h.client.get("/setup")
         from .helpers import CSRF_RE
         return CSRF_RE.search(page.text).group(1)
-
-
-class MentorSwitchTest(unittest.TestCase):
-    def test_mentors_pick_from_checked_models_only(self):
-        h = Harness(model_default="claude-sonnet-5-5", model_hard="anthropic/claude-opus-5-5",
-                    anthropic_api_key="sk-ant-test-key-0123456789")
-        try:
-            ava, kim = h.login(STUDENT), h.login(MENTOR)
-            pass_model_check(h, "anthropic/claude-sonnet-5-5")
-            pass_model_check(h, "anthropic/claude-opus-5-5")
-            cid = int(ava.new_chat("Hello robot").json()["url"].rsplit("/", 1)[1])
-            page = kim.get(f"/c/{cid}", headers=HTML).text
-            self.assertIn('value="anthropic/claude-sonnet-5-5"', page)
-            self.assertIn('value="anthropic/claude-opus-5-5"', page)
-            self.assertNotIn("haiku", page)  # not checked, so not offered
-            self.assertEqual(kim.post(f"/c/{cid}/model", {"model": "anthropic/claude-haiku-5-5"}).status_code, 400)
-            self.assertEqual(kim.post(f"/c/{cid}/model", {"model": "claude-opus-5-5"}).status_code, 200)
-            self.assertEqual(h.services.store.conversation(cid)["model"], "anthropic/claude-opus-5-5")
-        finally:
-            h.close()
 
 
 class PiKeysCase(unittest.IsolatedAsyncioTestCase):
@@ -398,9 +375,8 @@ class EmptyProvidersTest(unittest.TestCase):
             page = admin.get("/settings").text
             self.assertIn('<input type="hidden" name="ai_providers" value="">', page)
             form = {"ai_providers": "", "model_default": "claude-sonnet-5-5", "model_hard": "claude-opus-5-5",
-                    "model_titles": "claude-haiku-5-5", "effort_default": "medium", "effort_high": "high",
-                    "max_tokens_chat": "8000", "max_tokens_explainer": "16000", "long_chat_tokens": "150000",
-                    "web_search_daily_limit": "50"}
+                    "model_titles": "claude-haiku-5-5", "effort_default": "medium",
+                    "max_tokens_chat": "8000"}
             resp = admin.post("/settings/claude", form, headers=HTML)
             self.assertEqual(resp.status_code, 400)
             self.assertIn("Turn on at least one provider.", resp.text)

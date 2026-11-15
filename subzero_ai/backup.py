@@ -50,7 +50,8 @@ class BackupInfo:
         return self.path.name
 
 
-def make_backup(settings: Settings, *, label: str = "", now: datetime | None = None) -> Path:
+def make_backup(settings: Settings, *, label: str = "", now: datetime | None = None,
+                include_videos: bool = False) -> Path:
     """Copy the database (safely, even while the app is running), attached files, and prompts into a new zip."""
     if not settings.db_path.exists():
         raise BackupError(f"There's no database at {settings.db_path} to back up.")
@@ -77,7 +78,7 @@ def make_backup(settings: Settings, *, label: str = "", now: datetime | None = N
                     for path in sorted(root.rglob("*")):
                         if not path.is_file() or path.name.endswith(".tmp"):
                             continue
-                        if folder == "files" and path.suffix.lower() in VIDEO_SUFFIXES:
+                        if folder == "files" and not include_videos and path.suffix.lower() in VIDEO_SUFFIXES:
                             videos_left_out += 1
                             continue
                         zf.write(path, f"{folder}/{path.relative_to(root).as_posix()}")

@@ -136,7 +136,7 @@ class BridgeLogin:
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env={**env, "BROWSER": "none"},
                                creationflags=flags)
         except OSError as exc:
-            raise LoginError(f"Couldn't start Claude Code on the mini PC ({type(exc).__name__}).") from exc
+            raise LoginError(f"Couldn't start the Claude program on the mini PC ({type(exc).__name__}).") from exc
         with self._lock:
             self._proc, self._output, self.url, self.started, self.by = proc, [], "", self._clock(), by
         threading.Thread(target=self._read, args=(proc,), name="bridge-login", daemon=True).start()
@@ -145,7 +145,7 @@ class BridgeLogin:
         if not found or not url:
             reason = failure_text(self._text())
             self.cancel()
-            raise LoginError("Claude Code didn't give a sign-in address" + (f": {reason}" if reason else ".")
+            raise LoginError("The Claude program didn't give a sign-in address" + (f": {reason}" if reason else ".")
                              + " Try again in a minute.")
         with self._lock:
             self.url = url
@@ -164,7 +164,7 @@ class BridgeLogin:
             proc.stdin.flush()
         except (OSError, ValueError) as exc:
             self.cancel()
-            raise LoginError("Claude Code stopped before it got the code. Press Sign in again.") from exc
+            raise LoginError("The Claude program stopped before it got the code. Press Sign in again.") from exc
         # Claude Code asks again, instead of stopping, when it can't read the code: don't wait the full minute then
         rejected = lambda: "Invalid code" in clean(self._text()[before:])  # noqa: E731
         done = self._wait_for(lambda: proc.poll() is not None or rejected(), CODE_WAIT)
@@ -178,7 +178,7 @@ class BridgeLogin:
         ok = done and proc.poll() == 0 and signed_in()
         self.cancel()
         if not ok:
-            raise LoginError(reason or ("Claude Code didn't finish signing in. " if not done else
+            raise LoginError(reason or ("The Claude program didn't finish signing in. " if not done else
                                         "The sign-in didn't work. ") + "Press Sign in again to get a new address.")
 
     def cancel(self) -> None:

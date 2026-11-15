@@ -29,7 +29,7 @@ class Check:
 
 
 async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner=None,
-                     sandbox_runner=None, egress=None) -> list[Check]:
+                     sandbox_runner=None, egress=None, gateway=None, credential_problem: str = "") -> list[Check]:
     results: list[Check] = []
 
     def add(status: str, title: str, detail: str = "") -> None:
@@ -70,7 +70,7 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
                 add(FAIL, "The Claude subscription needs AI_BACKEND=pi",
                     "Set AI_BACKEND=pi in config.env, or turn off Claude subscription under AI providers.")
             elif bridge_logged_in(settings.data_dir):
-                add(OK, "Claude subscription is signed in (Claude Code login found)")
+                add(OK, "Claude subscription is signed in (Claude login found)")
             else:
                 add(FAIL, "Claude subscription isn't signed in",
                     "Sign in under Settings, AI and keys, Claude subscription (or run python -m subzero_ai claude-login).")
@@ -86,6 +86,8 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
         await _check_sandbox_network(settings, add, sandbox_runner)
         if egress is not None:  # the running proxy is only known inside the app, so the CLI check leaves this out
             _check_egress(egress, add)
+        if gateway is not None and backend != "fake":  # the same, for the Code gateway (new Code engine only)
+            _check_gateway(gateway, credential_problem, add)
 
     # ------------------------------------------------------------------- Slack
     if slack is None and settings.slack_bot_token:
@@ -181,7 +183,8 @@ async def _check_sandbox_network(settings: Settings, add, runner=None) -> None:
     runner = runner or functools.partial(default_run_powershell, timeout=NETWORK_CHECK_SECONDS)
     try:
         problems = await asyncio.wait_for(asyncio.to_thread(
-            host_network_problems, settings.sandbox_switch, settings.sandbox_proxy_port, runner),
+            host_network_problems, settings.sandbox_switch, settings.sandbox_proxy_port, runner,
+            settings.sandbox_gateway_port),
             NETWORK_CHECK_SECONDS + 5)
     except asyncio.TimeoutError:
         problems = [describe_network_problem("check-failed:the check didn't finish in time")]
@@ -202,6 +205,18 @@ def _check_egress(egress, add) -> None:
     else:
         add(FAIL, "The sandbox internet proxy isn't running, so Code sandboxes won't start",
             egress.error or "Restart SubZero AI. If it still doesn't start, check the sandbox address and port.")
+
+
+def _check_gateway(gateway, credential_problem: str, add) -> None:
+    """The Code gateway (anthropic_gateway.py): whether it is listening, and whether Code has a sign-in to give it."""
+    if not gateway.running:
+        add(FAIL, "The Code gateway isn't running, so the new Code engine can't reach the AI service",
+            gateway.error or "Restart SubZero AI. If it still doesn't start, check the sandbox address and port.")
+    elif credential_problem:
+        add(FAIL, "Code has nothing to sign in to the AI service with", credential_problem)
+    else:
+        add(OK, "The Code gateway is running", f"Claude in the sandboxes reaches the AI service through "
+                                               f"{gateway.host}:{gateway.port}.")
 
 
 async def _check_models(settings: Settings, client, add, *, pi: bool, node_runner=None) -> None:

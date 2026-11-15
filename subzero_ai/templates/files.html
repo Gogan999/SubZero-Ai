@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Files · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page">
+  <h1>Files</h1>
+  <p class="lede">Everything stored on the mini PC that came from people's work. Open a file to check it, then delete what the team no longer needs. Deleting can't be undone.</p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+
+  <section class="panel" aria-labelledby="space-title">
+    <h2 id="space-title">Space used</h2>
+    <p>
+      {% if disk.low %}<span class="pill bad">Low on space</span>{% else %}<span class="pill ok">Plenty of space</span>{% endif %}
+      <strong>{{ disk_text(disk.free) }}</strong> free of {{ disk_text(disk.total) }} on the drive that holds the app's data.
+      {% if disk.low %}Free space is below {{ disk.min_gb }} GB or 10%. New Code sandboxes are paused when it gets too low.{% endif %}
+    </p>
+    <div class="table-wrap">
+      <table class="audit stack">
+        <thead><tr><th scope="col">Kind</th><th scope="col">Items</th><th scope="col">Size</th><th scope="col">What it is</th></tr></thead>
+        <tbody>
+          {% for t in totals %}
+          <tr>
+            <td data-label="Kind"><a href="/files?kind={{ t.kind }}">{{ t.label }}</a></td>
+            <td data-label="Items">{{ t.count }}</td>
+            <td data-label="Size">{{ t.size }}</td>
+            <td data-label="What it is">{{ t.hint }}</td>
+          </tr>
+          {% endfor %}
+          <tr><th scope="row" data-label="Kind">All</th><td data-label="Items">{{ total_count }}</td><td data-label="Size">{{ total_size }}</td><td data-label="What it is"></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="rules-title">
+    <h2 id="rules-title">What is cleaned up automatically</h2>
+    <ul class="facts">
+      {% for r in rules %}<li><strong>{{ r.what }}.</strong> {{ r.rule }}</li>{% endfor %}
+    </ul>
+    <p class="field-hint">A file you delete here can still be in a nightly backup{% if backup_expires %}; the newest one is deleted around {{ backup_expires }}{% endif %}. Videos are left out of backups. Students never see this page.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="list-title">
+    <h2 id="list-title">All files</h2>
+    <form class="audit-filters" method="get" action="/files">
+      <div class="field">
+        <label for="f-kind">Kind</label>
+        <select id="f-kind" name="kind">
+          <option value="">All kinds</option>
+          {% for value, label in kinds %}<option value="{{ value }}"{% if kind == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="f-owner">Owner</label>
+        <select id="f-owner" name="owner">
+          <option value="">Everyone</option>
+          {% for oid, oname in owners %}<option value="{{ oid }}"{% if owner == oid %} selected{% endif %}>{{ oname }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="f-older">Older than (days)</label>
+        <input id="f-older" type="number" name="older" min="1" max="{{ max_days }}" value="{{ older }}">
+      </div>
+      <div class="field">
+        <label for="f-sort">Sort by</label>
+        <select id="f-sort" name="sort">
+          {% for value, label in sorts %}<option value="{{ value }}"{% if sort == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-actions">
+        <button class="button primary" type="submit">Show</button>
+        {% if filtered %}<a class="button quiet" href="/files">Clear filters</a>{% endif %}
+      </div>
+    </form>
+    <p class="fine" role="status">{{ matching }} {{ 'item' if matching == 1 else 'items' }}{% if filtered %} match{{ 'es' if matching == 1 }}{% endif %}.{% if matching > shown_limit %} Showing the first {{ shown_limit }}. Use the filters to narrow it down.{% endif %}</p>
+
+    {% if rows %}
+    <form method="post" action="/files/delete" data-files-form>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="table-wrap">
+        <table class="audit stack files-table">
+          <thead><tr>
+            <th scope="col"><input type="checkbox" data-select-all aria-label="Tick every file in the list"></th>
+            <th scope="col">Name</th><th scope="col">Kind</th><th scope="col">Owner</th><th scope="col">Size</th><th scope="col">Age</th><th scope="col">Actions</th>
+          </tr></thead>
+          <tbody>
+            {% for r in rows %}
+            <tr>
+              <td data-label="Tick">{% if r.in_use %}<span class="visually-hidden">In use, can't be ticked</span>{% else %}<input type="checkbox" name="ids" value="{{ r.id }}" aria-label="Tick {{ r.name }}">{% endif %}</td>
+              <td data-label="Name"><span class="file-title">{{ r.name }}</span>
+                {% if r.detail %}<span class="fine"> {{ r.detail }}</span>{% endif %}</td>
+              <td data-label="Kind">{{ r.kind_label }}</td>
+              <td data-label="Owner">{{ r.owner }}</td>
+              <td data-label="Size">{{ r.size }}</td>
+              <td data-label="Age">{{ r.age }}</td>
+              <td data-label="Actions">
+                <div class="inline-actions">
+                  {% if r.in_use %}<span class="pill pending" title="A Code session is using this, or someone is waiting on it. Try again in a few minutes, or stop the session first.">In use</span>{% endif %}
+                  {% if r.view_url %}<a class="button small quiet" href="{{ r.view_url }}" target="_blank" rel="noopener">View</a>{% endif %}
+                  {% if r.link %}<a class="button small quiet" href="{{ r.link }}">{{ 'Open session' if r.kind in ('workspace', 'sandbox') else 'Open chat' }}</a>{% endif %}
+                  {% if not r.in_use %}<button class="button small reject" type="submit" name="one" value="{{ r.id }}">Delete</button>{% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="form-actions"><button class="button reject" type="submit">Delete ticked files</button></div>
+      <p class="field-hint">You will be asked to confirm before anything is deleted.</p>
+    </form>
+    {% else %}
+    <p class="field-hint">{{ 'Nothing matches those filters.' if filtered else 'There are no stored files.' }}</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="bulk-title">
+    <h2 id="bulk-title">Delete everything of one kind that is old</h2>
+    <p class="field-hint">Pick a kind and an age. The next page shows how many items and how much space that is, and nothing is deleted until you confirm. Items in use by a Code session are always left alone.</p>
+    <form class="audit-filters" method="post" action="/files/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="mode" value="older">
+      <div class="field">
+        <label for="b-kind">Kind</label>
+        <select id="b-kind" name="kind" required>
+          {% for value, label in kinds %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="b-days">Older than (days)</label>
+        <input id="b-days" type="number" name="days" min="1" max="{{ max_days }}" value="90" required>
+      </div>
+      <div class="form-actions"><button class="button reject" type="submit">Review what would be deleted</button></div>
+    </form>
+  </section>
+</section>
+{% endblock %}

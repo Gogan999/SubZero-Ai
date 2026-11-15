@@ -1,4 +1,4 @@
-"""Messaging the bot in Slack: a direct message goes through the same mentor approval as a website message,
+"""Messaging the bot in Slack: a direct message goes through mentor approval,
 and the AI's reply is posted back in the Slack thread.
 
 One Slack thread is one chat. The first message of a thread starts a chat; replies in the thread continue it.
@@ -99,13 +99,14 @@ def _split_blocks(text: str) -> list[tuple[bool, str, str]]:
     return blocks
 
 
-def replace_explainers(text: str, link: str) -> str:
-    """Interactive explainers only run on the website: swap each one for a line pointing there."""
+def flatten_explainers(text: str) -> str:
+    """Interactive explainers aren't made any more. An old reply that has one shows it as an ordinary code block."""
     out: list[str] = []
     for is_code, info, body in _split_blocks(text):
-        if is_code and info.split(" ")[0].lower() == EXPLAINER_TAG:
-            out.append(f"[This reply has an interactive explainer. Open it on the website]({link})")
-        elif is_code:
+        if is_code:
+            words = info.split(" ")
+            if words[0].lower() == EXPLAINER_TAG:
+                info = " ".join(["html", *words[1:]]).strip()
             out.append(f"```{info}\n{body}\n```")
         else:
             out.append(body)
@@ -254,10 +255,6 @@ class SlackDMs:
                 log.warning("Couldn't look up the bot's own Slack user id", exc_info=True)
         return self._bot_user_id
 
-    @property
-    def _site(self) -> str:
-        return self.settings.url("/")
-
     async def _say(self, channel: str, thread_ts: str, text: str) -> bool:
         """Post in a thread. False if Slack refused."""
         try:
@@ -291,11 +288,10 @@ class SlackDMs:
         top_level = root == ts
 
         if not self.settings.slack_dms_enabled:
-            await self._say(channel, root, f"Messaging the bot is turned off. Use the website: {self._site}")
+            await self._say(channel, root, "Messaging the bot is turned off right now. Ask a mentor.")
             return
         if has_files:
-            await self._say(channel, root, f"I can't take files in Slack yet. Attach them on the website instead: "
-                                           f"{self._site}")
+            await self._say(channel, root, "I can't take files yet. Paste the part you need as text.")
             return
 
         try:
@@ -329,11 +325,7 @@ class SlackDMs:
             return
         msg = self.store.message(outcome.message_id)
         if msg["status"] == "pending":
-            note = "A mentor will check this before the AI answers. I'll reply here."
-            if top_level:
-                note += (f"\nThis chat is also on the website, where the team can see approved chats: "
-                         f"{self.approvals.link(outcome.conversation_id)}")
-            await self._say(channel, root, note)
+            await self._say(channel, root, "A mentor will check this before the AI answers. I'll reply here.")
 
     async def _viewer(self, slack_user_id: str):
         """The app account for this Slack member, or None if they can't use the bot."""
@@ -352,7 +344,7 @@ class SlackDMs:
 
     # ----------------------------------------------------------- posting replies
     def _thread_of(self, user_message_id: int):
-        """(channel, thread_ts) of the Slack thread a message came in on, or None for a website message."""
+        """(channel, thread_ts) of the Slack thread a message came in on, or None for a message that didn't come in on Slack."""
         if self.store.dm_message(user_message_id) is None:
             return None
         msg = self.store.message(user_message_id)
@@ -388,7 +380,7 @@ class SlackDMs:
                 continue
             state.last_text = text
             try:
-                first = to_slack(replace_explainers(text, self.approvals.link(state.conversation_id)))
+                first = to_slack(flatten_explainers(text))
                 if first:
                     await self.slack.update_message(state.channel, state.ts, first[0])
             except Exception:
@@ -415,11 +407,10 @@ class SlackDMs:
             await asyncio.gather(state.ticker, return_exceptions=True)
         self._replies.pop(reply_id, None)
         reply = self.store.message(reply_id)
-        link = self.approvals.link(conversation_id)
         if reply["status"] == ERROR:
-            chunks = [f"Sorry, the AI couldn't finish that reply. You can try again on the website: {link}"]
+            chunks = ["Sorry, the AI couldn't finish that reply. Send your message again here."]
         else:
-            chunks = self.reply_chunks(reply["content"], reply["sources"], link)
+            chunks = self.reply_chunks(reply["content"], reply["sources"])
         for index, chunk in enumerate(chunks):
             try:
                 if index == 0 and state.ts:
@@ -434,9 +425,9 @@ class SlackDMs:
                 log.warning("Couldn't post part %s of reply %s in Slack", index + 1, reply_id, exc_info=True)
 
     @staticmethod
-    def reply_chunks(content: str, sources_json: str | None, link: str) -> list[str]:
-        """The reply as Slack posts: explainers swapped for a link, and the sources listed at the end."""
-        chunks = to_slack(replace_explainers(content, link))
+    def reply_chunks(content: str, sources_json: str | None) -> list[str]:
+        """The reply as Slack posts: an old explainer shown as a code block, and the sources listed at the end."""
+        chunks = to_slack(flatten_explainers(content))
         try:
             sources = [s for s in json.loads(sources_json or "[]") if s.get("url")][:MAX_SOURCES]
         except ValueError:

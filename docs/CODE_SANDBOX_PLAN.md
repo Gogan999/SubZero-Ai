@@ -1,8 +1,12 @@
 # Plan: more tools for student Code sessions
 
-Status: plan only, nothing built. Written 2026-11-01 for Logan. It covers four questions: where Code sessions run
-today, whether they should move into disposable containers, whether the model and provider can be picked per chat, and
-whether model defaults can be dropdowns in Settings. File references are to `main` at v0.8.0.
+Status (updated for 0.11.0): the Hyper-V sandbox, the egress proxy, students' Code sessions with mentor approval, the
+new Code engine inside the sandbox (`code_engine.py`, `sandbox_runner/`), the Code gateway on port 3129
+(`anthropic_gateway.py`) and the base image step (`prepare-sandbox-image.cmd`, `docs/SANDBOX_IMAGE.md`) are built and
+turned on by default. The WSL design below was never built and is kept only as the background. Section 3 (a model
+picker when creating a chat) was built and then removed in 0.11 with the web chat; section 4 (model dropdowns in
+Settings) is built. The 0.11 pieces are tested offline only: the mini PC runs are listed in `docs/FEATURES_TODO.md`.
+Written 2026-11-01 for Logan. File references in the sections below are to `main` at v0.8.0 and are out of date.
 
 ## Short answers
 
@@ -272,6 +276,8 @@ must make every one of those harmless:
 
 ## 3. Mentor-only model and provider dropdown when creating a chat
 
+Status: built, then removed in 0.11 with the web chat (chats in Slack use the default model). Kept as history.
+
 Feasible and small.
 
 - A conversation already stores its model as `provider/model` (`conversations.model`, set from `model_default` at
@@ -293,7 +299,7 @@ Feasible and small.
 
 ## 4. Model defaults as dropdowns in Settings
 
-Feasible and small, and it shares the helper from section 3.
+Status: built. Feasible and small, and it shares the helper from section 3.
 
 - Today `model_default`, `model_hard`, `model_titles`, `model_screener` and `model_check_judge` are free-text fields
   (`saved_settings.py`, `kind="model"`). A `choice` select exists only for the config.env fields

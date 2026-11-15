@@ -10,10 +10,11 @@
 # Remove: deletes only the szsandbox-* firewall rules and, when no VM is attached to it, the switch.
 # Check: changes nothing and lists what is missing. Only objects named szsandbox-* are ever changed; other adapters,
 # switches, VMs and rules are never touched.
-# Firewall rules, all inbound on the sandbox adapter. Block rules from any address: TCP below and above the proxy port,
-# all UDP, ICMPv4, ICMPv6, and the IP protocols in $BlockProtocols (IGMP, IPv6 in IPv4, GRE, ESP, AH). Windows Firewall
-# lets a block rule beat an allow rule, so the blocks skip the proxy port, and the one allow rule (szsandbox-allow-proxy)
-# opens only TCP to the proxy port from 10.77.0.0/24. Together they leave nothing open but the proxy. Other allow rules
+# Firewall rules, all inbound on the sandbox adapter. Block rules from any address: TCP below, between and above the
+# proxy and gateway ports, all UDP, ICMPv4, ICMPv6, and the IP protocols in $BlockProtocols (IGMP, IPv6 in IPv4, GRE,
+# ESP, AH). Windows Firewall lets a block rule beat an allow rule, so the blocks skip those two ports, and the two allow
+# rules (szsandbox-allow-proxy and szsandbox-allow-gateway) each open only TCP to their port from 10.77.0.0/24. Together
+# they leave nothing open but the egress proxy and the Claude gateway. Other allow rules
 # on the host need no change, because these interface-scoped blocks take precedence. IPv6 is also unbound from the
 # host's adapter, so the host has no IPv6 address there. Check also reads the Public profile's default inbound action,
 # which must be Block. The private VLAN matters because ACLs don't stop non-IP frames between sandboxes.
@@ -25,7 +26,9 @@ param(
     [string]$Action = "Check",
     [string]$Switch = "szsandbox-internal",
     [ValidateRange(1, 65535)]
-    [int]$ProxyPort = 3128
+    [int]$ProxyPort = 3128,
+    [ValidateRange(1, 65535)]
+    [int]$GatewayPort = 3129
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -34,12 +37,14 @@ $Prefix = "szsandbox-"
 $HostAddress = "10.77.0.1"
 $Subnet = "10.77.0.0/24"
 $BlockTcpBelow = "szsandbox-block-tcp-below"
+$BlockTcpBetween = "szsandbox-block-tcp-between"
 $BlockTcpAbove = "szsandbox-block-tcp-above"
 $BlockUdp = "szsandbox-block-udp"
 $BlockIcmp4 = "szsandbox-block-icmp4"
 $BlockIcmp6 = "szsandbox-block-icmp6"
 $BlockProtocols = @(2, 41, 47, 50, 51)  # IP protocols with no ports, blocked whole: generated from sandbox.BLOCK_PROTOCOLS
 $ProxyRule = "szsandbox-allow-proxy"
+$GatewayRule = "szsandbox-allow-gateway"
 $VlanPrimary = 100  # the private VLAN pair: each sandbox's adapter is isolated in it, and the host's is promiscuous
 $VlanSecondary = 200
 
@@ -60,6 +65,7 @@ $Messages = @{
     'profile-not-public' = "The network profile of the sandbox adapter isn't Public"
     'ipv6-enabled' = "IPv6 is still on for the host's adapter for the sandboxes, and it must be off (uncheck TCP/IPv6 on that adapter)"
     'proxy-rule-wrong' = "The firewall rule $ProxyRule must exist and allow only TCP to the proxy port from $Subnet on the sandbox adapter"
+    'gateway-rule-wrong' = "The firewall rule $GatewayRule must exist and allow only TCP to the gateway port from $Subnet on the sandbox adapter"
     'firewall-off' = "Windows Firewall is turned off for the Public profile, so none of the sandbox rules would apply. Turn it on (Windows Security, Firewall and network protection)"
     'default-inbound-allow' = "Windows Firewall's default for incoming traffic on the Public profile is Allow, and it must be Block"
 }
@@ -71,11 +77,18 @@ function Get-SandboxRules {
     return @(Get-NetFirewallRule -DisplayName "$Prefix*" -ErrorAction SilentlyContinue)
 }
 
-# The block rules the sandbox adapter needs, for a proxy port. A rule with no port range is left out (port 1 or 65535).
-function Get-BlockRuleSpecs([int]$Port) {
+# The block rules the sandbox adapter needs, for the proxy and gateway ports. A rule with no port range is left out.
+function Get-BlockRuleSpecs([int]$Port, [int]$Gateway) {
+    $open = @(($Port, $Gateway) | Sort-Object -Unique)
     $specs = @()
-    if ($Port -gt 1) { $specs += @{ Name = $BlockTcpBelow; Protocol = "TCP"; LocalPort = "1-$($Port - 1)" } }
-    if ($Port -lt 65535) { $specs += @{ Name = $BlockTcpAbove; Protocol = "TCP"; LocalPort = "$($Port + 1)-65535" } }
+    if ($open[0] -gt 1) { $specs += @{ Name = $BlockTcpBelow; Protocol = "TCP"; LocalPort = "1-$($open[0] - 1)" } }
+    if ($open.Count -gt 1) {
+        $low = $open[0]
+        $high = $open[1]
+        if ($high - $low -eq 2) { $specs += @{ Name = $BlockTcpBetween; Protocol = "TCP"; LocalPort = "$($low + 1)" } }
+        elseif ($high - $low -gt 2) { $specs += @{ Name = $BlockTcpBetween; Protocol = "TCP"; LocalPort = "$($low + 1)-$($high - 1)" } }
+    }
+    if ($open[-1] -lt 65535) { $specs += @{ Name = $BlockTcpAbove; Protocol = "TCP"; LocalPort = "$($open[-1] + 1)-65535" } }
     $specs += @{ Name = $BlockUdp; Protocol = "UDP"; LocalPort = $null }
     $specs += @{ Name = $BlockIcmp4; Protocol = "ICMPv4"; LocalPort = $null }
     $specs += @{ Name = $BlockIcmp6; Protocol = "ICMPv6"; LocalPort = $null }
@@ -166,7 +179,7 @@ function Get-SandboxProblems {
             $infos += [pscustomobject]@{ Name = $rule.DisplayName; Direction = $rule.Direction; Action = $rule.Action;
                 Protocols = $protocols; LocalPorts = $localPorts; Interfaces = $ifaces; Remotes = $remotes }
         }
-        foreach ($spec in (Get-BlockRuleSpecs $ProxyPort)) {
+        foreach ($spec in (Get-BlockRuleSpecs $ProxyPort $GatewayPort)) {
             $ok = $false
             foreach ($info in @($infos | Where-Object { $_.Name -eq $spec.Name -and $_.Direction -eq "Inbound" -and $_.Action -eq "Block" })) {
                 $portOk = ($null -eq $spec.LocalPort) -or ($info.LocalPorts -contains $spec.LocalPort)
@@ -184,6 +197,16 @@ function Get-SandboxProblems {
             if (-not $ok) { $proxyBad = $true }
         }
         if ($proxyBad) { $problems.Add('proxy-rule-wrong') }
+
+        $gatewayRules = @($infos | Where-Object { $_.Name -eq $GatewayRule })
+        $gatewayBad = $gatewayRules.Count -eq 0
+        foreach ($info in $gatewayRules) {
+            $ok = ($info.Direction -eq "Inbound") -and ($info.Action -eq "Allow") -and ($info.Protocols -contains "TCP") `
+                -and ($info.LocalPorts -contains "$GatewayPort") -and ($info.LocalPorts.Count -eq 1) `
+                -and ($info.Interfaces -contains $Alias) -and ($info.Remotes -contains $Subnet)
+            if (-not $ok) { $gatewayBad = $true }
+        }
+        if ($gatewayBad) { $problems.Add('gateway-rule-wrong') }
     } catch {
         $problems.Add('check-failed:' + ($_.Exception.Message -replace '[\r\n]+', ' '))
     }
@@ -248,7 +271,7 @@ function Install-SandboxNetwork {
 
     Write-Step "Adding the firewall rules"
     Get-SandboxRules | Remove-NetFirewallRule
-    foreach ($spec in (Get-BlockRuleSpecs $ProxyPort)) {
+    foreach ($spec in (Get-BlockRuleSpecs $ProxyPort $GatewayPort)) {
         $params = @{ Name = $spec.Name; DisplayName = $spec.Name; Direction = "Inbound"; Action = "Block";
             Protocol = $spec.Protocol; RemoteAddress = "Any"; InterfaceAlias = $Alias; Profile = "Any"; Enabled = "True" }
         if ($null -ne $spec.LocalPort) { $params["LocalPort"] = $spec.LocalPort }
@@ -256,7 +279,9 @@ function Install-SandboxNetwork {
     }
     New-NetFirewallRule -Name $ProxyRule -DisplayName $ProxyRule -Direction Inbound -Action Allow -Protocol TCP `
         -LocalPort $ProxyPort -RemoteAddress $Subnet -InterfaceAlias $Alias -Profile Any -Enabled True | Out-Null
-    Write-Ok "Added the block rules and $ProxyRule."
+    New-NetFirewallRule -Name $GatewayRule -DisplayName $GatewayRule -Direction Inbound -Action Allow -Protocol TCP `
+        -LocalPort $GatewayPort -RemoteAddress $Subnet -InterfaceAlias $Alias -Profile Any -Enabled True | Out-Null
+    Write-Ok "Added the block rules, $ProxyRule and $GatewayRule."
     [void](Show-SandboxCheck)
 }
 

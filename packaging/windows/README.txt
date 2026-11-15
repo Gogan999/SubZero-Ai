@@ -21,10 +21,20 @@ Where things are after installing
       restore.cmd                   put a backup back
       back-up-now.cmd               make a backup now (one runs every night at 2:00 AM)
       check-settings.cmd            check the Slack and Claude settings
+      prepare-sandbox-image.cmd     put the Code tools into the sandbox's base disk (once, about 20 minutes; it
+                                    stops SubZero AI while it runs, so do it when no one is using Code)
       recovery-code.cmd             make a new recovery code for signing in on this PC
       uninstall.cmd                 remove the app (the data folder is kept)
   C:\ProgramData\SubZeroAI          settings (config.env), chats, attached files, backups, and logs.
                                     Only administrators and the app's service can open it.
   C:\Program Files\cloudflared      the Cloudflare Tunnel connector
+
+Code sandboxes (optional, needs Hyper-V)
+  Updating from 0.10: run scripts\sandbox-network.ps1 -Action Install once more in an administrator
+  PowerShell here (it opens the Code gateway port 3129), then prepare-sandbox-image.cmd. The steps are in
+  README.md under "Updating from 0.10".
+  Once the plain base disk is built, double-click prepare-sandbox-image.cmd once. It adds
+  Node.js, Java, git and Python to a new base disk and switches the setting to it. Run it again after an update
+  only if it says the tools are out of date. The old disk is kept. Details: docs\SANDBOX_IMAGE.md on GitHub.
 
 Both the SubZero AI and Cloudflared services start on their own after a restart, with nobody signed in.

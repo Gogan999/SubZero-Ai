@@ -30,17 +30,12 @@
   </div>
   <div class="msg-body plain">{{ m.html|safe }}</div>
   {% if m.files %}{% include "_files.html" %}{% endif %}
-  {% if m.explainer %}<p class="asked-explainer">Asked for an interactive explainer</p>{% endif %}
-  {% if m.tools %}<p class="asked-explainer">Asked for: {{ m.tools|join(', ') }}</p>{% endif %}
   {% if m.original %}
   <details class="original"><summary>Show what was originally sent</summary><div class="plain">{{ m.original }}</div></details>
   {% endif %}
   {% if m.tag %}
   <p class="tag {{ m.tag_kind }}">{{ m.tag }}</p>
   {% if m.note and m.status == 'rejected' %}<p class="tag-reason">Reason: {{ m.note }}</p>{% endif %}
-  {% endif %}
-  {% if m.can_withdraw %}
-  <div class="actions"><button class="button small quiet" type="button" data-action="/m/{{ m.id }}/withdraw" data-confirm="Withdraw this message? Mentors won't review it.">Withdraw</button></div>
   {% endif %}
   {% if m.can_review %}
   {% include "_review_controls.html" %}

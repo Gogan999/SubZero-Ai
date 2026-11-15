@@ -13,74 +13,27 @@ from unittest import mock
 
 from subzero_ai import sandbox, saved_settings
 from subzero_ai.code_runner import build_system_prompt
+from subzero_ai.config import Settings
 from subzero_ai.db import MIGRATIONS, Database
 
-from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
-from .test_features import FakeResponse, FakeWeb, repo_zip
+from .helpers import ADMIN, CodeStudentTest, Harness
 
 API = "https://api.github.com/repos/team/robot-code/zipball"
-
-
-class CodeStudentTest(unittest.TestCase):
-    """Students' sessions with the fake sandbox switched on and student access turned on."""
-
-    overrides: dict = {}
-
-    def setUp(self):
-        self.h = Harness(connector_github_repo="team/robot-code", code_sandbox="fake", sandbox_min_free_gb=0,
-                         code_student_access=True, **self.overrides)
-        self.ava = self.h.login(STUDENT)
-        self.ben = self.h.login(STUDENT_2)
-        self.kim = self.h.login(MENTOR)
-        self.h.services.github.session_factory = FakeWeb({API: FakeResponse(200, repo_zip())})
-        self.code = self.h.services.code
-        self.db = self.h.services.db
-        self.manager = self.h.services.sandboxes
-        self.root = self.h.services.settings.data_dir / "sandbox-fake"
-
-    def tearDown(self):
-        self.h.close()
-
-    # ---- helpers
-    def ask(self, actor, task="Add a notes file and run the build."):
-        resp = actor.post("/code", {"task": task}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303, resp.text)
-        location = resp.headers["location"]
-        self.h.idle()
-        if not location.rsplit("/", 1)[1].isdigit():
-            return None, location
-        return int(location.rsplit("/", 1)[1]), location
-
-    def approve(self, sid):
-        resp = self.kim.post(f"/code/{sid}/approve-request", {"note": ""}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303, resp.text)
-        self.h.idle()
-
-    def decline(self, sid, note=""):
-        resp = self.kim.post(f"/code/{sid}/decline-request", {"note": note}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303, resp.text)
-        self.h.idle()
-
-    def tool_turns(self) -> int:
-        return sum(1 for c in self.h.claude.calls if c["kind"] == "tool_turn")
-
-    def actions(self) -> list[str]:
-        return [row["action"] for row in self.db.all("SELECT action FROM audit_log ORDER BY id")]
-
-    def steps(self, sid, status=None):
-        return [s for s in self.code.steps(sid) if s["kind"] == "tool" and (status is None or s["status"] == status)]
 
 
 class StudentAccessTest(CodeStudentTest):
     def test_students_see_no_code_when_access_is_off(self):
         self.h.services.settings.code_student_access = False
-        self.assertNotIn('href="/code"', self.ava.get("/chats").text)
-        self.assertEqual(self.ava.get("/code").status_code, 403)
+        home = self.ava.get("/code")
+        self.assertEqual(home.status_code, 200, "the home page explains it instead of refusing")
+        self.assertIn("A mentor has to turn Code on for students.", home.text)
+        self.assertIn("message the bot in Slack", home.text)
+        self.assertNotIn('id="code-task"', home.text)
         self.assertEqual(self.ava.post("/code", {"task": "x"}).status_code, 403)
-        self.assertIn('href="/code"', self.kim.get("/chats").text, "mentors keep Code")
+        self.assertEqual(self.ava.get("/code/1").status_code, 403)
+        self.assertIn('id="code-task"', self.kim.get("/code").text, "mentors keep Code")
         self.h.services.settings.code_student_access = True
-        self.assertIn('href="/code"', self.ava.get("/chats").text)
-        self.assertEqual(self.ava.get("/code").status_code, 200)
+        self.assertIn('id="code-task"', self.ava.get("/code").text)
 
     def test_a_student_request_waits_for_a_mentor_and_makes_no_sandbox(self):
         sid, _ = self.ask(self.ava)
@@ -94,7 +47,7 @@ class StudentAccessTest(CodeStudentTest):
         self.assertFalse(self.root.exists() and any(self.root.iterdir()))
         self.assertIn("asked for a Code session", self.h.slack.posts[-1]["text"], "mentors hear about it in Slack")
         self.assertEqual(self.h.slack.posts[-1]["channel"], "CAPPROVALS")
-        self.assertIn("Student requests", self.kim.get("/code").text)
+        self.assertIn("Needs a mentor", self.kim.get("/code").text)
         self.assertIn(f'href="/code/{sid}"', self.kim.get("/code").text)
         self.assertIn("Approve and start", self.kim.get(f"/code/{sid}").text)
         self.assertIn("code_student_requested", self.actions())
@@ -268,11 +221,11 @@ class StudentPrivacyTest(CodeStudentTest):
         blocked = self.ava.get(f"/code/{sid}/changes.patch")
         self.assertEqual(blocked.status_code, 403)
         self.assertIn("A mentor is looking at your changes", blocked.text)
-        self.assertIn("Waiting for a mentor to look at your changes", self.ava.get(f"/code/{sid}").text)
+        self.assertIn("A mentor is looking at your changes", self.ava.get(f"/code/{sid}").text)
         self.assertNotIn("Download patch", self.ava.get(f"/code/{sid}").text, "no download before release")
         self.assertNotIn("changes-title", self.ava.get(f"/code/{sid}").text, "no file list before release")
         self.assertEqual(self.kim.get(f"/code/{sid}/changes.patch").status_code, 200, "mentors always can")
-        self.kim.post(f"/code/{sid}/release", {"note": ""}, follow_redirects=False)
+        self.release(sid)
         self.h.idle()
         patch = self.ava.get(f"/code/{sid}/changes.patch")
         self.assertEqual(patch.status_code, 200)
@@ -284,7 +237,9 @@ class StudentPrivacyTest(CodeStudentTest):
         self.approve(sid)
         page = self.ava.get(f"/code/{sid}").text
         self.assertIn("Ran a command", page)
-        self.assertIn("BUILD SUCCESSFUL", page)
+        self.assertNotIn("BUILD SUCCESSFUL", page, "command output waits for a mentor to release (D91)")
+        self.release(sid)
+        self.assertIn("BUILD SUCCESSFUL", self.ava.get(f"/code/{sid}").text)
 
 
 class StudentFollowUpTest(CodeStudentTest):
@@ -440,17 +395,15 @@ class SettingsValidationTest(unittest.TestCase):
         values.update(overrides)
         return values
 
-    def test_defaults_are_off_and_safe(self):
-        fresh = Harness()
-        try:
-            s = fresh.services.settings
-            self.assertFalse(s.code_student_access)
-            self.assertTrue(s.code_student_free_rein)
-            self.assertFalse(s.code_mentor_free_rein)
-            self.assertEqual((s.code_student_max_open, s.code_student_daily_sessions, s.code_student_max_turns,
-                              s.code_student_command_timeout), (1, 3, 40, 600))
-        finally:
-            fresh.close()
+    def test_defaults_are_on_but_every_request_still_needs_a_mentor(self):
+        """0.11 ships with Code enabled (D57): new engine, Hyper-V sandboxes, students allowed to ask. The limits stay."""
+        s = Settings()
+        self.assertTrue(s.code_student_access)
+        self.assertEqual((s.code_engine, s.code_sandbox), ("agent", "hyperv"))
+        self.assertTrue(s.code_student_free_rein)
+        self.assertFalse(s.code_mentor_free_rein)
+        self.assertEqual((s.code_student_max_open, s.code_student_daily_sessions, s.code_student_max_turns,
+                          s.code_student_command_timeout), (1, 3, 40, 600))
 
     def test_students_need_a_sandbox_to_be_switched_on(self):
         values, errors = saved_settings.validate("code", self.form(code_student_access="1", code_sandbox="off"),

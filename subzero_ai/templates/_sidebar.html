@@ -1,28 +1,21 @@
 {% from "_icons.html" import icon %}
-{% set recent = recents() %}
 <aside class="sidebar" id="sidebar" aria-label="Sidebar">
   <div class="side-top">
-    <a class="brand" href="/chats">
+    <a class="brand" href="/code">
       <span class="brand-mark" aria-hidden="true">SZ</span>
       <span class="brand-name">{{ settings.app_name }}</span>
     </a>
   </div>
+  <a class="side-start" href="/code" {% if path == '/code' %}aria-current="page"{% endif %}><span class="side-plus">{{ icon('plus') }}</span> New session</a>
   <div class="side-scroll">
     <nav aria-label="Main">
-      <a class="side-new" href="/chats" {% if path == '/chats' %}aria-current="page"{% endif %}><span class="side-new-mark">{{ icon('plus') }}</span> New chat</a>
-      <ul class="side-nav">
-        <li><a href="/recents" {% if path.startswith('/recents') %}aria-current="page"{% endif %}>{{ icon('chats') }} Chats</a></li>
-        <li><a href="/projects" {% if path.startswith('/projects') %}aria-current="page"{% endif %}>{{ icon('projects') }} Projects</a></li>
-        <li><a href="/artifacts" {% if path.startswith('/artifacts') %}aria-current="page"{% endif %}>{{ icon('artifacts') }} Artifacts</a></li>
-        {% if viewer.is_mentor or settings.code_student_access %}
-        <li><a href="/code" {% if path.startswith('/code') %}aria-current="page"{% endif %}>{{ icon('code') }} Code</a></li>
-        {% endif %}
-      </ul>
       {% if viewer.is_mentor %}
-      <h2 class="side-label">Mentor tools</h2>
       <ul class="side-nav">
-        <li><a href="/queue" {% if path.startswith('/queue') %}aria-current="page"{% endif %}>{{ icon('review') }} Review
-          {% if pending_count %}<span class="count" aria-label="{{ pending_count }} waiting">{{ pending_count }}</span>{% endif %}</a></li>
+        <li><a href="/code#needs">{{ icon('bell') }} Needs a mentor
+          <span class="count" data-needs-count aria-label="{{ needs_count }} waiting"{% if not needs_count %} hidden{% endif %}>{{ needs_count }}</span></a></li>
+        <li><a href="/queue" {% if path.startswith('/queue') or path.startswith('/c/') %}aria-current="page"{% endif %}>{{ icon('review') }} Review
+          {% if review_count %}<span class="count" aria-label="{{ review_count }} waiting">{{ review_count }}</span>{% endif %}</a></li>
+        <li><a href="/files" {% if path.startswith('/files') %}aria-current="page"{% endif %}>{{ icon('file') }} Files</a></li>
         {% if viewer.is_admin %}
         <li><a href="/audit" {% if path.startswith('/audit') %}aria-current="page"{% endif %}>{{ icon('log') }} Audit log</a></li>
         <li><a href="/settings" {% if path.startswith('/settings') %}aria-current="page"{% endif %}>{{ icon('settings') }} Settings
@@ -30,26 +23,18 @@
         {% endif %}
       </ul>
       {% endif %}
+      {% if side_sessions %}
+      <h2 class="side-label">{{ 'Sessions' if viewer.is_mentor else 'Your sessions' }}</h2>
+      <ul class="side-sessions">
+        {% for item in side_sessions %}
+        <li><a href="/code/{{ item.id }}" {% if path == '/code/' ~ item.id %}aria-current="page"{% endif %}>
+          <span class="side-session-title">{{ item.title }}</span>
+          <span class="pill {{ item.kind }}" title="{{ item.full_label }}">{{ item.label }}</span></a></li>
+        {% endfor %}
+      </ul>
+      <p class="side-more"><a href="/code#sessions">All sessions</a></p>
+      {% endif %}
     </nav>
-    <h2 class="side-label" id="recents-label">Recents</h2>
-    <ol class="chat-list" aria-labelledby="recents-label">
-      {% for item in recent[:recents_shown] %}
-      <li>
-        <a href="/c/{{ item.id }}" {% if current_id == item.id %}aria-current="page"{% endif %}>
-          <span class="chat-title">{{ item.title }}</span>
-          {% if item.private or item.pending %}
-          <span class="chat-meta">
-            {% if item.private %}<span class="pill held">Private</span>{% endif %}
-            {% if item.pending %}<span class="pill pending">{{ item.pending }} waiting</span>{% endif %}
-          </span>
-          {% endif %}
-        </a>
-      </li>
-      {% else %}
-      <li class="empty">No chats yet. Start one with New chat.</li>
-      {% endfor %}
-    </ol>
-    <a class="side-more" href="/recents">All chats, including the team’s</a>
   </div>
   <details class="account" data-menu>
     <summary>
@@ -62,7 +47,7 @@
     </summary>
     <ul class="menu">
       <li><a class="menu-item" href="/about">{{ icon('help') }} How this works</a></li>
-      <li><a class="menu-item" href="/profile" {% if path == '/profile' %}aria-current="page"{% endif %}>{{ icon('person') }} Profile and preferences</a></li>
+      <li><a class="menu-item" href="/profile" {% if path == '/profile' %}aria-current="page"{% endif %}>{{ icon('person') }} Profile</a></li>
       <li>
         <form class="theme-switch" method="post" action="/profile/theme" data-theme-form>
           <input type="hidden" name="csrf" value="{{ csrf }}">

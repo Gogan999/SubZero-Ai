@@ -1,11 +1,25 @@
 # Every setting, and where to change it
 
-Since version 0.7, admins can change every setting, API key and connected account on the **Settings** page.
-This page lists them all. Since 0.8 the page is split into sections, picked from the menu on the left (a row of tabs
-on a phone): Overview (health, backups, Run checks), AI and keys (Claude settings, API keys, Claude subscription,
-Model safety check, AI engine), Mentor review (limits, approval window, system prompt), Accounts and people
-(connected accounts, subteams and admins), Slack, Site and server (site, data, connectors, Code) and Change history. The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env`
-by hand.
+Admins can change every setting, API key and connected account on the **Settings** page. This file lists them all.
+The page has eight tabs, picked from the menu on the left (a row of tabs on a phone):
+
+| Tab | What is on it |
+| --- | --- |
+| Overview | Health list (Slack, Claude API, the Code gateway, last backup, version and the update notice, the mentor-list warning), **Slack messages waiting for a mentor** with **Post the cards again**, Connected accounts, **Check everything**. While Code is signed in with the team subscription, a short warning shows here too. |
+| Code | Code engine (new engine, or the classic engine as the fallback), Code sign-in with its permanent warning and the team subscription token box, students and the sandbox, the repository, branch and GitHub token (with a **Check** button), how sessions work (plan first, web tools, helpers), cost and capacity (caps, sessions at once, how many days finished sessions keep their files), student limits, the settings that only matter for the classic engine, and a folded **Advanced** box for the sandbox network, proxy, gateway port, memory, processors and disk. |
+| AI and keys | AI engine (first), AI providers, API keys, models and effort, the Claude subscription sign-in, the Model safety check. |
+| Slack chat review | Approval window, screener, limits and reminders, students who always wait, the three system prompt layers. |
+| People | The admin list, and a read-only list of who is a mentor or an admin right now, by name, with the time it was read from Slack. |
+| Slack | Sign-in keys, bot and app tokens, the review channel, the guest rule, and the switch for messaging the bot in Slack. |
+| Site and server | Address, app name, time zone, backup hour, update check, data and backups settings. A folded **Advanced** box holds the backups folder, the update source and the settings kept only in config.env. |
+| History | Recent setting changes, the backups list with **Back up now**, and **Old website chats** (below). |
+
+Every box saves on its own, and the message says which tab and box it came from ("Saved Code sign-in on the Code tab.").
+Only the fields in that box change. If you start typing in a box and then leave the tab or the page, the browser asks
+first. A restart banner shows above every tab while a saved change waits for a restart. Old links that end in a box name
+(`#connectors`, `#code`, `#limits`, `#window`, `#data`, `#accounts`) still open the right tab.
+
+The config.env key is what you'd write if you edited `C:\ProgramData\SubZeroAI\config.env` by hand.
 
 **Where a setting is saved.** "Database" settings win over config.env and apply to the next message. "config.env"
 settings are written to config.env by the Settings page. Secrets (keys and tokens) are always in config.env, never
@@ -25,7 +39,7 @@ beats config.env, so the Settings page shows that field locked and says so.
 | AI providers | `AI_PROVIDERS` |
 | Default, hard-problem and title models | `MODEL_DEFAULT`, `MODEL_HARD`, `MODEL_TITLES` |
 | Safety check judge (must be a Claude model) | `MODEL_CHECK_JUDGE` |
-| Everyday effort, effort for explainers and files | `EFFORT_DEFAULT`, `EFFORT_HIGH` |
+| Everyday effort | `EFFORT_DEFAULT` |
 
 **Model dropdowns.** The default, hard-problem, title, screener and judge models are dropdowns, grouped by company.
 Each list shows the models that can be used right now: the company is turned on and has its key saved (or the Claude
@@ -40,18 +54,17 @@ The AI helper's model list is refreshed whenever AI providers or keys are saved 
 models appear without a restart. The refresh runs in the background, so reload the page a moment after saving if a
 new model is still missing.
 
-| Longest reply, longest explainer, fresh-chat suggestion | `MAX_TOKENS_CHAT`, `MAX_TOKENS_EXPLAINER`, `LONG_CHAT_TOKENS` |
-| Web search, daily search limit, Research for students | `WEB_SEARCH_ENABLED`, `WEB_SEARCH_DAILY_LIMIT`, `RESEARCH_FOR_STUDENTS` |
+| Longest reply | `MAX_TOKENS_CHAT` |
 
 ## Limits, approval window, data, code, people (database)
 
 | Setting | config.env key |
 | --- | --- |
 | Waiting messages per student, approved per day, reminder minutes | `LIMIT_PENDING_PER_STUDENT`, `LIMIT_APPROVED_PER_DAY`, `REMINDER_MINUTES` |
-| Mentors need approval, Slack DMs, show pending or rejected to the team | `MENTORS_NEED_APPROVAL`, `SLACK_DMS`, `SHOW_PENDING_TO_TEAM`, `SHOW_REJECTED_TO_TEAM` |
+| Mentors need approval, Slack DMs | `MENTORS_NEED_APPROVAL`, `SLACK_DMS` |
 | Approval window, screener on, screener model, students who always wait | `APPROVAL_WINDOW_MINUTES`, `SCREENER_ENABLED`, `MODEL_SCREENER`, `ALWAYS_REVIEW_SLACK_IDS` |
 | Retention, days of backups kept | `RETENTION_DAYS`, `BACKUP_KEEP_DAYS` |
-| Code commands and timeout | `CODE_COMMANDS`, `CODE_COMMAND_TIMEOUT` |
+| Code commands and timeout (classic engine) | `CODE_COMMANDS`, `CODE_COMMAND_TIMEOUT` |
 
 ## Code sandboxes (database)
 
@@ -67,16 +80,17 @@ See `docs/CODE_SANDBOX_PLAN.md`.
 
 | Setting | config.env key |
 | --- | --- |
-| Run Code commands in a sandbox (off, hyperv, fake) | `CODE_SANDBOX` |
+| Run Code commands in a sandbox (off, hyperv, fake) | `CODE_SANDBOX` (default hyperv) |
 | Delete a sandbox this many hours after it was made (1 to 168) | `SANDBOX_TTL_HOURS` |
-| Sandboxes that can run at the same time (1 to 10) | `SANDBOX_MAX_SESSIONS` |
-| Memory per sandbox, processors per sandbox, disk per sandbox | `SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_DISK_GB` |
+| Sandboxes that can run at the same time (1 to 10) | `SANDBOX_MAX_SESSIONS` (default 2) |
+| Memory per sandbox, processors per sandbox, disk per sandbox | `SANDBOX_MEMORY_MB` (default 6144), `SANDBOX_CPUS`, `SANDBOX_DISK_GB` |
 | Delete a sandbox that grows past (GB) | `SANDBOX_DISK_CAP_GB` |
 | Keep this much disk free before a new sandbox is made, in GB | `SANDBOX_MIN_FREE_GB` |
 | Base disk (full path to a `.vhdx` file) | `SANDBOX_BASE_IMAGE` |
 | Internal network switch (the host's vNIC is 10.77.0.1/24) | `SANDBOX_SWITCH` (default `szsandbox-internal`) |
 | Host port sandboxes may reach, for the egress proxy (default 3128). Restart after changing | `SANDBOX_PROXY_PORT` |
 | This PC's address on the sandbox switch, where the proxy listens (default 10.77.0.1, a private IPv4 address). Restart after changing | `SANDBOX_HOST_ADDRESS` |
+| Host port sandboxes may reach, for the Claude gateway (default 3129). Restart after changing | `SANDBOX_GATEWAY_PORT` |
 | Websites a sandbox may reach, separated by commas (`*.example.com` covers names under it; empty allows none) | `SANDBOX_ALLOWED_HOSTS` |
 | Ports a sandbox may use through the proxy (default 443) | `SANDBOX_ALLOWED_PORTS` |
 | Data a sandbox may move through the proxy over its whole life, in MB (default 2048, both directions) | `SANDBOX_PROXY_MB_LIMIT` |
@@ -95,16 +109,17 @@ powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Ins
 It creates the internal switch if it's missing, gives the host's adapter for it 10.77.0.1/24 with no gateway, turns
 IP forwarding and IPv6 off on it, sets its network profile to Public, puts it on the private VLAN 100 with 200 in
 promiscuous mode, and adds the firewall rules that block all
-inbound traffic to the sandboxes except the proxy port (`szsandbox-block-tcp-below`, `szsandbox-block-tcp-above`,
+inbound traffic to the sandboxes except the proxy port and the Code gateway port (`szsandbox-block-tcp-below`, `szsandbox-block-tcp-above`,
 `szsandbox-block-udp`, `szsandbox-block-icmp4`, `szsandbox-block-icmp6`, and `szsandbox-block-proto-2`, `-41`, `-47`,
-`-50`, `-51` for IGMP, IPv6 in IPv4, GRE, ESP and AH) and the one that allows the proxy port
-(`szsandbox-allow-proxy`). Other IP protocols are blocked by the default inbound action, which must be Block for the
+`-50`, `-51` for IGMP, IPv6 in IPv4, GRE, ESP and AH) and the two that allow the proxy port (`szsandbox-allow-proxy`) and the Code gateway port
+(`szsandbox-allow-gateway`, 3129 by default). Other IP protocols are blocked by the default inbound action, which must be Block for the
 Public profile; the check reads it. Existing allow rules on the host (File and Printer Sharing, Remote Desktop, games
 and so on) need no change: the blocks on the sandbox adapter take precedence over them. It changes nothing else: other
 adapters, switches, VMs and rules are never touched. The
 app never runs it. `-Action Check` lists anything missing, and `-Action Remove` deletes the sandbox rules and the switch
-(it refuses while a VM still uses the switch). If you change `SANDBOX_SWITCH` or `SANDBOX_PROXY_PORT`, run `-Action
-Install` again with the same `-Switch` and `-ProxyPort`.
+(it refuses while a VM still uses the switch). If you change `SANDBOX_SWITCH`, `SANDBOX_PROXY_PORT` or `SANDBOX_GATEWAY_PORT`, run `-Action
+Install` again with the same `-Switch`, `-ProxyPort` and `-GatewayPort`. **Updating from 0.10 needs this script run
+again**, because version 0.11 opens the gateway port; until then `-Action Check` reports `gateway-rule-wrong`.
 
 `SANDBOX_GUEST_SUDO` (off by default) gives the sandbox's user `sudo` without a password. Turn it on only if students
 need root inside a sandbox. It gives root inside that disposable virtual computer only, never on the mini PC, and it
@@ -118,7 +133,7 @@ A new session waits for a free sandbox, and a new sandbox is refused while the d
 A sandbox is deleted when its Code session finishes, after its time limit, and when no record of it is left. Every
 sandbox is written to the audit log (`sandbox_created`, `sandbox_destroyed`, `sandbox_reaped`, `sandbox_extended`).
 
-**Students' Code sessions (off by default).** With `CODE_STUDENT_ACCESS` on and a Hyper-V sandbox (or the fake one,
+**Students' Code sessions (on by default).** With `CODE_STUDENT_ACCESS` on and a Hyper-V sandbox (or the fake one,
 for tests), students can ask for a Code session. Nothing starts until a mentor approves the request. It shows on the
 Code page under Student requests, and a plain line goes to the approvals channel in Slack. Approving makes the
 session's sandbox and starts Claude. Declining stops the request, and the student sees the mentor's note. If the
@@ -136,7 +151,16 @@ audit log (`code_student_requested`, `code_student_approved`, `code_student_decl
 
 | Setting | config.env key |
 | --- | --- |
-| Students may ask for Code sessions (needs the Hyper-V or fake sandbox) | `CODE_STUDENT_ACCESS` (default off) |
+| Students may ask for Code sessions (needs the Hyper-V or fake sandbox) | `CODE_STUDENT_ACCESS` (default on; every request still needs a mentor) |
+| Which engine new Code sessions use (`agent` runs in the sandbox only; `classic` is the older step-by-step one). Running sessions keep theirs | `CODE_ENGINE` (default agent) |
+| How Code signs in: `api_key`, or `subscription` (testing only, uses `CODE_SUBSCRIPTION_TOKEN` in config.env, never shown on the page) | `CODE_AUTH`, `CODE_SUBSCRIPTION_TOKEN` |
+| Code sessions working at once (1 to 8); the rest wait in line | `CODE_MAX_RUNNING` (default 2) |
+| Delete a finished session's repository copies after this many days (1 to 365). Its steps and transcript stay. Checked every night | `CODE_KEEP_DAYS` (default 14) |
+| Ask for a plan before changing anything: students, mentors | `CODE_PLAN_FIRST_STUDENTS` (default on), `CODE_PLAN_FIRST_MENTORS` (default off) |
+| Claude may search and read the web: students, mentors | `CODE_WEB_TOOLS_STUDENTS`, `CODE_WEB_TOOLS_MENTORS` (default on) |
+| Claude may use helper agents | `CODE_SUB_AGENTS` (default on) |
+| Most one session may spend, in dollars: students, mentors (0 means no cap) | `CODE_CAP_STUDENT_USD` (default 5), `CODE_CAP_MENTOR_USD` (default 15) |
+| Most steps Claude may take in one request (5 to 1000) | `CODE_AGENT_MAX_TURNS` (default 200) |
 | Inside a student's sandbox, changes and commands run without a mentor's click | `CODE_STUDENT_FREE_REIN` (default on) |
 | Inside a mentor's sandbox, changes and commands run without a click (sandbox only) | `CODE_MENTOR_FREE_REIN` (default off) |
 | Programs Claude may run inside a sandbox, on top of `CODE_COMMANDS` | `CODE_SANDBOX_COMMANDS` (default gradlew, python3, pip, npm, node, java, git) |
@@ -144,7 +168,7 @@ audit log (`code_student_requested`, `code_student_approved`, `code_student_decl
 | Code requests a student can make in 24 hours, new sessions and follow-ups (1 to 50) | `CODE_STUDENT_DAILY_SESSIONS` (default 3) |
 | Claude replies in one run, for students (5 to 200) | `CODE_STUDENT_MAX_TURNS` (default 40) |
 | Stop a student's command after this many seconds (30 to 3600) | `CODE_STUDENT_COMMAND_TIMEOUT` (default 600) |
-| Subteams, admins | `SUBTEAMS`, `ADMIN_SLACK_IDS` |
+| Admins | `ADMIN_SLACK_IDS` |
 
 ## AI engine (config.env)
 
@@ -158,16 +182,15 @@ audit log (`code_student_requested`, `code_student_approved`, `code_student_decl
 The page won't switch to the Anthropic API while a model setting uses another company or the Claude subscription
 is turned on. Change those first.
 
-**Mentors' model picker.** When a mentor starts a new chat, the New chat page has a model dropdown with the same list
-as the default-model dropdown above (only models that passed the safety check). Students can't pick a model: the
-chat uses the default model. A mentor can also switch an existing chat to any model on the list from the chat's
-Model menu. If a chat's model later stops being allowed (its key is removed, its company is turned off, or its
-safety check fails or goes out of date), the next reply uses the default model instead. That change is written to the audit log as
-"model_fallback", and the chat's Model menu shows the new model.
+**Models in Slack chats.** Chats in Slack use the default model. Mentors can't pick a model per chat any more, because
+the website no longer has chat pages. If a chat's model stops being allowed (its key is removed, its company is turned
+off, or its safety check fails or goes out of date), the next reply uses the default model instead. That change is
+written to the audit log as "model_fallback". The new Code engine only runs Claude models from the allowed list.
 
 ## API keys (config.env, secret)
 
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`. New keys work from the next message.
+The team subscription token for Code (`CODE_SUBSCRIPTION_TOKEN`) is entered on the Code tab, in Code sign-in.
 A key can be removed unless a model setting still needs it.
 
 ## Slack connection (config.env)
@@ -184,9 +207,10 @@ New tokens are tried with Slack before they're saved. A bot token for a differen
 everyone's accounts belong to the current one: moving to a new workspace is done on the setup page.
 `SLACK_TEAM_ID` is filled in from the bot token automatically.
 
-## Connectors (config.env)
+## Repository and branch (config.env, Code tab)
 
-`CONNECTOR_GITHUB_REPO`, `CONNECTOR_GITHUB_BRANCH`, `CONNECTOR_GITHUB_TOKEN` (secret), `CONNECTOR_DRIVE_LINKS`.
+`CONNECTOR_GITHUB_REPO`, `CONNECTOR_GITHUB_BRANCH`, `CONNECTOR_GITHUB_TOKEN` (secret). **Check** tries them as typed without
+saving. The box used to be called Connectors and sat on the Site and server tab.
 
 ## Site and server (config.env)
 
@@ -195,9 +219,49 @@ everyone's accounts belong to the current one: moving to a new workspace is done
 | Site address | `PUBLIC_URL` | restart |
 | App name | `APP_NAME` | |
 | Time zone | `TIMEZONE` | restart |
-| Largest text file | `MAX_TEXT_FILE_KB` | |
 | Backups folder, nightly backup hour | `BACKUP_DIR`, `BACKUP_HOUR` | |
 | Check for new versions, where they come from | `CHECK_FOR_UPDATES`, `UPDATE_REPO` | |
+
+## Code sign-in and the subscription warning
+
+Code signs in to Anthropic with the team's API key (`CODE_AUTH=api_key`) or a Claude subscription token
+(`CODE_AUTH=subscription`). The Code tab always shows, directly under the sign-in choice, whichever one is chosen:
+"Team subscription is for testing only. Anthropic's terms don't allow sharing a subscription through an app, and they
+can limit the account without notice. Use an API key for regular use." It can't be hidden or dismissed. The token is
+saved in config.env, never shown again (only "Saved" and its last four characters), and left out of backups and the
+audit log. The Overview shows a shorter warning while the subscription is the chosen sign-in.
+
+## Slack messages waiting for a mentor
+
+The Overview counts the messages still waiting for a mentor and how long the oldest has waited. **Post the cards again**
+posts a new approval card in the review channel for each of them (the same card as the first time; the buttons check
+who taps them, so who may approve doesn't change). The old card is replaced by a short note, and the new card takes
+over from then on. One press posts at most 40 cards (press again for the rest), and a second press while one is running, or within 10 seconds, does nothing. A message decided meanwhile is skipped. It is written to the audit log as `cards_reposted`. Reminders already sent aren't sent again.
+
+## Old website chats (History tab)
+
+Before chat moved to Slack, people also chatted on the website. **Old website chats** are the conversations that have
+no Slack thread. A chat created in the last 10 minutes is never counted, in case its Slack thread isn't saved yet.
+Chats from Slack are never archived, deleted or changed by anything on this box. The box shows how many chats, messages
+and files there are, their total file size and the date range. Only admins can use it.
+
+- **Build the archive** saves a zip file named `old-chats-<date>-<time>.zip` in the backups folder. It has `index.html`
+  (every chat with owner, title and dates), `chats/<id>.html` (a readable page, everything escaped, no scripts) and
+  `chats/<id>.json` (every message with author, role, status, times, review decisions and reasons, screener notes and
+  token counts) for each chat, the attached files in `files/<chat id>/`, `projects/<id>/` for each old project (its
+  instructions and files), `shares.json` (the old share-link records; the secret part of each link is left out) and
+  `archive.json`. Videos are left out unless the box is ticked, because they make the file very large. It is built in
+  the background, with progress on the page, because Cloudflare cuts long requests. The finished file is listed with
+  its size, a download link and a Delete button (asks first). Audit: `old_chats_archived`, `old_chats_archive_downloaded`,
+  `old_chats_archive_deleted`. Archives are not backups and are never deleted by the nightly clean-up.
+- **Delete old website chats** needs the word DELETE typed in capital letters. It picks the chats once, then makes a backup that includes videos
+  (`subzero-<date>-<time>-before-old-chats-delete.zip`), reads it back (opens, passes the zip check, has the database,
+  not empty) and stops if anything is wrong. It deletes exactly the chats it picked (a chat that gained a Slack thread
+  meanwhile is kept). If the app stops partway, running it again finishes and removes left-over files. Then it deletes every old chat with its
+  messages, file rows and files, the files of old projects, and the share-link rows of those chats. The `projects` and
+  `shares` tables stay. A review card in Slack that was still waiting for one of these chats is changed to say it was
+  deleted by an admin (a card that can't be changed is skipped). The Files page (`/files`) can list and delete old files one by one. Running it again finds nothing and does nothing. Audit:
+  `old_chats_deleted_by_admin` with the counts and bytes (`old_chats_delete_stopped` if the backup failed).
 
 ## Connected accounts
 
@@ -205,7 +269,7 @@ The **Connected accounts** box shows Slack (workspace, live connection, Sign in 
 saved and its last four characters), the Claude subscription (signed in or not, with a Sign out button), GitHub and
 the Cloudflare Tunnel's address. **Run checks** runs the same checks as check-settings.cmd and shows the results.
 
-The **Claude subscription** box (under AI and keys) signs Claude Code in from the page. **Sign in** starts
+The **Claude subscription** box (under AI and keys) signs the Claude program in from the page. **Sign in** starts
 `claude auth login --claudeai` on the mini PC with the bridge's own config folder and shows the sign-in address it
 prints. Open it on any device, sign in, and paste the code Claude shows into the box; the page hands the code to the
 waiting program and never saves or logs it. A sign-in nobody finishes stops after 15 minutes. `python -m subzero_ai
@@ -220,12 +284,29 @@ claude-login` on the mini PC still works too. The Cloudflare Tunnel itself is ma
 | `DEV_LOGIN` | Test sign-in lets anyone on the mini PC sign in as anyone. |
 | `SESSION_SECRET` | Made automatically; changing it signs everyone out. |
 
+## Code gateway
+
+With the new Code engine, a sandbox never holds a real key. Its Claude requests go to the Code gateway
+(`subzero_ai/anthropic_gateway.py`) on the host address and `SANDBOX_GATEWAY_PORT` (3129), which checks the sandbox's
+own token, adds the real credential (the API key, or the subscription token), keeps to the allowed models, adds the
+team's safety rules, turns off web tools where they are off, counts the cost against the session's cap, and refuses
+what isn't allowed. It starts only when `CODE_SANDBOX` is `hyperv` and `CODE_ENGINE` is `agent`. The Overview health list
+shows whether it is running.
+
+## Settings that were removed in 0.11
+
+The website no longer has chat, projects, attachments, share links or explainers, so these settings are gone from the
+page. A leftover value in config.env or the database is ignored and never stops the app from starting:
+`MAX_TOKENS_EXPLAINER`, `MAX_TEXT_FILE_KB`, `SUBTEAMS`, `SHOW_PENDING_TO_TEAM`, `SHOW_REJECTED_TO_TEAM`,
+`CONNECTOR_DRIVE_LINKS`, `RESEARCH_FOR_STUDENTS`. The chat tools (web search, research, thinking, styles) are gone with
+the website chat. Slack chats are not affected.
+
 ## Notes added with the sandbox work
 
 - After a model-check suite update, the default and hard-problem models keep working even though their old check result
   is out of date; run the check again to refresh it. A current check that failed still blocks a model.
 - A Code session that has waited for a mentor, or run, for 3 days is stopped and cleaned up by the nightly job.
-- After this update, run `sandbox-network.ps1 -Action Install` once more, which puts the host's adapter on the private
+- After the sandbox update (0.9), run `sandbox-network.ps1 -Action Install` once more, which puts the host's adapter on the private
   VLAN. Until then `-Action Check` reports `host-vlan-missing`, and Create refuses.
 - An existing install that already saved `sandbox_switch` keeps that value: change it to `szsandbox-internal` on the
   Settings page.
@@ -267,3 +348,12 @@ minute) and compares it with that saved value.
 IPv6 inside the guest is not turned off by this step, and the app's cloud-init user-data does not turn it off either.
 The host side is the protection: the sandbox's virtual adapter rules deny all IPv6 (see `isolation_script` in
 `subzero_ai/sandbox.py`), and those rules are not yet tested on the mini PC.
+
+## Preparing the base image (0.11)
+
+The new Code engine needs Node.js, Java, Python, git and the runner inside the base disk. After the plain base disk
+exists (above), double-click **prepare-sandbox-image.cmd** in the SubZero AI folder, or run
+`python -m subzero_ai sandbox-provision` yourself. It stops SubZero AI while it runs (about 20 minutes), builds a new
+base disk next to the old one, checks it, and switches **Base disk for sandboxes** to it. The old disk is kept. A
+session that starts on an image that is too old gets a plain message saying to run this again. Details, and every
+assumption it makes, are in `docs/SANDBOX_IMAGE.md`.

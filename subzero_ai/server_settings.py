@@ -72,7 +72,7 @@ ENV_SECTIONS: dict[str, tuple[str, str, list[EnvField]]] = {
         EnvField("anthropic_base_url", "Anthropic API address", "base-url",
                  "Leave it as https://api.anthropic.com unless Anthropic tells you otherwise.", restart=True),
     ]),
-    "site": ("Site and server", "The site's address, its clock, file limits and backups.", [
+    "site": ("Site and server", "The site's address, its clock and backups.", [
         EnvField("public_url", "Site address", "url",
                  "The https:// address people use, from the Cloudflare Tunnel. If it changes, also change the "
                  "Redirect URL in the Slack app (OAuth & Permissions) to the new address plus /auth/slack/callback, "
@@ -81,8 +81,6 @@ ENV_SECTIONS: dict[str, tuple[str, str, list[EnvField]]] = {
                  "and number out of it.", maximum=40),
         EnvField("timezone", "Time zone", "timezone",
                  "Used for message times, daily limits and the nightly backup. Like America/Chicago.", restart=True),
-        EnvField("max_text_file_kb", "Largest text file, in KB", "int",
-                 "Bigger text files cost more on every reply in the chat.", minimum=10, maximum=2000),
         EnvField("backup_dir", "Backups folder", "path",
                  "Leave empty for the backups folder in the data folder. A synced OneDrive or Google Drive folder "
                  "keeps a copy off the mini PC.", optional=True),

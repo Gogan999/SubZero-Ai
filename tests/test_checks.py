@@ -41,7 +41,8 @@ class ChecksTest(unittest.TestCase):
     def settings(self, **overrides):
         values = dict(data_dir=self.tmp, public_url="https://ai.example.org", anthropic_api_key="sk-x",
                       slack_bot_token="xoxb-1", slack_app_token="xapp-1", slack_client_id="1.2",
-                      slack_client_secret="s", slack_approvals_channel="CAPPROVALS", admin_slack_ids=frozenset({"U1"}))
+                      slack_client_secret="s", slack_approvals_channel="CAPPROVALS", admin_slack_ids=frozenset({"U1"}),
+                      code_sandbox="off")  # the default is Hyper-V now; tests that need it ask for it
         values.update(overrides)
         return load_settings(search_cwd=False, **values)
 
@@ -121,6 +122,8 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual((row.status, row.title), (OK, "The sandbox network is locked down"))
         self.assertIn("szsandbox-internal", row.detail)
         self.assertIn("Get-VMSwitch -Name 'szsandbox-internal'", seen[0])
+        self.assertIn("szsandbox-allow-gateway", seen[0], "the gateway rule is checked too")
+        self.assertIn("-contains '3129')", seen[0])
 
     def test_a_problem_in_the_sandbox_network_is_a_failure_with_the_fix(self):
         settings = self.settings(code_sandbox="hyperv", sandbox_base_image="/srv/base.vhdx", sandbox_proxy_port=8080)

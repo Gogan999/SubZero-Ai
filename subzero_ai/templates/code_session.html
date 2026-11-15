@@ -1,14 +1,33 @@
 {% extends "base.html" %}
-{% from "_icons.html" import icon %}
 {% block title %}{{ session.title }} · Code · {{ settings.app_name }}{% endblock %}
+{% block body_class %}code-view{% endblock %}
 {% block main %}
-<section class="page narrow code-page">
-  <p class="crumbs"><a href="/code">Code</a></p>
-  <h1>{{ session.title }}</h1>
-  <p class="thread-meta">Started by {{ session.owner }}, {{ session.created }} · {{ session.repo }}{% if session.ref %} ({{ session.ref }}){% endif %} · {{ session.model }}</p>
-  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
-  <div data-code-steps data-url="/code/{{ session.id }}/steps">
-    {% include "_code_steps.html" %}
+<section class="code-page">
+  <div class="code-scroll" data-scroller>
+    <div class="code-column">
+      <p class="crumbs"><a href="/code">Code</a></p>
+      <h1>{{ session.title }}</h1>
+      <p class="thread-meta">Started by {{ session.owner }}, {{ session.created }} · {{ session.repo }}{% if session.ref %} ({{ session.ref }}){% endif %} · {{ session.model }}{% if mentor %} · {{ session.engine_label }}{% endif %}</p>
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+      <p class="code-offline" role="status" data-connection-note hidden>Lost the connection. Trying again…</p>
+      <div data-code-region data-url="/code/{{ session.id }}/steps">
+        {% include "_code_steps.html" %}
+      </div>
+    </div>
   </div>
+  <form class="code-composer" method="post" action="/code/{{ session.id }}/follow-up" data-composer>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="code-column">
+      <div class="composer-box">
+        <label class="visually-hidden" for="follow-up">{{ 'Ask Claude to do more' if mentor else 'Ask for more' }}</label>
+        <textarea id="follow-up" name="text" rows="2" maxlength="8000" required data-submit-on-enter
+          placeholder="{{ 'Ask Claude to do more…' if mentor else 'Ask for more…' }}"{% if not can_follow_up %} disabled{% endif %}></textarea>
+        <div class="composer-bar">
+          <p class="field-hint" data-composer-hint>{{ composer_hint }}</p>
+          <button class="button primary" type="submit"{% if not can_follow_up %} disabled{% endif %}>{{ 'Send' if mentor else 'Ask a mentor' }}</button>
+        </div>
+      </div>
+    </div>
+  </form>
 </section>
 {% endblock %}

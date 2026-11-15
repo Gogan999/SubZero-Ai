@@ -39,6 +39,9 @@ UPDATE_PREFIX = "C:\\Users\\" + "u" * 30 + "\\AppData\\Local\\Temp" + "\\SZ-2026
 PATH_LIMIT = 259
 PATH_PREFIX = len(UPDATE_PREFIX)
 GATEWAY_FILES = ("package.json", "package-lock.json", "gateway.mjs", "README.md")
+# The Code runner (sandbox_runner/) goes into the zip as source and its lock file only, with no node_modules and no tests.
+# prepare-sandbox-image.cmd uploads it to the sandbox base disk, where `npm ci` installs it for Linux, from the lock file.
+SANDBOX_RUNNER_FILES = ("package.json", "package-lock.json", "runner.mjs", "README.md")
 DOWNLOADS = {
     "python": (f"https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip",
                "9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb38"),
@@ -182,6 +185,18 @@ def add_gateway(app: Path) -> None:
         raise SystemExit(f"npm installed packages for other systems: {', '.join(other)}.")
 
 
+def add_sandbox_runner(app: Path) -> None:
+    """Copy sandbox_runner's source files and lock file (no node_modules, no tests) to <app>/sandbox_runner, next to
+    subzero_ai, which is where sandbox_image.py looks for it."""
+    runner = app / "sandbox_runner"
+    runner.mkdir(parents=True)
+    for name in SANDBOX_RUNNER_FILES:
+        shutil.copy2(ROOT / "sandbox_runner" / name, runner / name)
+    shutil.copytree(ROOT / "sandbox_runner" / "lib", runner / "lib", ignore=shutil.ignore_patterns("__pycache__"))
+    if (runner / "node_modules").exists():
+        raise SystemExit("sandbox_runner/node_modules must not be in the release.")
+
+
 def build(out_dir: Path, cache: Path) -> Path:
     version = app_version()
     stage = out_dir / f"SubZeroAI-{version}"
@@ -216,6 +231,7 @@ def build(out_dir: Path, cache: Path) -> Path:
     # Node.js and the AI helper that runs on it
     add_node(stage, cache)
     add_gateway(app)
+    add_sandbox_runner(app)  # for prepare-sandbox-image.cmd; sandbox_provision.sh is already in subzero_ai
 
     # Service wrapper, Cloudflare connector, scripts, and the .cmd files people double-click
     (stage / "service").mkdir()

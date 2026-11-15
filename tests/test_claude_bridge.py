@@ -34,7 +34,7 @@ HTML = {"Accept": "text/html"}
 class ModelIdTest(unittest.TestCase):
     def test_provider_is_known_and_labelled(self):
         self.assertIn("claude-bridge", PROVIDERS)
-        self.assertEqual(saved_settings.PROVIDER_LABELS["claude-bridge"], "Claude subscription (Claude Code)")
+        self.assertEqual(saved_settings.PROVIDER_LABELS["claude-bridge"], "Claude subscription")
         self.assertIn("claude-bridge", saved_settings.PROVIDER_HELP)
 
     def test_bridge_id_is_not_rewritten_as_an_anthropic_id(self):
@@ -262,7 +262,7 @@ class LoginTest(unittest.TestCase):
         (self.tmp / "bridge" / "claude-config" / ".credentials.json").write_text('{"secret": "x"}')
         self.assertTrue(bridge_logged_in(self.tmp))
         results = run()
-        self.assertEqual(results["Claude subscription is signed in (Claude Code login found)"].status, OK)
+        self.assertEqual(results["Claude subscription is signed in (Claude login found)"].status, OK)
         self.assertNotIn("secret", "".join(r.detail for r in results.values()))
 
     def test_check_needs_the_pi_backend(self):
@@ -291,9 +291,8 @@ class BridgeClaude(FakeClaude):
 
 class AdminPageTest(unittest.TestCase):
     FORM = {"model_default": "anthropic/claude-sonnet-5-5", "model_hard": "anthropic/claude-opus-5-5",
-            "model_titles": "anthropic/claude-haiku-5-5", "effort_default": "medium", "effort_high": "high",
-            "max_tokens_chat": "8000", "max_tokens_explainer": "16000", "long_chat_tokens": "150000",
-            "web_search_daily_limit": "50"}
+            "model_titles": "anthropic/claude-haiku-5-5", "effort_default": "medium",
+            "max_tokens_chat": "8000"}
 
     def make(self, backend):
         claude = BridgeClaude()
@@ -304,7 +303,7 @@ class AdminPageTest(unittest.TestCase):
     def test_checkbox_and_help_are_shown(self):
         _, _, admin = self.make("pi")
         page = admin.get("/settings").text
-        self.assertIn("Claude subscription (Claude Code)", page)
+        self.assertIn("Claude subscription", page)
         self.assertIn("Sign in once under Claude subscription", page)
         self.assertIn("hard-problem fallback", page)
 

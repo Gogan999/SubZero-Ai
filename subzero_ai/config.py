@@ -91,20 +91,13 @@ class Settings:
     model_hard: str = "anthropic/claude-opus-5-5"  # mentors can switch a conversation to this for hard problems
     model_titles: str = "anthropic/claude-haiku-5-5"
     effort_default: str = "medium"
-    effort_high: str = "high"  # for explainers and messages with files attached (usually code reviews)
     max_tokens_chat: int = 8000
-    max_tokens_explainer: int = 16000
-    long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
     fake_claude: bool = False
     ai_backend: str = "anthropic"  # anthropic, pi, or fake (FAKE_CLAUDE=1 also means fake)
     pi_node: str = ""  # path to Node.js for the pi backend; empty means the install's node\node.exe, else "node"
     pi_gateway_script: str = ""  # empty means pi_gateway/gateway.mjs next to the subzero_ai folder
     pi_request_timeout: int = 300  # seconds for a whole pi request
     pi_idle_timeout: int = 120  # longest quiet gap in a pi reply, in seconds
-    # Web search costs extra for each search, so the whole team shares a daily limit
-    web_search_enabled: bool = True
-    web_search_daily_limit: int = 50
-    research_for_students: bool = False  # Research runs many searches, so it starts as mentors only
 
     # Slack
     slack_bot_token: str = field(default="", repr=False)
@@ -122,8 +115,6 @@ class Settings:
     limit_pending_per_student: int = 3
     limit_approved_per_day: int = 25
     reminder_minutes: int = 120
-    show_pending_to_team: bool = False
-    show_rejected_to_team: bool = False
     # After a mentor approves a message in a chat, the student's next messages in that chat go straight to
     # Claude for this many minutes. Each one sent restarts the clock. 0 turns the window off.
     approval_window_minutes: int = 5
@@ -133,22 +124,21 @@ class Settings:
     # The model that grades the Model safety check's open-ended cases (refusals). Must be a Claude model.
     model_check_judge: str = "anthropic/claude-sonnet-5-5"
 
-    # Connectors: add files to a message from the team's GitHub repository or a shared Google Drive link
+    # Connector: the team's GitHub repository, which Code downloads
     connector_github_repo: str = ""  # owner/name
     connector_github_branch: str = ""  # empty means the repository's default branch
     # only for a private repository: a fine-grained token with read-only Contents
     connector_github_token: str = field(default="", repr=False)
-    connector_drive_links: bool = True
 
     # Code: Claude works in a copy of the GitHub repository above; a mentor approves each change and command
     code_commands: tuple[str, ...] = ("gradlew",)  # programs Claude may ask to run, by name
     code_command_timeout: int = 600  # seconds
     # Each Code session runs its commands in its own sandbox (sandbox.py): off, hyperv, or fake (this computer,
     # with no isolation, for tests only)
-    code_sandbox: str = "off"
+    code_sandbox: str = "hyperv"
     sandbox_ttl_hours: int = 48  # a sandbox is deleted this long after it was made, whatever its session is doing
-    sandbox_max_sessions: int = 3  # sandboxes alive at once; a new one waits for a slot
-    sandbox_memory_mb: int = 2048
+    sandbox_max_sessions: int = 2  # sandboxes alive at once; a new one waits for a slot
+    sandbox_memory_mb: int = 6144
     sandbox_cpus: int = 2
     sandbox_disk_gb: int = 31  # the biggest base disk allowed (the base image is 30 GB; a sandbox's own disk grows as used)
     sandbox_disk_cap_gb: int = 8  # a running sandbox whose own disk grows past this is deleted (0: no limit)
@@ -157,6 +147,8 @@ class Settings:
     # the only network switch a sandbox may be attached to: an internal switch, with a host vNIC at 10.77.0.1/24
     sandbox_switch: str = "szsandbox-internal"
     sandbox_proxy_port: int = 3128  # the one host TCP port a sandbox may reach: the egress proxy (egress_proxy.py)
+    # the second host port a sandbox may reach: the Code gateway (anthropic_gateway.py), which holds the real credential
+    sandbox_gateway_port: int = 3129
     sandbox_host_address: str = "10.77.0.1"  # the host's address on the sandbox switch; the proxy listens here only
     # names a sandbox may open a secure (443) connection to, through the proxy. `*.x` matches names under x.
     sandbox_allowed_hosts: str = ("repo.maven.apache.org, repo1.maven.org, plugins.gradle.org, services.gradle.org, "
@@ -169,7 +161,7 @@ class Settings:
     sandbox_guest_sudo: bool = False  # the sandbox's user may use sudo: root inside that disposable VM only
     # Students and Code (M6). A student's session is started only after a mentor approves the request, and needs a
     # sandbox. Inside a student's sandbox, file changes and commands run without a mentor's click (free rein).
-    code_student_access: bool = False  # students may ask for Code sessions (off until a mentor or admin turns it on)
+    code_student_access: bool = True  # students may ask for Code sessions (each one waits for a mentor)
     code_student_free_rein: bool = True  # inside a student's sandbox, changes and commands run without a click
     code_mentor_free_rein: bool = False  # the same for mentors' own sessions, when the sandbox is on
     code_sandbox_commands: tuple[str, ...] = ("gradlew", "python3", "pip", "npm", "node", "java", "git")  # in a sandbox
@@ -177,11 +169,20 @@ class Settings:
     code_student_daily_sessions: int = 3  # a student's requests (new sessions and follow-ups) in 24 hours
     code_student_max_turns: int = 40  # Claude replies per run in a student's session
     code_student_command_timeout: int = 600  # seconds a command in a student's sandbox may run
-
-    # Attachments (images and other files are capped at 5 MB each, 5 per message)
-    max_text_file_kb: int = 200
-
-    subteams: tuple[str, ...] = ("Programming", "Fab and design", "Business and outreach")
+    # The new Code engine (code_engine.py): "agent" runs the Agent SDK inside a sandbox; "classic" is the older engine
+    code_engine: str = "agent"
+    code_max_running: int = 2  # Code sessions (new engine) working at the same time; the others wait their turn
+    code_plan_first_students: bool = True  # default tick of "plan first" on a student's session
+    code_plan_first_mentors: bool = False  # the same for a mentor's session
+    code_web_tools_students: bool = True  # web search and fetch inside a student's session (the gateway enforces it)
+    code_web_tools_mentors: bool = True
+    code_sub_agents: bool = True  # Claude may hand part of a task to a helper (sub-agent)
+    code_cap_student_usd: float = 5.0  # the most one student session may cost, at API prices (0 = no cap)
+    code_cap_mentor_usd: float = 15.0
+    code_agent_max_turns: int = 200  # Claude replies per run in the new engine
+    code_keep_days: int = 14  # a finished Code session's repository copies are deleted after this many days
+    code_auth: str = "api_key"  # how the gateway signs in to Anthropic for Code: api_key or subscription
+    code_subscription_token: str = field(default="", repr=False)  # from `claude setup-token`; config.env only
 
     # Data kept on the mini PC
     retention_days: int = 730  # delete chats with no activity for this long (two seasons); 0 keeps them forever
@@ -233,9 +234,11 @@ class Settings:
 _CONVERTERS = {
     bool: _as_bool,
     int: int,
+    float: float,
     frozenset[str]: _as_set,
     "bool": _as_bool,
     "int": int,
+    "float": float,
     "frozenset[str]": _as_set,
     "tuple[str, ...]": _as_list,
     "Path": Path,

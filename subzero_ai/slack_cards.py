@@ -38,8 +38,9 @@ def card_body(text: str, link: str) -> str:
     if len(body) > CARD_TEXT_LIMIT:
         body = body[:CARD_TEXT_LIMIT].rstrip() + "…"
     quoted = _quote(_mrkdwn_escape(body))
-    if len(text) > CARD_TEXT_LIMIT:
-        quoted += f"\n<{link}|Open in SubZero AI to read the whole message>"
+    # Mentors can open the whole chat on the website (the read-only page with the review buttons)
+    quoted += f"\n<{link}|Open the whole chat to read the whole message>" if len(text) > CARD_TEXT_LIMIT \
+        else f"\n<{link}|Open the whole chat>"
     return quoted
 
 
@@ -52,24 +53,14 @@ def files_line(files: list[tuple[str, int]], link: str) -> str:
 
 def approval_card(*, message_id: int, student_name: str, subteam: str | None, title: str | None,
                   text: str, link: str, previous_reply: str | None = None,
-                  files: list[tuple[str, int]] | None = None, explainer: bool = False,
-                  project: str | None = None, tools: list[str] | None = None,
-                  screen_note: str | None = None) -> list[dict]:
+                  files: list[tuple[str, int]] | None = None, screen_note: str | None = None) -> list[dict]:
     blocks: list[dict] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": card_header(student_name, subteam, title, link)}},
         {"type": "section", "text": {"type": "mrkdwn", "text": card_body(text, link)}},
     ]
     extras = []
-    if project:
-        extras.append({"type": "mrkdwn", "text": "In the project *" + _mrkdwn_escape(project) + "*, so Claude also "
-                                                 "reads its instructions and files"})
     if files:
         extras.append({"type": "mrkdwn", "text": files_line(files, link)})
-    if tools:
-        extras.append({"type": "mrkdwn", "text": "Asked for: " + _mrkdwn_escape(", ".join(tools))
-                       + (" (web searches cost extra)" if any("search" in t for t in tools) else "")})
-    if explainer:
-        extras.append({"type": "mrkdwn", "text": ":bulb: Asked for an interactive explainer (costs a little more)"})
     if screen_note:
         extras.append({"type": "mrkdwn", "text": ":mag: Sent in the approval window, but the screener flagged it: "
                                                  + _mrkdwn_escape(screen_note)})
@@ -179,7 +170,7 @@ def too_long_to_edit_modal(link: str) -> dict:
         "title": {"type": "plain_text", "text": "Edit in SubZero AI"},
         "close": {"type": "plain_text", "text": "Close"},
         "blocks": [{"type": "section", "text": {"type": "mrkdwn",
-                    "text": f"This message is too long to edit in Slack. <{link}|Open it in SubZero AI> to edit it there."}}],
+                    "text": f"This message is too long to edit in Slack. <{link}|Open the whole chat> to edit it there."}}],
     }
 
 
@@ -202,18 +193,19 @@ def reject_modal(message_id: int) -> dict:
 def alert_card(*, student_name: str, title: str | None, link: str) -> list[dict]:
     text = (f":rotating_light: *Mentor alert* in {_mrkdwn_escape(student_name)}'s chat "
             f"<{link}|{_mrkdwn_escape(title or 'New chat')}>. Claude flagged the student may need support. "
-            "The chat is now hidden from the team. Please follow up in person.")
+            f"The chat is now hidden from the team. Please follow up in person. <{link}|Open the whole chat>")
     return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
 
 
-def dm_text(outcome: str, *, title: str | None, link: str, mentor_name: str | None, reason: str | None = None) -> str:
+def dm_text(outcome: str, *, title: str | None, mentor_name: str | None, reason: str | None = None) -> str:
     chat = f"“{_mrkdwn_escape(title)}”" if title else "your new chat"
     who = _mrkdwn_escape(mentor_name or "A mentor")
     if outcome == "approved":
-        return f"{who} approved your message in {chat}. Claude is answering now: {link}"
+        return f"{who} approved your message in {chat}. Claude is answering now, in your thread with the bot."
     if outcome == "edited":
-        return f"{who} edited and approved your message in {chat}. Claude is answering now: {link}"
+        return (f"{who} edited and approved your message in {chat}. "
+                "Claude is answering now, in your thread with the bot.")
     if outcome == "rejected":
         return (f"{who} didn't approve your message in {chat}. Reason: {_mrkdwn_escape(reason or 'none given')}. "
-                f"You can send a revised message: {link}")
+                "You can send a revised message in your thread with the bot.")
     raise ValueError(f"No DM for outcome {outcome}")

@@ -328,9 +328,8 @@ class AppWiringTest(unittest.TestCase):
         self.assertIsNone(self.h.services.claude._proc)
 
     def test_approval_flow_streams_reply_with_screener_and_title(self):
-        body = self.ava.new_chat("How do I tune the arm?").json()
-        self.h.idle()
-        mid, cid = body["message_id"], int(body["url"].rsplit("/", 1)[1])
+        sent = self.h.slack_dm("How do I tune the arm?", user=STUDENT)
+        mid, cid = sent.message_id, sent.conversation_id
         self.assertEqual(self.h.message(mid)["status"], "pending")
         self.assertEqual(self.kim.post(f"/m/{mid}/approve").status_code, 200)
         self.h.idle()
@@ -339,8 +338,7 @@ class AppWiringTest(unittest.TestCase):
                          ("complete", "How do I tune the arm?", "fake/echo"))
         self.assertEqual(self.h.services.store.conversation(cid)["title"], "How do I tune the arm")
         # a follow-up inside the window is checked by the screener (fake/safe says SAFE) and goes straight through
-        follow = self.ava.send(cid, "And the gains?").json()["message_id"]
-        self.h.idle()
+        follow = self.h.slack_dm("And the gains?", user=STUDENT, thread_ts=sent.thread_ts).message_id
         self.assertEqual(self.h.message(follow)["status"], "grace")
         self.assertEqual(self.h.reply_to(follow)["content"], "And the gains?")
 

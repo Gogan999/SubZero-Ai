@@ -27,7 +27,7 @@ from subzero_ai.code_runner import (
 from subzero_ai.db import utcnow
 
 from .helpers import MENTOR, STUDENT, Harness
-from .test_features import FakeResponse, FakeWeb, repo_zip
+from .helpers import FakeResponse, FakeWeb, repo_zip
 
 
 class BuildFileNameTest(unittest.TestCase):

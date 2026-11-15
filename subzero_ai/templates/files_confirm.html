@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Delete files? · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  <p class="crumbs"><a href="/files">Back to Files</a></p>
+  <h1>Delete {{ count }} {{ 'item' if count == 1 else 'items' }}?</h1>
+  {% if error %}<p class="field-error" role="alert">{{ error }}</p>{% endif %}
+  <p>This deletes <strong>{{ count }} {{ 'item' if count == 1 else 'items' }}</strong> ({{ kinds_in|join(', ') }}) and frees <strong>{{ size }}</strong>. <strong>This can't be undone.</strong></p>
+  {% if in_use %}<p class="fine">{{ in_use }} {{ 'item is' if in_use == 1 else 'items are' }} in use by a Code session and will be left alone.</p>{% endif %}
+  {% if copies %}
+  <p><strong>Deleting a Code copy also deletes the changes saved with it (the patch).</strong> Of the {{ copies }} {{ 'copy' if copies == 1 else 'copies' }} here:
+    {{ released }} {{ 'has' if released == 1 else 'have' }} changes a student can download now,
+    {{ waiting }} {{ 'has' if waiting == 1 else 'have' }} changes no mentor has released yet{% if mine %}, and {{ mine }} {{ 'has' if mine == 1 else 'have' }} changes from a mentor's own session{% endif %}.
+    The session pages stay, and will say the files were deleted.</p>
+  {% endif %}
+  {% if skipped_changes %}<p class="fine">{{ skipped_changes }} Code {{ 'copy was' if skipped_changes == 1 else 'copies were' }} skipped because no mentor has released {{ 'its' if skipped_changes == 1 else 'their' }} changes yet. You can still delete {{ 'it' if skipped_changes == 1 else 'them' }} one at a time from the list.</p>{% endif %}
+  {% if has_archive %}<p class="fine">An old-chat archive is the only copy of those chats once they are deleted from the site. Check that you have saved it somewhere first.</p>{% endif %}
+  <ul class="facts">
+    {% for r in shown %}<li><span class="file-title">{{ r.name }}</span> <span class="fine">{{ r.kind_label }}, {{ r.owner }}, {{ r.size }}</span></li>{% endfor %}
+    {% if more %}<li class="fine">...and {{ more }} more.</li>{% endif %}
+  </ul>
+  <form method="post" action="/files/delete/confirm" class="panel">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="count" value="{{ count }}">
+    <input type="hidden" name="token" value="{{ token }}">
+    {% if post_mode == 'older' %}
+    <input type="hidden" name="mode" value="older">
+    <input type="hidden" name="kind" value="{{ kind }}">
+    <input type="hidden" name="days" value="{{ days }}">
+    {% else %}
+    {% for i in ids %}<input type="hidden" name="ids" value="{{ i }}">{% endfor %}
+    {% endif %}
+    {% if needs_number %}
+    <div class="field">
+      <label for="typed">Type the number {{ count }} to confirm</label>
+      <input id="typed" name="typed" inputmode="numeric" autocomplete="off" required>
+      <p class="field-hint">This is a big delete, so please type how many items it will delete.</p>
+    </div>
+    {% endif %}
+    <div class="form-actions">
+      <button class="button reject" type="submit">Delete {{ count }} {{ 'item' if count == 1 else 'items' }} for good</button>
+      <a class="button quiet" href="/files">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -18,8 +18,9 @@ FakeSandbox does the same job with folders and subprocesses on this computer. It
 isolated at all. HyperVSandbox builds its PowerShell, SSH and key commands with pure functions and takes its runners
 as parameters, so the tests can check every command without touching a real host.
 
-Guest image details that are not known yet are marked TODO (python3 and the base disk's path). The base image must
-have NoCloud enabled (the image script does this once). See docs/CODE_SANDBOX_PLAN.md, milestones M3, M3b and M4.
+The base image must have NoCloud enabled (the image script does this once) and the Code tools (Node.js, Java 17, git,
+Python and the runner), which `python -m subzero_ai sandbox-provision` bakes into a new base disk (sandbox_image.py).
+See docs/CODE_SANDBOX_PLAN.md, milestones M3, M3b and M4.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from .config import Settings, fake_sandbox_allowed
 from .db import Database, utcnow
@@ -126,6 +128,8 @@ class SandboxBackend(Protocol):
     def run(self, handle: SandboxHandle, argv: list[str], *, cwd: str, env: dict[str, str], timeout: int,
             on_output: Callable[[str], None] | None = None) -> ExitResult: ...
     def kill(self, handle: SandboxHandle) -> None: ...
+    def open_stream(self, handle: SandboxHandle, argv: list[str], *, cwd: str, env: dict[str, str]) -> SandboxStream: ...
+    def abs_path(self, handle: SandboxHandle, rel: str) -> str: ...  # a path as the program inside the sandbox sees it
     def put_file(self, handle: SandboxHandle, rel: str, data: bytes) -> None: ...
     def get_file(self, handle: SandboxHandle, rel: str) -> bytes: ...
     def list_dir(self, handle: SandboxHandle, rel: str) -> list[str]: ...
@@ -231,11 +235,27 @@ def _zip_parts(name: str) -> list[str]:
     return parts
 
 
-def unpack_tree(data: bytes, dest: Path) -> int:
-    """Unpack a zip made by pack_tree into `dest`. Returns the number of files."""
+WINDOWS_RESERVED = frozenset({"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)),
+                              *(f"lpt{n}" for n in range(1, 10))})
+WINDOWS_BAD_CHARS = frozenset('<>:"|?*')
+
+
+def windows_name_problem(part: str) -> bool:
+    """True if Windows can't hold a file or folder with this name: a reserved device name (with or without an
+    extension), a name ending in a dot or a space, a control character, or one of < > : " | ? *. Platform independent."""
+    if not part or part[-1] in ". " or any(c in WINDOWS_BAD_CHARS or ord(c) < 32 for c in part):
+        return True
+    return part.split(".", 1)[0].rstrip(" ").lower() in WINDOWS_RESERVED
+
+
+def unpack_tree(data: bytes, dest: Path, *, safe_names: bool = False, skipped: list[str] | None = None) -> int:
+    """Unpack a zip made by pack_tree into `dest`. Returns the number of files. With safe_names (on the host, which
+    is Windows), a file whose path Windows can't hold, or whose folder or name differs from an earlier one only by
+    case, is skipped instead of being dropped or merged by the file system. Skipped paths are added to `skipped`."""
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     count = 0
+    seen: dict[tuple[str, ...], tuple[str, ...]] = {}  # lower-case path -> the spelling that came first
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
@@ -244,7 +264,18 @@ def unpack_tree(data: bytes, dest: Path) -> int:
         for info in archive.infolist():
             if info.is_dir():
                 continue
-            target = dest.joinpath(*_zip_parts(info.filename))
+            parts = _zip_parts(info.filename)
+            if safe_names:
+                clash = any(windows_name_problem(part) for part in parts)
+                for i in range(1, len(parts) + 1):
+                    first = seen.setdefault(tuple(p.lower() for p in parts[:i]), tuple(parts[:i]))
+                    if first != tuple(parts[:i]):
+                        clash = True
+                if clash:
+                    if skipped is not None:
+                        skipped.append("/".join(parts))
+                    continue
+            target = dest.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
@@ -330,6 +361,74 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+class SandboxStream:
+    """A program running in a sandbox with its input and output left open (SandboxBackend.open_stream): write lines to
+    stdin, read lines from stdout. Its error output is kept (the end of it) for the log. There is no time limit here: the
+    caller decides when to stop it."""
+
+    MAX_LINE = 4 * 1024 * 1024
+
+    def __init__(self, proc: subprocess.Popen):
+        self.proc = proc
+        self._err = OutputTail(MAX_OUTPUT_CHARS * 4)
+        if proc.stderr is not None:
+            threading.Thread(target=read_output, args=(proc.stderr, self._err, None), daemon=True).start()
+        self._write_lock = threading.Lock()
+
+    def write_line(self, text: str) -> None:
+        """Send one line. Raises SandboxError when the program has gone."""
+        data = text.rstrip("\n").encode("utf-8") + b"\n"
+        try:
+            with self._write_lock:
+                self.proc.stdin.write(data)
+                self.proc.stdin.flush()
+        except (OSError, ValueError) as exc:
+            raise SandboxError("The program in the sandbox isn't running any more.") from exc
+
+    def readline(self) -> bytes:
+        """The next line of output (b'' once the program has ended). A line over MAX_LINE bytes is cut there."""
+        try:
+            line = self.proc.stdout.readline(self.MAX_LINE)
+            if len(line) >= self.MAX_LINE and not line.endswith(b"\n"):
+                while True:  # drop the rest of the oversized line
+                    rest = self.proc.stdout.readline(self.MAX_LINE)
+                    if not rest or rest.endswith(b"\n"):
+                        break
+            return line
+        except (OSError, ValueError):
+            return b""
+
+    def close_stdin(self) -> None:
+        try:
+            self.proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+    def poll(self) -> int | None:
+        return self.proc.poll()
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        """The exit code, or None if the program is still running after `timeout` seconds."""
+        try:
+            return self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def terminate(self) -> None:
+        """Stop the program and everything it started."""
+        kill_process_tree(self.proc)
+
+    def stderr_text(self) -> str:
+        return self._err.text()
+
+
+def _popen_pipes(argv: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.Popen:
+    kwargs: dict[str, Any] = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {
+        "start_new_session": True}
+    return subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, **kwargs)
+
+
 # --------------------------------------------------------------------------- FakeSandbox
 @dataclass(eq=False)  # compared by identity, so it can live in a set
 class _Run:
@@ -342,8 +441,11 @@ class FakeSandbox:
 
     name = "fake"
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, tools: str = "ok"):
         self.root = Path(root)
+        # Stands in for the Code tools in the base image (sandbox_image.check_tools): "ok" (the default), "missing" or
+        # "outdated". The fake sandbox runs on this computer, so there is no image to look inside.
+        self.tools = tools
         self._runs: dict[str, set[_Run]] = {}
         self._reserved: set[int] = set()  # slots of sandboxes being made right now
         self._lock = threading.Lock()
@@ -415,6 +517,29 @@ class FakeSandbox:
             run.stopped = True
             if run.proc is not None:
                 kill_process_tree(run.proc)
+
+    def open_stream(self, handle, argv, *, cwd, env) -> SandboxStream:
+        folder = self._path(handle, cwd)
+        if not folder.is_dir():
+            raise SandboxError(f"{cwd} doesn't exist in the sandbox.")
+        try:
+            proc = _popen_pipes(argv, folder, env)
+        except OSError as exc:
+            raise SandboxError(f"Couldn't start the program: {exc}") from exc
+        run = _Run(proc=proc)
+        with self._lock:
+            self._runs.setdefault(handle.name, set()).add(run)
+
+        def forget() -> None:
+            proc.wait()
+            with self._lock:
+                self._runs.get(handle.name, set()).discard(run)
+
+        threading.Thread(target=forget, daemon=True).start()
+        return SandboxStream(proc)
+
+    def abs_path(self, handle, rel) -> str:
+        return str(self._path(handle, rel))
 
     def put_file(self, handle, rel, data) -> None:
         target = self._path(handle, rel)
@@ -891,7 +1016,8 @@ NETWORK_CHECK_MARK = "# szsandbox: host network check (read-only, changes nothin
 NETWORK_CHECK_SECONDS = 60  # the Settings page's check gives up after this long
 HOST_VNIC_NAME = "vEthernet ({})"  # the host's adapter for an Internal switch is named after it
 BLOCK_TCP_BELOW = "szsandbox-block-tcp-below"  # blocks TCP ports 1 to proxy port minus 1
-BLOCK_TCP_ABOVE = "szsandbox-block-tcp-above"  # blocks TCP ports proxy port plus 1 to 65535
+BLOCK_TCP_ABOVE = "szsandbox-block-tcp-above"  # blocks TCP ports above the highest open port to 65535
+BLOCK_TCP_BETWEEN = "szsandbox-block-tcp-between"  # blocks the TCP ports between the proxy and gateway ports
 BLOCK_UDP = "szsandbox-block-udp"  # blocks every UDP port
 BLOCK_ICMP4 = "szsandbox-block-icmp4"  # blocks ICMPv4
 BLOCK_ICMP6 = "szsandbox-block-icmp6"  # blocks ICMPv6
@@ -899,7 +1025,8 @@ BLOCK_ICMP6 = "szsandbox-block-icmp6"  # blocks ICMPv6
 # ESP (50) and AH (51). Each gets one block rule, BLOCK_PROTO_RULE with the number.
 BLOCK_PROTOCOLS = (2, 41, 47, 50, 51)
 BLOCK_PROTO_RULE = "szsandbox-block-proto-{}"
-PROXY_RULE = "szsandbox-allow-proxy"  # the one allow: TCP to the proxy port from the guest subnet
+PROXY_RULE = "szsandbox-allow-proxy"  # an allow: TCP to the proxy port from the guest subnet
+GATEWAY_RULE = "szsandbox-allow-gateway"  # an allow: TCP to the Claude gateway port from the guest subnet
 # The PowerShell list of BLOCK_PROTOCOLS that sandbox-network.ps1 must contain word for word (a test checks it)
 NETWORK_BLOCK_PROTOCOLS_PS = ("$BlockProtocols = @(" + ", ".join(str(n) for n in BLOCK_PROTOCOLS) + ")  "
                               "# IP protocols with no ports, blocked whole: generated from sandbox.BLOCK_PROTOCOLS")
@@ -919,6 +1046,8 @@ NETWORK_PROBLEMS = {
                     "on that adapter)",
     "proxy-rule-wrong": "The firewall rule szsandbox-allow-proxy must exist and allow only TCP to the proxy port from "
                         "10.77.0.0/24 on the sandbox adapter",
+    "gateway-rule-wrong": "The firewall rule szsandbox-allow-gateway must exist and allow only TCP to the gateway port "
+                          "from 10.77.0.0/24 on the sandbox adapter",
     "firewall-off": "Windows Firewall is turned off for the Public profile, so none of the sandbox rules would apply. "
                     "Turn it on (Windows Security, Firewall and network protection)",
     "default-inbound-allow": "Windows Firewall's default for incoming traffic on the Public profile is Allow, and it "
@@ -927,18 +1056,24 @@ NETWORK_PROBLEMS = {
 UNREADABLE_CHECK = "The check gave an answer the app couldn't read"
 
 
-def block_rule_specs(proxy_port: int) -> list[tuple[str, str, str | None]]:
+def block_rule_specs(proxy_port: int, gateway_port: int | None = None) -> list[tuple[str, str, str | None]]:
     """The firewall block rules for the sandbox adapter, as (name, protocol, local ports or None for every port). With
-    PROXY_RULE they cover all inbound traffic: TCP is blocked below and above the proxy port, UDP, both ICMP versions
-    and BLOCK_PROTOCOLS are blocked whole, and the one allow rule opens only the proxy port. Windows Firewall lets a
-    block rule beat an allow rule, which is why the blocks skip the proxy port. A range that would be empty is left
-    out. Allow rules that already exist on the host need no change: these interface-scoped blocks take precedence."""
-    port = int(proxy_port)
+    PROXY_RULE (and GATEWAY_RULE, when there is a gateway port) they cover all inbound traffic: TCP is blocked below,
+    between and above the open ports, UDP, both ICMP versions and BLOCK_PROTOCOLS are blocked whole, and the allow
+    rules open only the proxy and gateway ports. Windows Firewall lets a block rule beat an allow rule, which is why
+    the blocks skip those ports. A range that would be empty is left out. Allow rules that already exist on the host
+    need no change: these interface-scoped blocks take precedence."""
+    ports = sorted({int(proxy_port)} | ({int(gateway_port)} if gateway_port else set()))
     specs: list[tuple[str, str, str | None]] = []
-    if port > 1:
-        specs.append((BLOCK_TCP_BELOW, "TCP", f"1-{port - 1}"))
-    if port < 65535:
-        specs.append((BLOCK_TCP_ABOVE, "TCP", f"{port + 1}-65535"))
+    if ports[0] > 1:
+        specs.append((BLOCK_TCP_BELOW, "TCP", f"1-{ports[0] - 1}"))
+    for low, high in zip(ports, ports[1:]):
+        if high - low == 2:
+            specs.append((BLOCK_TCP_BETWEEN, "TCP", str(low + 1)))
+        elif high - low > 2:
+            specs.append((BLOCK_TCP_BETWEEN, "TCP", f"{low + 1}-{high - 1}"))
+    if ports[-1] < 65535:
+        specs.append((BLOCK_TCP_ABOVE, "TCP", f"{ports[-1] + 1}-65535"))
     specs += [(BLOCK_UDP, "UDP", None), (BLOCK_ICMP4, "ICMPv4", None), (BLOCK_ICMP6, "ICMPv6", None)]
     specs += [(BLOCK_PROTO_RULE.format(number), str(number), None) for number in BLOCK_PROTOCOLS]
     return specs
@@ -978,7 +1113,7 @@ function Get-RemoteAddresses($Rule) {
 }'''
 
 
-def host_network_check_script(switch: str, proxy_port: int) -> str:
+def host_network_check_script(switch: str, proxy_port: int, gateway_port: int | None = None) -> str:
     """A read-only PowerShell check of the host's side of the sandbox network. It prints a JSON list of problem codes
     (an empty list when everything is in place); parse_host_network_check turns them into plain words. It changes
     nothing. UNVERIFIED on a real host: the cmdlets and their property names are untested (docs/CODE_SANDBOX_PLAN.md,
@@ -991,7 +1126,21 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
     specs = ", ".join(
         "@{ Name = " + ps_quote(name) + "; Protocol = " + ps_quote(protocol) + "; LocalPort = "
         + (ps_quote(ports) if ports else "$null") + " }"
-        for name, protocol, ports in block_rule_specs(port))
+        for name, protocol, ports in block_rule_specs(port, gateway_port))
+    gateway_lines: list[str] = []
+    if gateway_port:  # the gateway rule is checked exactly like the proxy rule
+        gateway_lines = [
+            "  $gatewayRules = @($infos | Where-Object { $_.Name -eq 'szsandbox-allow-gateway' })",
+            "  $gatewayBad = $gatewayRules.Count -eq 0",
+            "  foreach ($info in $gatewayRules) {",
+            "    $ok = ($info.Direction -eq 'Inbound') -and ($info.Action -eq 'Allow')"
+            " -and ($info.Protocols -contains 'TCP') `",
+            f"      -and ($info.LocalPorts -contains '{int(gateway_port)}') -and ($info.LocalPorts.Count -eq 1) `",
+            f"      -and ($info.Interfaces -contains $alias) -and ($info.Remotes -contains {subnet})",
+            "    if (-not $ok) { $gatewayBad = $true }",
+            "  }",
+            "  if ($gatewayBad) { $problems.Add('gateway-rule-wrong') }",
+        ]
     lines = [
         NETWORK_CHECK_MARK,
         "$ErrorActionPreference = 'Stop'",
@@ -1062,6 +1211,7 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
         "    if (-not $ok) { $proxyBad = $true }",
         "  }",
         "  if ($proxyBad) { $problems.Add('proxy-rule-wrong') }",
+        *gateway_lines,
         "} catch {",
         "  $problems.Add('check-failed:' + ($_.Exception.Message -replace '[\\r\\n]+', ' '))",
         "}",
@@ -1085,10 +1235,11 @@ def parse_host_network_check(output: str) -> list[str]:
     return [describe_network_problem(code) for code in codes]
 
 
-def host_network_problems(switch: str, proxy_port: int, run_powershell: Callable[[str], str]) -> list[str]:
+def host_network_problems(switch: str, proxy_port: int, run_powershell: Callable[[str], str],
+                          gateway_port: int | None = None) -> list[str]:
     """Run the host check and return its problems. Any error while running it is itself a problem (fail closed)."""
     try:
-        output = run_powershell(host_network_check_script(switch, proxy_port))
+        output = run_powershell(host_network_check_script(switch, proxy_port, gateway_port))
     except Exception as exc:
         return [describe_network_problem(f"check-failed:{str(exc) or type(exc).__name__}")]
     return parse_host_network_check(output)
@@ -1114,7 +1265,16 @@ def guest_run_command(argv: list[str], cwd: str, env: dict[str, str], timeout: i
             f"timeout -k 5 {int(timeout)} {shlex.join(argv)}")
 
 
-# The guest runs these with python3 (TODO: the base image must have it). They only use the standard library.
+def guest_stream_command(argv: list[str], cwd: str, env: dict[str, str]) -> str:
+    """Like guest_run_command, for a program that stays open (the Code runner): the same folder and clean environment,
+    every value quoted, and no time limit. `exec` makes the program replace the shell, so closing the connection ends it."""
+    full_env = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, **env}
+    assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in sorted(full_env.items()))
+    return f"cd {shlex.quote(guest_path(cwd))} && exec env -i {assignments} {shlex.join(argv)}"
+
+
+# The guest runs these with python3 (the Ubuntu cloud image has it, and the Code tools image adds more). They only use
+# the standard library.
 GUEST_PACK = (
     "import io,os,sys,zipfile\n"
     "root=sys.argv[1]; skip=set(sys.argv[2:])\n"
@@ -1294,8 +1454,10 @@ class HyperVSandbox:
                  run_icacls: Callable[[list[str]], None] | None = None,
                  run_whoami: Callable[[], str] | None = None,
                  run_ssh: Callable[..., tuple[int, bytes, bytes]] | None = None,
+                 popen_ssh: Callable[[list[str]], subprocess.Popen] | None = None,
                  ready_seconds: int = 180, sleep: Callable[[float], None] = time.sleep,
-                 archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128):
+                 archive_limit: int = MAX_SESSION_BYTES, proxy_port: int = 3128,
+                 gateway_port: int | None = None):
         if not base_image:
             raise SandboxRefused("Set the sandbox base image in Settings first.")
         self.base_image = base_image
@@ -1316,10 +1478,12 @@ class HyperVSandbox:
         self.run_keygen = run_keygen or default_run_keygen
         self.run_icacls = run_icacls or default_run_icacls
         self.run_ssh = run_ssh or make_default_run_ssh(self.ssh_key)
+        self.popen_ssh = popen_ssh or _popen_pipes  # opens the ssh command for open_stream (a test can fake it)
         self.ready_seconds = ready_seconds
         self.sleep = sleep
         self.archive_limit = archive_limit
         self.proxy_port = proxy_port
+        self.gateway_port = gateway_port  # None: no gateway rule is expected (the classic engine only)
         self._lock = threading.Lock()  # guards _killed, _reserved and _network_ok_until; never held across a VM call
         self._key_lock = threading.Lock()  # makes the app's client key once, even when two sandboxes start together
         self._killed: set[str] = set()
@@ -1476,7 +1640,7 @@ class HyperVSandbox:
         with self._lock:
             if time.monotonic() < self._network_ok_until:
                 return
-        problems = host_network_problems(self.switch, self.proxy_port, self._ps)
+        problems = host_network_problems(self.switch, self.proxy_port, self._ps, self.gateway_port)
         if problems:
             raise SandboxRefused(network_refusal(problems))
         with self._lock:
@@ -1553,6 +1717,24 @@ class HyperVSandbox:
             self._killed.add(handle.name)
         self._ssh(handle.name, f"pkill -KILL -u {GUEST_USER} || true", timeout=30)
 
+    def open_stream(self, handle, argv, *, cwd, env) -> SandboxStream:
+        """Start a program in the sandbox that stays open, over the same ssh login as run (pinned host key, the same
+        user and clean environment). The caller ends it: there is no time limit."""
+        with self._lock:
+            self._killed.discard(handle.name)
+        remote = guest_stream_command(argv, cwd, env)
+        command = ssh_argv(self._address(handle.name), remote, key=self.ssh_key,
+                           known_hosts=self._known_hosts(handle.name))
+        try:
+            return SandboxStream(self.popen_ssh(command))
+        except SandboxError:
+            raise
+        except Exception as exc:
+            raise SandboxError(f"Couldn't reach the sandbox: {exc}") from exc
+
+    def abs_path(self, handle, rel) -> str:
+        return guest_path(rel)
+
     def put_file(self, handle, rel, data) -> None:
         path = guest_path(rel)
         code, _, err = self._ssh(handle.name, f"mkdir -p {shlex.quote(posixpath.dirname(path))} && "
@@ -1598,7 +1780,7 @@ def backend_fingerprint(settings: Settings, kind: str) -> tuple:
     if kind == "hyperv":
         return (str(settings.data_dir), settings.sandbox_base_image, settings.sandbox_switch,
                 settings.sandbox_memory_mb, settings.sandbox_cpus, settings.sandbox_disk_gb,
-                settings.sandbox_proxy_port, settings.sandbox_guest_sudo)
+                settings.sandbox_proxy_port, settings.sandbox_gateway_port, settings.sandbox_guest_sudo)
     return ()
 
 
@@ -1616,7 +1798,8 @@ def make_backend(settings: Settings, kind: str) -> SandboxBackend:
                              memory_mb=settings.sandbox_memory_mb, cpus=settings.sandbox_cpus,
                              disk_gb=settings.sandbox_disk_gb, ssh_key=str(keys / "id_ed25519"), disks_dir=str(keys / "disks"),
                              known_dir=str(keys / "known_hosts"), staging_dir=str(keys / "staging"),
-                             guest_sudo=settings.sandbox_guest_sudo, proxy_port=settings.sandbox_proxy_port)
+                             guest_sudo=settings.sandbox_guest_sudo, proxy_port=settings.sandbox_proxy_port,
+                             gateway_port=settings.sandbox_gateway_port)
     raise SandboxError(f"There's no sandbox kind called {kind}.")
 
 
@@ -1800,6 +1983,17 @@ class SandboxManager:
                                                                           self.settings.sandbox_proxy_port)
         return proxy_env(handle.name, token, host, port)
 
+    def gateway_env(self, handle: SandboxHandle, base_url: str) -> dict[str, str]:
+        """The extra environment for the Code runner in this sandbox: the Code gateway's address, with the sandbox's own
+        token as its login (the gateway checks it with the same token store as the proxy), and the usual proxy
+        settings, except that the gateway's address is reached directly. Never log, audit or show it."""
+        token = self._token_for(handle)
+        env = self.command_env(handle)
+        env.update({"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": token})
+        direct = urlsplit(base_url).hostname or ""
+        env["NO_PROXY"] = env["no_proxy"] = direct
+        return env
+
     def redact(self, text: str) -> str:
         """Replace every proxy token this app issued recently (in the plain or the Basic-login form) with [hidden]."""
         with self._token_lock:
@@ -1827,14 +2021,15 @@ class SandboxManager:
             raise SandboxRefused("The computer is nearly out of disk space, so commands are paused. Ask an admin to "
                                  "free some space.")
 
-    def check_capacity(self) -> None:
-        """Refuse a new sandbox when the limit is reached, the disk is low, or the base image isn't set."""
+    def check_capacity(self, ignore: int = 0) -> None:
+        """Refuse a new sandbox when the limit is reached, the disk is low, or the base image isn't set. `ignore` is how
+        many running sandboxes can be closed on demand (the new Code engine's idle ones), so they don't count."""
         if self.settings.code_sandbox == "hyperv" and not self.settings.sandbox_base_image:
             raise SandboxRefused("Set the sandbox base image in Settings before Code can use sandboxes.")
         if self.settings.code_sandbox == "hyperv" and not self.proxy_ready():  # fail closed: no proxy, no sandbox
             raise SandboxRefused(self.proxy_problem())
         limit = self.settings.sandbox_max_sessions
-        if self.store.alive_count() >= limit:
+        if self.store.alive_count() - max(0, ignore) >= limit:
             raise SandboxRefused(f"All {limit} sandboxes are in use right now. Ask a mentor to finish or stop a Code "
                                  "session, then try again.")
         free = self.free_gb()
@@ -2039,6 +2234,10 @@ def _reap_orphans(manager: SandboxManager, report: dict[str, int]) -> None:
         try:
             backend = manager.backend(kind)
             names = backend.list_existing()
+        except SandboxRefused as exc:  # not set up (for example no base image yet): one plain line is enough
+            report["failed"] += 1
+            log.warning("Couldn't list the %s sandboxes: %s", kind, exc)
+            continue
         except Exception:
             report["failed"] += 1
             log.warning("Couldn't list the %s sandboxes", kind, exc_info=True)

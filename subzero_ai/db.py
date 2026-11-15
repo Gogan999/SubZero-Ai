@@ -327,6 +327,27 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE messages ADD COLUMN cache_write_tokens INTEGER;
     """,
+    # Version 17: the new Code engine. Only columns are added (a v0.10.0 install ignores them, so a rollback works), and
+    # sessions that already exist stay on the classic engine. The same step does the one-time "everything enabled"
+    # upgrade (D57): saved choices for the sandbox, student access and the engine are dropped so the new defaults apply,
+    # and the audit log says which ones were reset (nothing is written when none were saved).
+    """
+    ALTER TABLE code_sessions ADD COLUMN engine TEXT NOT NULL DEFAULT 'classic';
+    ALTER TABLE code_sessions ADD COLUMN agent_session_id TEXT;
+    ALTER TABLE code_sessions ADD COLUMN plan_first INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE code_sessions ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+    ALTER TABLE code_sessions ADD COLUMN cap_usd REAL;
+
+    INSERT INTO audit_log (actor_id, action, target_type, target_id, details, created_at)
+        SELECT NULL, 'defaults_enabled_v0_11', NULL, NULL,
+               '{"reset": [' || reset || '], "note": "Saved choices were removed so the new defaults apply: '
+               || 'the new Code engine, sandboxes on, and students allowed to ask for Code sessions."}',
+               strftime('%Y-%m-%dT%H:%M:%S', 'now') || '+00:00'
+        FROM (SELECT group_concat('"' || key || '"', ', ') AS reset, COUNT(*) AS n FROM settings
+              WHERE key IN ('code_sandbox', 'code_student_access', 'code_engine'))
+        WHERE n > 0;
+    DELETE FROM settings WHERE key IN ('code_sandbox', 'code_student_access', 'code_engine');
+    """,
 ]
 
 

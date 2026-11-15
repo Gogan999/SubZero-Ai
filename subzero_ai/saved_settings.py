@@ -11,7 +11,7 @@ import ipaddress
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
@@ -29,13 +29,15 @@ EFFORT_CHOICES = (("low", "Low"), ("medium", "Medium"), ("high", "High"))
 SANDBOX_CHOICES = (("off", "Off: commands run on the computer (as before)"),
                    ("hyperv", "Hyper-V: each session gets its own virtual computer"),
                    ) + ((("fake", "Fake: this computer, no isolation (testing only)"),) if fake_sandbox_allowed() else ())
+ENGINE_CHOICES = (("agent", "New engine (sandbox only)"), ("classic", "Classic engine"))
+AUTH_CHOICES = (("api_key", "API key"), ("subscription", "Team subscription (testing only)"))
 SWITCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}")
 # The dropdown value that means "type the model id under Other"; never a real model id
 OTHER_MODEL = "__other__"
 # provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
 MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
 PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "google": "Google (Gemini)",
-                   "openrouter": "OpenRouter", "claude-bridge": "Claude subscription (Claude Code)"}
+                   "openrouter": "OpenRouter", "claude-bridge": "Claude subscription"}
 # A note shown under a provider's checkbox
 PROVIDER_HELP = {
     "claude-bridge": ("Replies use the logged-in Claude subscription's limits. When they run out, students get an "
@@ -52,10 +54,10 @@ BLOCKED_MODEL_WORDS = ("fable", "mythos")
 class Field:
     name: str
     label: str
-    kind: str  # model, choice, int, bool, lines, ids, providers, path, name
+    kind: str  # model, choice, int, float, bool, lines, ids, providers, path, name
     help: str = ""
-    minimum: int = 0
-    maximum: int = 0
+    minimum: float = 0
+    maximum: float = 0
     optional: bool = False  # for ids and path: an empty value is allowed
     choices: tuple[tuple[str, str], ...] = ()  # for choice: (saved value, label) pairs
     error: str = ""  # for path and name: what a value that isn't allowed looks like, in plain words
@@ -69,27 +71,14 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("model_default", "Default model", "model",
               "Every new chat uses this model. Write it as provider/model, like anthropic/claude-sonnet-5-5."),
         Field("model_hard", "Hard-problem model", "model",
-              "Mentors can switch a chat to this model. It costs about twice as much."),
-        Field("model_titles", "Title model", "model", "Writes the short titles in the chat list."),
+              "The bigger model for hard problems. Mentors can pick it for a Code session. It costs about twice as much."),
+        Field("model_titles", "Title model", "model", "Writes the short titles mentors see on the Review page."),
         Field("model_check_judge", "Safety check judge", "model",
               "Grades the answers in the Model safety check. It has to be a Claude model, since it decides which "
               "other models are safe enough for students."),
         Field("effort_default", "Everyday effort", "choice", "Higher effort gives more careful answers and costs more.",
               choices=EFFORT_CHOICES),
-        Field("effort_high", "Effort for explainers and files", "choice",
-              "Used for interactive explainers and messages with files attached, which are usually code reviews.",
-              choices=EFFORT_CHOICES),
         Field("max_tokens_chat", "Longest reply, in tokens", "int", "8,000 tokens is about 6,000 words.", 500, 64000),
-        Field("max_tokens_explainer", "Longest explainer reply, in tokens", "int",
-              "An explainer is a whole web page, so it needs more room.", 1000, 64000),
-        Field("long_chat_tokens", "Suggest a fresh chat after this many tokens", "int",
-              "Long chats cost more on every reply.", 10000, 1000000),
-        Field("web_search_enabled", "Claude can search the web when asked", "bool",
-              "Web search and Research in the composer's tools menu. Each search costs about a cent."),
-        Field("web_search_daily_limit", "Web searches per day, for the whole team", "int",
-              "A web search reply uses up to 5, a Research report up to 20. Resets at midnight.", 0, 2000),
-        Field("research_for_students", "Students can ask for Research reports", "bool",
-              "Research runs many searches and writes a long report, so it starts as mentors only."),
     ]),
     "limits": ("Limits and review", [
         Field("limit_pending_per_student", "Waiting messages per student", "int",
@@ -100,9 +89,7 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
               "Posts one reminder in the card's Slack thread.", 10, 1440),
         Field("mentors_need_approval", "Mentors' messages also wait for another mentor", "bool"),
         Field("slack_dms_enabled", "Let people message the bot in Slack", "bool",
-              "Messages sent to the bot in Slack wait for a mentor exactly like messages on the website."),
-        Field("show_pending_to_team", "Other students can see messages that are waiting", "bool"),
-        Field("show_rejected_to_team", "Other students can see rejected messages and the reason", "bool"),
+              "Messages sent to the bot in Slack wait for a mentor before the AI answers."),
     ]),
     "window": ("Approval window", [
         Field("approval_window_minutes", "Minutes a student can keep chatting after an approval", "int",
@@ -123,11 +110,44 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("backup_keep_days", "Keep nightly backups for this many days", "int", "", 1, 365),
     ]),
     "code": ("Code", [
+        Field("code_engine", "Code engine", "choice",
+              "The new engine lets Claude use a full shell inside the session's sandbox, so it needs the sandbox below "
+              "turned on. The classic engine is the older one, where a mentor approves each change and command. "
+              "Sessions already started keep the engine they began with. Changing this applies to the next session.",
+              choices=ENGINE_CHOICES),
+        Field("code_auth", "Code sign-in", "choice",
+              "How Code signs in to Anthropic. API key uses the team's Anthropic key from API keys. Team subscription "
+              "uses a Claude subscription token and is for testing only. Changing this applies to the next request.",
+              choices=AUTH_CHOICES),
+        Field("code_max_running", "Code sessions working at the same time", "int",
+              "The others wait their turn and start by themselves. Each working session uses a sandbox's memory.", 1, 8),
+        Field("code_plan_first_students", "Students' sessions always start with a plan a mentor approves", "bool",
+              "On: every student session starts with a plan, Claude changes nothing until a mentor approves it, and "
+              "students can't turn that off. Off: student sessions get no plan step and no choice."),
+        Field("code_plan_first_mentors", "Mentors' sessions start with the plan-first box ticked", "bool",
+              "Only the starting tick on the start form. A mentor can untick or tick it for each session."),
+        Field("code_web_tools_students", "Let Claude search the web in students' sessions", "bool",
+              "Turn it off to keep students' sessions off the open web. Applies to the next request."),
+        Field("code_web_tools_mentors", "Let Claude search the web in mentors' sessions", "bool",
+              "Applies to the next request."),
+        Field("code_sub_agents", "Let Claude hand parts of a task to helpers", "bool",
+              "Helpers (sub-agents) work on one part of a task each. They count toward the session's cost."),
+        Field("code_cap_student_usd", "Most one student session may cost, in dollars", "float",
+              "At the model's price list. The session stops when it reaches this. 0 means no limit. Applies to new "
+              "sessions, and to a session when a mentor sends its next follow-up.", 0, 1000),
+        Field("code_cap_mentor_usd", "Most one mentor session may cost, in dollars", "float",
+              "The same, for mentors' sessions. 0 means no limit.", 0, 1000),
+        Field("code_agent_max_turns", "Claude replies in one run, new engine", "int",
+              "A run stops after this many replies, so a confused session can't spend without limit. Send a "
+              "follow-up to carry on.", 5, 1000),
         Field("code_commands", "Commands Claude can ask to run", "lines",
               "One program name per line, like gradlew. Claude can only ask to run these, from the repository "
               "folder, and a mentor approves each command before it runs."),
         Field("code_command_timeout", "Stop a command after this many seconds", "int",
               "A full Gradle build on the mini PC can take a few minutes.", 30, 3600),
+        Field("code_keep_days", "Delete a finished session's files after this many days", "int",
+              "A finished session keeps its steps and transcript, but its copies of the repository (they take a lot of "
+              "disk space) are deleted after this long. Checked every night.", 1, 365),
         Field("code_sandbox", "Run Code commands in a sandbox", "choice",
               "Hyper-V gives each Code session its own virtual computer on an internal network, deleted when the "
               "session ends. Fake runs commands on this computer with no protection, so use it only for testing. "
@@ -159,6 +179,10 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("sandbox_proxy_port", "Host port sandboxes may reach", "int",
               "The one port on this PC that a sandbox may reach over the internal switch, for the egress proxy. "
               "The sandbox network setup script and the check both use it. Applies after a restart.", 1, 65535),
+        Field("sandbox_gateway_port", "Host port for the Code gateway", "int",
+              "The second port on this PC that a sandbox may reach. Claude in the sandbox talks to Anthropic only "
+              "through it, and the real key never enters the sandbox. The sandbox network setup script and the "
+              "check both use it. Applies after a restart.", 1, 65535),
         Field("sandbox_host_address", "This PC's address on the sandbox switch", "address",
               "The proxy listens only on this address. It is 10.77.0.1 unless the sandbox network was set up "
               "differently. Applies after a restart.",
@@ -199,8 +223,7 @@ SECTIONS: dict[str, tuple[str, list[Field]]] = {
         Field("code_student_command_timeout", "Stop a student's command after this many seconds", "int",
               "Applies to commands in a student's sandbox.", 30, 3600),
     ]),
-    "people": ("Subteams and admins", [
-        Field("subteams", "Subteams", "lines", "One per line. Students pick one when they start a chat."),
+    "people": ("Admins", [
         Field("admin_slack_ids", "Admins' Slack member IDs", "ids",
               "One per line. In Slack, click a person's name, open the three-dot menu, and choose Copy member ID. "
               "Admins can change these settings and read the audit log."),
@@ -214,7 +237,7 @@ PROMPT_LAYERS: list[tuple[str, str, str]] = [
      "The child-safety rules: age-appropriate content, honesty about being an AI, privacy, shop safety, "
      "and MENTOR ALERT. Ask a coach to review any change."),
     ("team.md", "Team context", "The robot code language and framework, units, shop rules, and conventions."),
-    ("formats.md", "Output formats", "How Claude formats code and interactive explainers."),
+    ("formats.md", "Output formats", "How Claude formats its replies."),
 ]
 assert [name for name, _, _ in PROMPT_LAYERS] == list(PROMPT_FILES)
 
@@ -340,14 +363,17 @@ CHECKED_MODEL_SETTINGS = {"model_default": False, "model_hard": False, "model_sc
 
 
 def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
-             settings: Settings | None = None, db: Database | None = None) -> tuple[dict[str, Any], dict[str, str]]:
+             settings: Settings | None = None, db: Database | None = None,
+             only: Collection[str] | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """Check one section's form. Returns (values, errors), keyed by setting name.
+    Pass `only` to check just those fields of the section (a Settings page box that holds some of them): the others
+    are left alone, even a checkbox that is missing from the form.
     Pass the current settings so models are checked against the providers that are on and the AI backend.
     Pass the database to also require the Model safety check for a changed default, hard-problem or screener
     model (a value that isn't changing is left alone)."""
     values: dict[str, Any] = {}
     errors: dict[str, str] = {}
-    fields = SECTIONS[section][1]
+    fields = [f for f in SECTIONS[section][1] if only is None or f.name in only]
     providers: tuple[str, ...] = tuple(settings.ai_providers) if settings is not None else ("anthropic",)
     backend = resolve_backend(settings) if settings is not None else "anthropic"
     if any(f.name == "ai_providers" for f in fields) and "ai_providers" in form:  # absent means unchanged
@@ -376,6 +402,16 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
                 errors[f.name] = f"Enter a number from {f.minimum:,} to {f.maximum:,}."
                 continue
             values[f.name] = number
+        elif f.kind == "float":
+            try:
+                amount = float(raw.replace(",", "").lstrip("$"))
+            except ValueError:
+                errors[f.name] = "Enter a number, like 5 or 7.50."
+                continue
+            if not f.minimum <= amount <= f.maximum:  # also false for nan
+                errors[f.name] = f"Enter a number from {f.minimum:,.0f} to {f.maximum:,.0f}."
+                continue
+            values[f.name] = round(amount, 2)
         elif f.kind == "model":
             if f.name == "model_check_judge" and f.name not in form:
                 continue  # added in 0.7: a form from before then leaves it alone

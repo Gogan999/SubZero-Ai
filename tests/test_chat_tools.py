@@ -1,8 +1,10 @@
-"""Chats that scroll inside the window, admins deleting chats, and the cost shown next to token counts."""
+"""Deleting chats (the maintenance function), the price list, and the cost mentors see on a reply."""
 
 from __future__ import annotations
 
 import unittest
+
+from subzero_ai import maintenance
 
 from .helpers import ADMIN, MENTOR, STUDENT, STUDENT_2, Harness
 
@@ -19,112 +21,60 @@ class ChatTest(unittest.TestCase):
         self.h.close()
 
     def start(self, text, actor=None):
-        resp = (actor or self.kim).post("/chats/new", {"text": text})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        body = resp.json()
-        self.h.idle()
-        return body["message_id"], int(body["url"].rsplit("/", 1)[1])
-
-
-class ScrollingChatTest(ChatTest):
-    def test_chat_page_scrolls_its_messages_not_the_window(self):
-        _, cid = self.start("How do I tune a PID loop?")
-        page = self.kim.get(f"/c/{cid}").text
-        self.assertRegex(page, r'<body class="[^"]*\bchat-page\b')
-        scroller = page.index("data-scroller")
-        self.assertLess(scroller, page.index("data-thread"))
-        # The composer sits outside the scrolling box, so it stays at the bottom of the window
-        self.assertGreater(page.index("data-composer"), page.index("</ol>"))
-        # The AI notice is in both places; CSS shows the fixed one on wide screens and the in-thread one on phones
-        self.assertEqual(page.count("You're chatting with an AI, not a person."), 2)
-        self.assertIn("notice-fixed", page)
-        self.assertIn("notice-in-thread", page)
-
-    def test_other_pages_keep_the_normal_layout(self):
-        page = self.kim.get("/profile").text
-        self.assertNotIn("chat-page", page)
-        self.assertEqual(page.count("You're chatting with an AI, not a person."), 1)
+        """Someone messages the bot in Slack (a mentor's own message goes straight through)."""
+        sent = self.h.slack_dm(text, user=(actor or self.kim).slack_user_id)
+        return sent.message_id, sent.conversation_id
 
 
 class DeleteChatTest(ChatTest):
+    """The Delete chat button is gone, but maintenance.delete_chat stays: the archive feature uses it."""
+
+    def delete(self, cid, actor=None):
+        s = self.h.services
+        return maintenance.delete_chat(s.db, s.attachments.files_dir, cid, actor_id=(actor or self.coach).user["id"])
+
     def student_chat_with_file(self):
-        resp = self.ava.post("/chats/new", {"text": "Why won't my intake spin?"},
-                             files=[("files", ("Intake.java", b"class Intake {}", "text/x-java"))])
-        self.assertEqual(resp.status_code, 200, resp.text)
-        body = resp.json()
-        self.h.idle()
-        return body["message_id"], int(body["url"].rsplit("/", 1)[1])
+        sent = self.h.slack_dm("Why won't my intake spin?", user=STUDENT)
+        self.h.add_old_attachment(sent.message_id, "Intake.java", b"class Intake {}")  # a file from 0.10
+        return sent.message_id, sent.conversation_id
 
-    def delete(self, actor, cid):
-        return actor.post(f"/c/{cid}/delete", follow_redirects=False)
-
-    def test_admin_deletes_a_chat_with_its_files_and_an_audit_note(self):
+    def test_deleting_a_chat_removes_its_files_and_leaves_an_audit_note(self):
         mid, cid = self.student_chat_with_file()
         files = self.h.services.attachments.for_message(mid)
         self.assertEqual(len(files), 1)
         path = self.h.services.attachments.path(files[0])
         self.assertTrue(path.is_file())
-        self.assertTrue(self.h.slack.posts, "the pending message should have a review card in Slack")
 
-        resp = self.delete(self.coach, cid)
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(resp.headers["location"], "/recents")
-        self.h.idle()
+        deleted = self.delete(cid)
+        self.assertIsNotNone(deleted)
         self.assertIsNone(self.h.services.store.conversation(cid))
         self.assertIsNone(self.h.message(mid))
         self.assertFalse(path.exists())
-        self.assertEqual(self.ava.get(f"/c/{cid}").status_code, 404)
+        self.assertEqual(self.coach.get(f"/c/{cid}").status_code, 404)
 
         entry = self.h.services.db.one("SELECT * FROM audit_log WHERE action = 'chat_deleted'")
         self.assertEqual(entry["actor_id"], self.coach.user["id"])
         self.assertEqual(entry["target_id"], cid)
-        self.assertIn("Ava (student)", entry["details"])
         self.assertIn('"messages": 1', entry["details"])
 
-        # The waiting review card in Slack loses its buttons and says what happened
-        update = self.h.slack.updates[-1]
-        self.assertIn("deleted", update["text"])
-        self.assertFalse(any(b.get("type") == "actions" for b in update["blocks"]))
-        self.assertIn("Chat deleted", str(update["blocks"]))
-
-    def test_deleting_a_chat_with_replies_and_a_share(self):
-        _, cid = self.start("How do I tune a PID loop?")
-        self.kim.send(cid, "And for an elevator?")
-        self.h.idle()
+    def test_deleting_a_chat_with_replies_and_an_old_share_row(self):
+        first = self.h.slack_dm("How do I tune a PID loop?", user=MENTOR)
+        self.h.slack_dm("And for an elevator?", user=MENTOR, thread_ts=first.thread_ts)
+        cid = first.conversation_id
         self.assertGreaterEqual(len(self.h.services.store.messages(cid)), 4)
         self.h.services.db.execute(
             "INSERT INTO shares (conversation_id, token, upto_message_id, audience, requested_by, status, created_at) "
             "VALUES (?, 'x', ?, 'team', ?, 'pending', '2026-01-01T00:00:00+00:00')",
             (cid, self.h.services.store.last_message_id(cid), self.kim.user["id"]))
-        self.assertEqual(self.delete(self.coach, cid).status_code, 303)
+        self.assertIsNotNone(self.delete(cid))
         self.assertIsNone(self.h.services.store.conversation(cid))
         self.assertEqual(self.h.services.db.one("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?",
                                                 (cid,))["n"], 0)
         self.assertEqual(self.h.services.db.one("SELECT COUNT(*) AS n FROM shares")["n"], 0)
 
-    def test_only_admins_can_delete(self):
-        _, cid = self.student_chat_with_file()
-        for actor in (self.ava, self.ben, self.kim):
-            resp = self.delete(actor, cid)
-            self.assertEqual(resp.status_code, 403, actor.slack_user_id)
-        self.assertIsNotNone(self.h.services.store.conversation(cid))
-        self.assertIsNone(self.h.services.db.one("SELECT 1 FROM audit_log WHERE action = 'chat_deleted'"))
-
-    def test_delete_needs_the_csrf_token(self):
-        _, cid = self.start("Hello")
-        resp = self.coach.post(f"/c/{cid}/delete", csrf=False, follow_redirects=False)
-        self.assertEqual(resp.status_code, 403)
-        self.assertIsNotNone(self.h.services.store.conversation(cid))
-
-    def test_delete_button_shows_for_admins_only(self):
-        _, cid = self.start("Hello")
-        self.assertIn(f'action="/c/{cid}/delete"', self.coach.get(f"/c/{cid}").text)
-        self.assertIn("data-confirm=\"Delete this chat for everyone?", self.coach.get(f"/c/{cid}").text)
-        self.assertNotIn("/delete", self.kim.get(f"/c/{cid}").text)
-
     def test_deleting_a_missing_chat(self):
-        resp = self.delete(self.coach, 999)
-        self.assertEqual(resp.status_code, 404)
+        self.assertIsNone(self.delete(999))
+        self.assertIsNone(self.h.services.db.one("SELECT 1 FROM audit_log WHERE action = 'chat_deleted'"))
 
 
 class PricingTest(unittest.TestCase):
@@ -177,17 +127,14 @@ class CostShownTest(ChatTest):
         page = self.kim.get(f"/c/{cid}").text
         self.assertIn("3,000 tokens · about $0.01", page)
         self.assertIn('class="msg-usage"', page)
-        self.assertIn("3,000 tokens · about $0.01", self.kim.get(f"/c/{cid}/m/{reply['id']}").text)
 
-    def test_students_dont_see_cost(self):
+    def test_students_get_no_chat_page_so_no_cost(self):
         mid, cid = self.start("How do I tune a PID loop?", actor=self.ava)
         self.assertEqual(self.kim.post(f"/m/{mid}/approve").status_code, 200)
         self.h.idle()
-        reply = self.h.reply_to(mid)
-        self.assertTrue(reply["output_tokens"], "the pretend Claude should report tokens")
-        page = self.ava.get(f"/c/{cid}")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn(f'id="m{reply["id"]}"', page.text)
+        self.assertTrue(self.h.reply_to(mid)["output_tokens"], "the pretend Claude should report tokens")
+        page = self.ava.get(f"/c/{cid}", follow_redirects=False)
+        self.assertEqual(page.status_code, 303)
         self.assertNotIn("msg-usage", page.text)
         self.assertIn("msg-usage", self.kim.get(f"/c/{cid}").text)
 

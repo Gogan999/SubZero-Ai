@@ -4,12 +4,14 @@
     python -m subzero_ai --test-mode   start with sample sign-ins (and a pretend Claude if there's no API key)
     python -m subzero_ai check         check config.env, Slack, and the Claude API key
     python -m subzero_ai check --model provider/id   run only the model safety check on one model
-    python -m subzero_ai claude-login  sign in the Claude subscription (Claude Code) that claude-bridge/ models use
+    python -m subzero_ai claude-login  sign in the Claude subscription (the Claude program) that claude-bridge/ models use
     python -m subzero_ai backup [LABEL] back up the database, attached files, and prompts now
     python -m subzero_ai backups       list the backups
     python -m subzero_ai restore NAME  put a backup back (stop the app first; "latest" picks the newest)
     python -m subzero_ai recovery-code make a new recovery code for signing in on the mini PC
     python -m subzero_ai reset-setup   open the setup page again (it only answers on the mini PC)
+    python -m subzero_ai sandbox-provision [--force]   put the Code tools into a new sandbox base disk
+                                       (run it with prepare-sandbox-image.cmd, with the app stopped)
 """
 
 from __future__ import annotations
@@ -30,7 +32,8 @@ from .config import Settings, load_settings
 
 # Exit code that asks for a restart: the Windows service starts the app again, and run.ps1 loops on it.
 RESTART_EXIT_CODE = 3
-COMMANDS = ["run", "check", "claude-login", "backup", "backups", "restore", "recovery-code", "reset-setup"]
+COMMANDS = ["run", "check", "claude-login", "backup", "backups", "restore", "recovery-code", "reset-setup",
+            "sandbox-provision"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("name", nargs="?",
                         help="for restore: the backup's file name or path, or latest; for backup: a label")
     parser.add_argument("--model", help="for check: run only the model safety check on this model (provider/id)")
+    parser.add_argument("--force", action="store_true",
+                        help="for sandbox-provision: build the sandbox image again even if it is already current")
     parser.add_argument("--config", help="path to config.env")
     parser.add_argument("--test-mode", action="store_true",
                         help="sample sign-ins on this PC, data in ./test-data, and a pretend Claude without an API key")
@@ -89,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         return print_report(asyncio.run(run_checks(settings)))
     if args.command == "claude-login":
         return claude_login_tool(settings)
+    if args.command == "sandbox-provision":
+        return sandbox_provision_tool(settings, force=args.force)
     if args.command != "run":
         return run_tool(args.command, args.name, settings)
 
@@ -182,7 +189,7 @@ def claude_login_tool(settings: Settings, run=None) -> int:
     from .pi_client import bridge_logged_in, claude_cli_path, settings_bridge_env
     cli = claude_cli_path(settings.pi_gateway_script or None)
     if cli is None:
-        print("Couldn't find the Claude Code program in pi_gateway/node_modules. "
+        print("Couldn't find the Claude program in pi_gateway/node_modules. "
               "Install the AI helper's files (npm ci --ignore-scripts in the pi_gateway folder) and try again.")
         return 1
     env = login_env(settings.data_dir)
@@ -191,16 +198,35 @@ def claude_login_tool(settings: Settings, run=None) -> int:
     try:
         code = (run or subprocess.run)([str(cli), "auth", "login", "--claudeai"], env=env).returncode
     except OSError as exc:
-        print(f"Couldn't start Claude Code: {exc}")
+        print(f"Couldn't start the Claude program: {exc}")
         return 1
     if code != 0 or not bridge_logged_in(settings.data_dir):
         print("")
         print("The sign-in didn't finish. Run python -m subzero_ai claude-login to try again.")
         return 1
     print("")
-    print("Signed in. Turn on \"Claude subscription (Claude Code)\" under AI providers in Settings to use it"
+    print("Signed in. Turn on \"Claude subscription\" under AI providers in Settings to use it"
           + ("." if settings_bridge_env(settings) else " (it needs AI_BACKEND=pi)."))
     return 0
+
+
+def sandbox_provision_tool(settings: Settings, force: bool = False, provision=None) -> int:
+    """Make a new sandbox base disk with the Code tools in it and switch the setting to it (sandbox_image.py). It takes
+    about 20 minutes, and the app must be stopped (prepare-sandbox-image.cmd stops it). `provision` stands in for
+    sandbox_image.provision_image in tests."""
+    from . import saved_settings
+    from .db import Database
+
+    if provision is None:
+        from .sandbox_image import provision_image as provision
+    db = Database(settings.db_path)
+    saved_settings.load_into(settings, db)  # the base disk an admin chose on the Settings page
+    result = provision(settings, db, force=force, say=print, app_running=lambda: app_is_running(settings))
+    print("")
+    print(result.message)
+    if result.log_path and result.status != "current":
+        print(f"The log is in {result.log_path}")
+    return result.exit_code
 
 
 def run_tool(command: str, name: str | None, settings: Settings) -> int:

@@ -9,7 +9,8 @@
 # SHA256SUMS, converts it to a dynamic VHDX, makes it read-only, and sets its boot menu so cloud-init reads
 # the sandbox's seed (ci.ds=NoCloud). It needs 45 GB free: the raw disk image is 30 GB while it is converted. Build
 # refuses to overwrite an existing base disk, and removes a partial one if anything fails before it is read-only.
-# Build saves the finished disk's SHA-256 in sandbox-base.vhdx.sha256, next to it.
+# Build saves the finished disk's SHA-256 in sandbox-base.vhdx.sha256, next to it. After Build, run
+# prepare-sandbox-image.cmd once: it bakes the Code tools into a new base disk (sandbox-base-<version>.vhdx).
 # Check: changes nothing. With -Deep it also hashes the base disk (about a minute) and compares the hash with that
 # saved file. Remove: deletes only the base disk and its saved SHA-256 file, and only when no VM disk uses it as its
 # parent.
@@ -308,6 +309,8 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
     Write-Ok "Built the base disk: $Parent"
     Write-Note "SHA-256: $hash (saved in $(Get-HashPath $Parent) for Check -Deep)"
     Write-Note "Set SANDBOX_BASE_IMAGE=$Parent in config.env, or set Base disk for sandboxes in Settings to that path."
+    Write-Note "Next: run prepare-sandbox-image.cmd. It puts the Code tools (Node.js, Java, git, Python) into a new base disk"
+    Write-Note "and switches the setting to it. Code sessions can't start until that is done."
 }
 
 function Show-ImageCheck([string]$Parent, [bool]$Deep) {

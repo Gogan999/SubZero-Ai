@@ -1,4 +1,4 @@
-// SubZero AI browser script: sending messages and files, mentor actions, explainers, and live updates.
+// SubZero AI browser script: mentor review actions, the read-only chat page, Code and Settings.
 (() => {
   "use strict";
 
@@ -36,17 +36,12 @@
     }
   }
 
-  function autosize(textarea) {
-    textarea.style.height = "auto";
-    textarea.style.height = Math.min(textarea.scrollHeight + 2, window.innerHeight * 0.4) + "px";
-  }
-
   // On phones the sidebar opens over the page from the menu button in the slim top bar.
   function setSidebar(open) {
     document.body.classList.toggle("sidebar-open", open);
     // The page behind the full-screen panel can't be seen, so take it out of Tab order and screen readers
     document.querySelector(".main-col")?.toggleAttribute("inert", open);
-    if (open) document.querySelector("#sidebar .side-new")?.focus();
+    if (open) document.querySelector("#sidebar nav a")?.focus();
     document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
       button.setAttribute("aria-expanded", String(open));
       const label = open ? button.dataset.closeLabel : button.dataset.openLabel;
@@ -54,7 +49,7 @@
     });
   }
 
-  // Pop-up menus (the account menu, the composer's tools) are <details>: close them on a click elsewhere or Escape.
+  // Pop-up menus (the account menu) are <details>: close them on a click elsewhere or Escape.
   function closeMenus(except) {
     document.querySelectorAll("details[data-menu][open]").forEach((menu) => {
       if (menu !== except) menu.open = false;
@@ -82,21 +77,6 @@
   document.addEventListener("click", async (event) => {
     closeMenus(event.target.closest("details[data-menu]"));
 
-    const copyValue = event.target.closest("[data-copy-value]");
-    if (copyValue) {
-      const field = document.querySelector(copyValue.dataset.copyValue);
-      if (!field) return;
-      try {
-        await navigator.clipboard.writeText(field.value);
-        copyValue.textContent = "Copied";
-      } catch {
-        field.select();
-        copyValue.textContent = "Press Ctrl+C";
-      }
-      setTimeout(() => { copyValue.textContent = "Copy"; }, 1600);
-      return;
-    }
-
     const copy = event.target.closest("[data-copy]");
     if (copy) {
       const pre = copy.closest(".code")?.querySelector("pre");
@@ -108,39 +88,6 @@
         copy.textContent = "Select the code to copy";
       }
       setTimeout(() => { copy.textContent = "Copy"; }, 1600);
-      return;
-    }
-
-    const full = event.target.closest("[data-fullscreen]");
-    if (full) {
-      const frame = full.closest("[data-explainer]")?.querySelector("iframe");
-      if (!frame) return;
-      const request = frame.requestFullscreen || frame.webkitRequestFullscreen;
-      if (request) {
-        try {
-          await request.call(frame);
-          return;
-        } catch { /* fall through to a new tab */ }
-      }
-      window.open(frame.src, "_blank", "noopener");
-      return;
-    }
-
-    const viewCode = event.target.closest("[data-view-code]");
-    if (viewCode) {
-      const code = viewCode.closest("[data-explainer]")?.querySelector("[data-explainer-code]");
-      if (!code) return;
-      code.hidden = !code.hidden;
-      viewCode.setAttribute("aria-expanded", String(!code.hidden));
-      viewCode.textContent = code.hidden ? "View code" : "Hide code";
-      return;
-    }
-
-    const removeFile = event.target.closest("[data-remove-file]");
-    if (removeFile) {
-      const form = removeFile.closest("form");
-      const picked = chosen(form).filter((_, i) => i !== Number(removeFile.dataset.removeFile));
-      setChosen(form, picked);
       return;
     }
 
@@ -221,451 +168,161 @@
       showError(form, "");
       form.hidden = true;
       afterAction(form);
-      return;
-    }
-
-    if (form.matches("[data-new-chat]")) {
-      event.preventDefault();
-      const button = form.querySelector('[type="submit"]');
-      button.disabled = true;
-      const result = await post("/chats/new", await withFrames(form));
-      if (!result.ok) {
-        button.disabled = false;
-        return showError(form, result.error);
-      }
-      window.location.href = result.url;
-      return;
-    }
-
-    if (form.matches("[data-composer]")) {
-      event.preventDefault();
-      const textarea = form.querySelector("textarea");
-      const button = form.querySelector('[type="submit"]');
-      if (!textarea.value.trim()) return;
-      button.disabled = true;
-      const result = await post(form.dataset.url, await withFrames(form));
-      button.disabled = false;
-      if (!result.ok) return showError(form, result.error);
-      showError(form, "");
-      textarea.value = "";
-      autosize(textarea);
-      setChosen(form, []);
-      setRemotes(form, []);
-      if (result.message_id) refreshMessage(result.message_id);
     }
   });
 
-  // Enter sends, Shift+Enter adds a line (on devices with a keyboard and mouse).
+  // ------------------------------------------------------------------ Code
+  // Ctrl+Enter (or Cmd+Enter) sends the box you are typing in
   document.addEventListener("keydown", (event) => {
-    const textarea = event.target;
-    if (!(textarea instanceof HTMLTextAreaElement)) return;
-    const form = textarea.closest("[data-composer], [data-new-chat]");
-    if (!form || event.key !== "Enter" || event.shiftKey || event.isComposing) return;
-    if (!window.matchMedia("(pointer: fine)").matches) return;
-    event.preventDefault();
-    form.requestSubmit();
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && event.target.matches?.("[data-submit-on-enter]")) {
+      event.preventDefault();
+      event.target.form?.requestSubmit();
+    }
   });
 
-  document.addEventListener("input", (event) => {
-    if (event.target.matches?.(".composer textarea")) autosize(event.target);
-  });
+  // A session page asks for itself again while it isn't finished: quickly while Claude works, slowly while it waits
+  // for a person, and rarely in a hidden tab. Only blocks that changed are swapped, so open folds, text typed in a
+  // note or the follow-up box, and the scroll position stay as they are. The follow-up box is outside the part that
+  // is redrawn; its enabled state follows the page's data-composer-state block.
+  const codeRegion = document.querySelector("[data-code-region]");
+  if (codeRegion) {
+    const scroller = document.querySelector("[data-scroller]");
+    const composer = document.querySelector("[data-composer]");
+    const offline = document.querySelector("[data-connection-note]");
+    const drawn = new WeakMap(); // each block's HTML as the server last sent it
+    const delays = { fast: 2500, slow: 6000 };
+    let timer = 0;
+    let busy = false;
+    let stopped = false; // the session is gone (or no longer ours): stop asking
+    const live = () => codeRegion.querySelector("[data-code-live]");
+    const remember = (root) => root.querySelectorAll("[data-key]").forEach((el) => drawn.set(el, el.outerHTML));
 
-  // ------------------------------------------------------------- attachments
-  // The chosen files are kept here and copied into the form's file input, so sending the form sends them.
-  // Picking more files, dropping them on the form, or pasting a screenshot adds to the list.
-  const picks = new WeakMap(); // form -> [File]
-
-  function chosen(form) {
-    return picks.get(form) || [];
-  }
-
-  function setChosen(form, files) {
-    const input = form?.querySelector("[data-files]");
-    if (!input) return;
-    picks.set(form, files);
-    const transfer = new DataTransfer();
-    files.forEach((file) => transfer.items.add(file));
-    input.files = transfer.files;
-    renderChosen(form);
-  }
-
-  function chip(label, key, index) {
-    const item = document.createElement("li");
-    const name = document.createElement("span");
-    name.textContent = label;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.dataset[key] = String(index);
-    remove.setAttribute("aria-label", `Remove ${label}`);
-    remove.textContent = "×";
-    item.append(name, remove);
-    return item;
-  }
-
-  function renderChosen(form) {
-    const list = form.querySelector("[data-chosen]");
-    const files = chosen(form), added = remoteList(form);
-    list.replaceChildren(
-      ...files.map((file, i) => chip(`${file.name} (${sizeLabel(file.size)})`, "removeFile", i)),
-      ...added.map((item, i) => chip(item.label, "removeRemote", i)));
-    list.hidden = files.length + added.length === 0;
-  }
-
-  // ------------------------------------------------------------- connectors
-  // Files from the team's GitHub repository or a Google Drive link. They're sent as "github" and "drive" values,
-  // fetched on the server when the message is sent, and listed with the attached files until then.
-  const remotes = new WeakMap(); // form -> [{source, value, label}]
-
-  function remoteList(form) {
-    return remotes.get(form) || [];
-  }
-
-  function setRemotes(form, items) {
-    remotes.set(form, items);
-    renderChosen(form);
-  }
-
-  function addRemote(form, item, dialog) {
-    const input = form.querySelector("[data-files]");
-    const most = Number(input?.dataset.maxFiles) || 5;
-    const added = remoteList(form);
-    if (added.some((r) => r.source === item.source && r.value === item.value)) return true;
-    if (chosen(form).length + added.length >= most) {
-      connectorError(dialog, `You can add up to ${most} files to one message.`);
-      return false;
-    }
-    setRemotes(form, [...added, item]);
-    return true;
-  }
-
-  function connectorError(dialog, message) {
-    const el = dialog.querySelector("[data-connector-error]");
-    el.textContent = message;
-    el.hidden = !message;
-  }
-
-  const FOLDER_ICON = '<svg class="icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6V15a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V7.5a1 1 0 0 0-1-1H10L8.3 4.5H3.5a1 1 0 0 0-1 1z"/></svg>';
-  const FILE_ICON = '<svg class="icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h6.5L15.5 6.5v10a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1zM11.5 2.5v4h4"/></svg>';
-
-  async function browseGitHub(dialog, path) {
-    const list = dialog.querySelector("[data-gh-list]");
-    list.setAttribute("aria-busy", "true");
-    connectorError(dialog, "");
-    let result;
-    try {
-      const res = await fetch(`/connectors/github?path=${encodeURIComponent(path)}`,
-        { credentials: "same-origin", headers: { "Accept": "application/json" } });
-      result = await res.json();
-    } catch {
-      result = { ok: false, error: "Couldn't reach the server. Check your connection and try again." };
-    }
-    list.setAttribute("aria-busy", "false");
-    if (!result.ok) return connectorError(dialog, result.error);
-    dialog.dataset.path = result.path;
-    const crumbs = dialog.querySelector("[data-gh-crumbs]");
-    const parts = result.path ? result.path.split("/") : [];
-    const crumb = (label, target) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "link-button";
-      button.dataset.ghPath = target;
-      button.textContent = label;
-      return button;
+    const hasUserState = (el) => {
+      const active = document.activeElement;
+      if (active && el.contains(active) && active.matches("input, textarea, select")) return true;
+      return Array.from(el.querySelectorAll("input[name=note], textarea")).some((f) => f.value !== f.defaultValue);
     };
-    crumbs.replaceChildren(crumb(result.repo.split("/").pop(), ""),
-      ...parts.flatMap((part, i) => [document.createTextNode(" / "), crumb(part, parts.slice(0, i + 1).join("/"))]));
-    crumbs.lastElementChild.setAttribute("aria-current", "location");
-    const form = dialog.closest("form");
-    const added = new Set(remoteList(form).filter((r) => r.source === "github").map((r) => r.value));
-    list.replaceChildren(...result.entries.map((entry) => {
-      const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "connector-entry";
-      button.innerHTML = entry.kind === "dir" ? FOLDER_ICON : FILE_ICON;
-      const name = document.createElement("span");
-      name.className = "connector-name";
-      name.textContent = entry.name;
-      const meta = document.createElement("span");
-      meta.className = "connector-meta";
-      if (entry.kind === "dir") {
-        button.dataset.ghPath = entry.path;
-        button.setAttribute("aria-label", `Open folder ${entry.name}`);
-      } else if (!entry.supported) {
-        button.disabled = true;
-        meta.textContent = "Can't add this kind of file";
-      } else {
-        button.dataset.ghFile = entry.path;
-        button.setAttribute("aria-pressed", String(added.has(entry.path)));
-        meta.textContent = added.has(entry.path) ? "Added" : entry.size;
+    const carryOpen = (from, to) => {
+      const before = from.querySelectorAll("details");
+      to.querySelectorAll("details").forEach((d, i) => { if (before[i]) d.open = before[i].open; });
+    };
+    function morph(oldParent, freshParent) {
+      const olds = new Map();
+      for (const child of oldParent.children) if (child.dataset.key) olds.set(child.dataset.key, child);
+      const wanted = [];
+      for (const fresh of Array.from(freshParent.children)) {
+        const old = fresh.dataset.key ? olds.get(fresh.dataset.key) : null;
+        const html = fresh.outerHTML;
+        if (!old) {
+          drawn.set(fresh, html);
+          wanted.push(fresh);
+        } else if (drawn.get(old) === html) {
+          wanted.push(old);
+        } else if (fresh.hasAttribute("data-morph") && old.hasAttribute("data-morph")) {
+          // A list of steps: go through its items one by one, so a note someone is typing in doesn't freeze the rest
+          morph(old, fresh);
+          drawn.set(old, html);
+          wanted.push(old);
+        } else if (hasUserState(old)) {
+          wanted.push(old);
+        } else {
+          carryOpen(old, fresh);
+          drawn.set(fresh, html);
+          wanted.push(fresh);
+        }
       }
-      button.append(name, meta);
-      item.append(button);
-      return item;
-    }));
-    if (!result.entries.length) {
-      const empty = document.createElement("li");
-      empty.className = "fine";
-      empty.textContent = "This folder is empty.";
-      list.append(empty);
-    }
-  }
-
-  function driveLabel(link) {
-    if (/docs\.google\.com\/document\//.test(link)) return "Google Doc";
-    if (/docs\.google\.com\/spreadsheets\//.test(link)) return "Google Sheet";
-    if (/docs\.google\.com\/presentation\//.test(link)) return "Google Slides";
-    return "Drive file";
-  }
-
-  function addDriveLink(dialog) {
-    const field = dialog.querySelector("[data-drive-link]");
-    const link = field.value.trim();
-    if (!/^https:\/\/(docs|drive)\.google\.com\//.test(link)) {
-      connectorError(dialog, "Paste a link that starts with https://docs.google.com or https://drive.google.com.");
-      field.focus();
-      return;
-    }
-    const form = dialog.closest("form");
-    const count = remoteList(form).filter((r) => r.source === "drive").length + 1;
-    if (addRemote(form, { source: "drive", value: link, label: `${driveLabel(link)} ${count > 1 ? count : ""}`.trim() }, dialog)) {
-      field.value = "";
-      connectorError(dialog, "");
-      dialog.close();
-    }
-  }
-
-  document.addEventListener("click", (event) => {
-    const open = event.target.closest("[data-open-connector]");
-    if (open) {
-      const form = open.closest("form");
-      const dialog = form.querySelector(`[data-connector-dialog="${open.dataset.openConnector}"]`);
-      open.closest("details")?.removeAttribute("open");
-      connectorError(dialog, "");
-      dialog.showModal();
-      if (open.dataset.openConnector === "github") browseGitHub(dialog, dialog.dataset.path || "");
-      else dialog.querySelector("[data-drive-link]")?.focus();
-      return;
-    }
-    const dialog = event.target.closest("[data-connector-dialog]");
-    if (!dialog) {
-      const removeRemote = event.target.closest("[data-remove-remote]");
-      if (removeRemote) {
-        const form = removeRemote.closest("form");
-        setRemotes(form, remoteList(form).filter((_, i) => i !== Number(removeRemote.dataset.removeRemote)));
+      for (const child of Array.from(oldParent.children)) if (!wanted.includes(child)) child.remove();
+      let ref = oldParent.firstElementChild;
+      for (const el of wanted) {
+        if (el === ref) ref = ref.nextElementSibling;
+        else oldParent.insertBefore(el, ref);
       }
-      return;
     }
-    if (event.target.closest("[data-close-dialog]")) return dialog.close();
-    if (event.target.closest("[data-add-drive]")) return addDriveLink(dialog);
-    const folder = event.target.closest("[data-gh-path]");
-    if (folder) return browseGitHub(dialog, folder.dataset.ghPath);
-    const file = event.target.closest("[data-gh-file]");
-    if (file) {
-      const form = dialog.closest("form");
-      const path = file.dataset.ghFile;
-      const added = remoteList(form).some((r) => r.source === "github" && r.value === path);
-      if (added) {
-        setRemotes(form, remoteList(form).filter((r) => !(r.source === "github" && r.value === path)));
-      } else if (!addRemote(form, { source: "github", value: path, label: path.split("/").pop() }, dialog)) {
-        return;
-      }
-      file.setAttribute("aria-pressed", String(!added));
-      file.querySelector(".connector-meta").textContent = added ? "Removed" : "Added";
+
+    function applyComposer() {
+      const state = live()?.querySelector("[data-composer-state]");
+      if (!state || !composer) return;
+      const open = state.dataset.open === "yes";
+      composer.querySelector("textarea").disabled = !open;
+      composer.querySelector('button[type="submit"]').disabled = !open;
+      const hint = composer.querySelector("[data-composer-hint]");
+      if (hint) hint.textContent = state.dataset.hint || "";
     }
-  });
 
-  // Enter in the Drive link field adds the link instead of sending the message
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || !event.target.matches?.("[data-drive-link]")) return;
-    event.preventDefault();
-    addDriveLink(event.target.closest("[data-connector-dialog]"));
-  }, true);
-
-  function sizeLabel(bytes) {
-    if (bytes < 1024) return `${bytes} bytes`;
-    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-
-  function addFiles(form, files) {
-    const input = form?.querySelector("[data-files]");
-    if (!input || input.disabled) return;
-    const maxFiles = Number(input.dataset.maxFiles), maxBytes = Number(input.dataset.maxBytes);
-    const maxTotal = Number(input.dataset.maxTotal) || Infinity;
-    const allowed = input.accept.split(",");
-    const picked = [...chosen(form)];
-    let problem = "";
-    for (const file of files) {
-      const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase() : "";
-      if (!allowed.includes(ext)) problem = `${file.name} can't be attached. Use code, text, or a PNG or JPG screenshot.`;
-      else if (file.size > maxBytes) problem = `${file.name} is over ${Math.round(maxBytes / 1024 / 1024)} MB.`;
-      else if (picked.reduce((sum, f) => sum + f.size, file.size) > maxTotal) {
-        problem = `These files add up to more than ${Math.round(maxTotal / 1024 / 1024)} MB. Send fewer or smaller ones.`;
-      }
-      else if (picked.length + remoteList(form).length >= maxFiles) problem = `You can attach up to ${maxFiles} files to one message.`;
-      else picked.push(file);
+    function schedule() {
+      clearTimeout(timer);
+      const mode = live()?.dataset.poll;
+      if (stopped || !mode || mode === "off") return;
+      const base = delays[mode] || 6000;
+      timer = setTimeout(refresh, document.hidden ? Math.max(base * 6, 20000) : base);
     }
-    setChosen(form, picked);
-    showError(form, problem);
-    picked.filter(isVideo).forEach((file) => stills(file, Number(input.dataset.maxFrames) || 8));
-  }
 
-  // ------------------------------------------------------------ video stills
-  // Claude can't watch video, so the browser takes a few evenly spaced still frames from each one and sends them
-  // with the message (as "frames", named "<video name>@<seconds>.jpg"). The page itself shows the video.
-  const frameJobs = new WeakMap(); // File -> Promise<File[]>
-
-  function isVideo(file) {
-    return /\.(mp4|m4v|mov|webm)$/i.test(file.name);
-  }
-
-  function stills(file, most) {
-    if (!frameJobs.has(file)) frameJobs.set(file, takeStills(file, most));
-    return frameJobs.get(file);
-  }
-
-  function waitFor(video, event) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("timeout")), 15000);
-      video.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
-      video.addEventListener("error", () => { clearTimeout(timer); reject(new Error("error")); }, { once: true });
-    });
-  }
-
-  async function takeStills(file, most) {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    video.preload = "auto";
-    try {
-      const loaded = waitFor(video, "loadeddata");
-      video.src = url;
-      await loaded;
-      const duration = video.duration;
-      if (!Number.isFinite(duration) || duration <= 0 || !video.videoWidth) return [];
-      // About one still every 5 seconds, between 3 and the limit, each at most 1024px on its long edge
-      const count = Math.min(most, Math.max(3, Math.ceil(duration / 5)));
-      const scale = Math.min(1, 1024 / Math.max(video.videoWidth, video.videoHeight));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(video.videoWidth * scale);
-      canvas.height = Math.round(video.videoHeight * scale);
-      const frames = [];
-      for (let i = 0; i < count; i += 1) {
-        const at = (duration * (i + 0.5)) / count;
-        const seeked = waitFor(video, "seeked");
-        video.currentTime = at;
-        await seeked;
-        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
-        if (blob) frames.push(new File([blob], `${file.name}@${Math.floor(at)}.jpg`, { type: "image/jpeg" }));
-      }
-      return frames;
-    } catch {
-      return []; // a format this browser can't play: Claude is told it got no stills
-    } finally {
-      video.removeAttribute("src");
-      video.load();
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  async function withFrames(form) {
-    const data = new FormData(form);
-    const input = form.querySelector("[data-files]");
-    const most = Number(input?.dataset.maxFrames) || 8;
-    for (const file of chosen(form).filter(isVideo)) {
-      (await stills(file, most)).forEach((frame) => data.append("frames", frame));
-    }
-    remoteList(form).forEach((item) => data.append(item.source, item.value));
-    return data;
-  }
-
-  document.addEventListener("change", (event) => {
-    const input = event.target;
-    if (!input.matches?.("[data-files]")) return;
-    // The browser replaced the input's files with the new pick: add them to the ones already chosen.
-    addFiles(input.closest("form"), Array.from(input.files));
-  });
-
-  document.addEventListener("paste", (event) => {
-    const form = event.target.closest?.("[data-composer], [data-new-chat]");
-    if (!form) return;
-    const images = Array.from(event.clipboardData?.files || []).filter((f) => /^image\/(png|jpeg)$/.test(f.type));
-    if (!images.length) return;
-    event.preventDefault();
-    const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, "");
-    addFiles(form, images.map((f, i) => new File([f], `screenshot-${stamp}${i ? "-" + i : ""}.${f.type === "image/png" ? "png" : "jpg"}`, { type: f.type })));
-  });
-
-  document.addEventListener("dragover", (event) => {
-    const form = event.target.closest?.("[data-composer], [data-new-chat]");
-    if (!form || !event.dataTransfer?.types.includes("Files")) return;
-    event.preventDefault();
-    form.classList.add("dropping");
-  });
-
-  document.addEventListener("dragleave", (event) => {
-    const form = event.target.closest?.("[data-composer], [data-new-chat]");
-    if (form && !form.contains(event.relatedTarget)) form.classList.remove("dropping");
-  });
-
-  document.addEventListener("drop", (event) => {
-    const form = event.target.closest?.("[data-composer], [data-new-chat]");
-    if (!form || !event.dataTransfer?.files.length) return;
-    event.preventDefault();
-    form.classList.remove("dropping");
-    addFiles(form, Array.from(event.dataTransfer.files));
-  });
-
-  // Code sessions: redraw the steps every few seconds while Claude works, and stop once it waits or finishes
-  function pollCode() {
-    const box = document.querySelector("[data-code-steps]");
-    if (!box?.querySelector("[data-code-live]")) return;
-    setTimeout(async () => {
+    async function refresh() {
+      if (busy || stopped) return;
+      busy = true;
+      clearTimeout(timer);
       try {
-        const res = await fetch(box.dataset.url, { credentials: "same-origin" });
-        if (res.ok) box.innerHTML = await res.text();
+        const res = await fetch(codeRegion.dataset.url, { credentials: "same-origin", headers: { Accept: "text/html" } });
+        if (res.status === 404 || res.status === 403) {
+          stopped = true;
+          return;
+        }
+        if (!res.ok) throw new Error("bad answer");
+        const fresh = new DOMParser().parseFromString(await res.text(), "text/html").querySelector("[data-code-live]");
+        if (!fresh) throw new Error("not a session page");
+        offline.hidden = true;
+        const stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+        const root = live();
+        morph(root, fresh);
+        root.dataset.poll = fresh.dataset.poll;
+        root.dataset.state = fresh.dataset.state;
+        applyComposer();
+        if (stick) scroller.scrollTop = scroller.scrollHeight;
       } catch {
-        // try again on the next round
+        offline.hidden = false; // the next round tries again
+      } finally {
+        busy = false;
+        schedule();
       }
-      pollCode();
-    }, 2500);
-  }
-  pollCode();
-
-  // Composer tools: the ones switched on show as chips next to the tools button, so it's clear what's on
-  function updateToolChips(form) {
-    const chips = form?.querySelector("[data-tool-chips]");
-    if (!chips) return;
-    const on = [...form.querySelectorAll("input[data-tool]:checked")].map((input) => input.dataset.tool).filter(Boolean);
-    chips.replaceChildren(...on.map((label) => {
-      const item = document.createElement("li");
-      item.className = "tool-chip";
-      item.textContent = label;
-      return item;
-    }));
-    chips.hidden = on.length === 0;
-  }
-
-  document.addEventListener("change", (event) => {
-    const input = event.target;
-    if (!input.matches?.("input[data-tool]")) return;
-    const form = input.closest("form");
-    // Research already searches the web, so the two don't need to be on together
-    if (input.checked && input.name === "research") form.querySelector('input[name="search"]')?.click();
-    if (input.checked && input.name === "search") {
-      const research = form.querySelector('input[name="research"]');
-      if (research?.checked) research.checked = false;
     }
-    updateToolChips(form);
-  });
 
-  // Filters and the model picker apply as soon as they change.
-  document.addEventListener("change", (event) => {
-    if (event.target.matches?.("[data-autosubmit]")) event.target.form?.requestSubmit();
-  });
+    remember(live());
+    // A session that is still working opens at its newest step. A finished one opens at the top, under its title.
+    if (live().dataset.poll === "fast") scroller.scrollTop = scroller.scrollHeight;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && live()?.dataset.poll !== "off") refresh();
+    });
+    schedule();
+  }
+
+  // The Code home's "Needs a mentor" list refreshes now and then, and the counts in the sidebar and tab title with it
+  const needsBox = document.querySelector("[data-needs]");
+  if (needsBox) {
+    setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const res = await fetch(needsBox.dataset.url, { credentials: "same-origin" });
+        if (!res.ok) return;
+        const fresh = new DOMParser().parseFromString(await res.text(), "text/html").querySelector("[data-needs-list]");
+        const old = needsBox.querySelector("[data-needs-list]");
+        if (!fresh || !old) return;
+        const change = Number(fresh.dataset.count) - Number(old.dataset.count);
+        old.replaceWith(fresh);
+        document.querySelectorAll("[data-needs-count]").forEach((badge) => {
+          badge.textContent = fresh.dataset.count;
+          badge.hidden = fresh.dataset.count === "0";
+          badge.setAttribute("aria-label", `${fresh.dataset.count} waiting`);
+        });
+        if (change) {
+          const match = document.title.match(/^\((\d+)\) /);
+          const total = Math.max(0, (match ? Number(match[1]) : 0) + change);
+          document.title = (total ? `(${total}) ` : "") + document.title.replace(/^\(\d+\) /, "");
+        }
+      } catch {
+        // try again next time
+      }
+    }, 15000);
+  }
 
   // A model dropdown's "Other (type a model id)" choice shows the box for typing an id.
   document.addEventListener("change", (event) => {
@@ -681,132 +338,39 @@
       refreshQueue();
       return;
     }
-    const message = element.closest("[data-message]");
-    if (message) refreshMessage(message.dataset.message);
+    if (chatPage) refreshChat();
   }
 
-  // ------------------------------------------------------- live conversation
-  const threadCol = document.querySelector("[data-conversation]");
+  // ------------------------------------------------------- read-only chat
+  // The mentor's chat page: the whole chat, with review buttons on a waiting message. It looks for changes every few
+  // seconds, and at once when the Review queue changes. It leaves the page alone while a mentor is typing an edit.
+  const chatPage = document.querySelector("[data-readonly-chat]");
   const thread = document.querySelector("[data-thread]");
-  const conversationId = threadCol?.dataset.conversation;
-  const buffers = new Map(); // reply id -> [{seq, text}] that arrived before the reply was on the page
+  let chatHtml = null;
 
-  // A chat's messages scroll inside their own box (the composer stays put); other pages scroll the window.
-  const scroller = document.querySelector("[data-scroller]");
-
-  function nearBottom() {
-    if (scroller) return scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 240;
-    return window.innerHeight + window.scrollY >= document.body.scrollHeight - 240;
-  }
-
-  function toBottom() {
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    else window.scrollTo({ top: document.body.scrollHeight });
-  }
-
-  function scrollDown(wasNear) {
-    if (wasNear) toBottom();
-  }
-
-  function appendChunk(body, seq, text) {
-    const have = Number(body.dataset.seq || 0);
-    if (seq < have) return true; // already shown
-    if (seq > have) return false; // missed something; caller refetches
-    body.append(document.createTextNode(text));
-    body.dataset.seq = String(have + 1);
-    return true;
-  }
-
-  function flushBuffer(id) {
-    const node = document.getElementById("m" + id);
-    const body = node?.querySelector("[data-stream]");
-    const chunks = buffers.get(String(id));
-    if (!body || !chunks) return;
-    buffers.delete(String(id));
-    chunks.sort((a, b) => a.seq - b.seq).forEach((chunk) => appendChunk(body, chunk.seq, chunk.text));
-  }
-
-  async function refreshMessage(id) {
-    if (!thread || !conversationId) return;
-    const wasNear = nearBottom();
+  async function refreshChat() {
+    if (!chatPage || !thread) return;
+    if (thread.querySelector(".inline-form:not([hidden])")) return; // don't wipe a reason or edit someone is typing
     let res;
     try {
-      res = await fetch(`/c/${conversationId}/m/${id}`, { credentials: "same-origin" });
+      res = await fetch(`/c/${chatPage.dataset.readonlyChat}?thread=1`, { credentials: "same-origin" });
     } catch {
-      return;
-    }
-    const existing = document.getElementById("m" + id);
-    if (res.status === 204) {
-      existing?.remove();
-      updateComposerLock();
-      return;
+      return; // try again on the next round
     }
     if (!res.ok) return;
-    const template = document.createElement("template");
-    template.innerHTML = (await res.text()).trim();
-    const node = template.content.firstElementChild;
-    if (!node) return;
-    const fresh = document.getElementById("m" + id);
-    if (fresh) fresh.replaceWith(node);
-    else thread.appendChild(node);
-    flushBuffer(id);
-    updateComposerLock();
-    scrollDown(wasNear);
+    const html = (await res.text()).trim();
+    if (chatHtml === null) chatHtml = thread.innerHTML.trim();
+    if (html === chatHtml) return;
+    chatHtml = html;
+    thread.innerHTML = html;
   }
 
-  // One message at a time: a student waits for review, and everyone waits for Claude to finish replying.
-  function updateComposerLock() {
-    const composer = document.querySelector("[data-composer]");
-    if (!composer || !thread) return;
-    const textarea = composer.querySelector("textarea");
-    const button = composer.querySelector('[type="submit"]');
-    const waiting = composer.hasAttribute("data-needs-review")
-      && !!thread.querySelector('.msg.person[data-status="pending"]');
-    const replying = !!thread.querySelector('.msg.claude[data-status="streaming"]');
-    textarea.disabled = waiting; // drafting is fine while Claude replies
-    composer.querySelectorAll("[data-files]").forEach((input) => { input.disabled = waiting; });
-    button.disabled = waiting || replying;
-    textarea.placeholder = waiting ? "Waiting for a mentor to review your last message"
-      : replying ? "Claude is replying…" : "Ask a follow-up";
-  }
-
-  if (thread && conversationId) {
-    const events = new EventSource(`/c/${conversationId}/events`);
-    events.addEventListener("changed", (e) => refreshMessage(JSON.parse(e.data).id));
-    events.addEventListener("done", (e) => refreshMessage(JSON.parse(e.data).id));
-    events.addEventListener("delta", (e) => {
-      const data = JSON.parse(e.data);
-      const body = document.getElementById("m" + data.id)?.querySelector("[data-stream]");
-      if (!body) {
-        const list = buffers.get(String(data.id)) || [];
-        list.push({ seq: data.seq, text: data.text });
-        buffers.set(String(data.id), list);
-        return;
-      }
-      const wasNear = nearBottom();
-      if (!appendChunk(body, data.seq, data.text)) refreshMessage(data.id);
-      scrollDown(wasNear);
-    });
-    events.addEventListener("searching", (e) => {
-      const data = JSON.parse(e.data);
-      const typing = document.getElementById("m" + data.id)?.querySelector(".typing");
-      if (typing) typing.textContent = `Searching the web for “${data.query}”…`;
-    });
-    events.addEventListener("title", (e) => {
-      const title = JSON.parse(e.data).title;
-      const heading = document.querySelector("[data-title]");
-      if (heading) heading.textContent = title;
-    });
-    events.addEventListener("visibility", () => window.location.reload());
-    // Leaving already (say, an admin's Delete chat form): let that page load instead of jumping to New chat
-    let leaving = false;
-    window.addEventListener("beforeunload", () => { leaving = true; });
-    events.addEventListener("gone", () => {
-      events.close();
-      if (!leaving) window.location.href = "/chats";
-    });
-    updateComposerLock();
-    toBottom();
+  if (chatPage && thread) {
+    const events = new EventSource("/queue/events");
+    events.addEventListener("queue", refreshChat);
+    setInterval(() => {
+      if (!document.hidden) refreshChat();
+    }, 4000);
   }
 
   // ------------------------------------------------------------ live queue
@@ -843,10 +407,40 @@
   const settingsTabs = Array.from(document.querySelectorAll("[data-settings-tab]"));
   if (settingsTabs.length) {
     const tabLinks = Array.from(document.querySelectorAll('.settings-nav a[href^="#tab-"]'));
+    // Boxes that moved to another tab keep working from old links: the page lists old name -> new name
+    let anchors = {};
+    try {
+      anchors = JSON.parse(document.querySelector("[data-anchors]")?.dataset.anchors || "{}");
+    } catch {
+      /* no map: old names that still exist work as they are */
+    }
     const tabFor = (id) => {
       const el = id && document.getElementById(id);
       return el ? el.closest("[data-settings-tab]") : null;
     };
+    const openFolds = (el) => {
+      for (let d = el?.closest("details"); d; d = d.parentElement?.closest("details")) d.open = true;
+    };
+
+    // Unsaved edits: ask before leaving the page or another tab, but only if a box really changed
+    const forms = Array.from(document.querySelectorAll(".settings-page form")).filter((f) => f.querySelector('[name="csrf"]'));
+    const stateOf = (form) =>
+      JSON.stringify(Array.from(new FormData(form)).filter(([name, value]) => name !== "csrf" && typeof value === "string"));
+    const startState = new Map(forms.map((f) => [f, stateOf(f)]));
+    const isDirty = (form) => startState.get(form) !== stateOf(form);
+    const dirtyIn = (tab) => forms.filter((f) => tab.contains(f) && isDirty(f));
+    let submitting = false;
+    document.addEventListener("submit", () => {
+      submitting = true;
+      setTimeout(() => (submitting = false), 3000); // a submit that didn't leave the page guards again
+    });
+    window.addEventListener("beforeunload", (event) => {
+      if (!submitting && forms.some(isDirty)) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    });
+
     const showTab = (tab) => {
       for (const t of settingsTabs) t.hidden = t !== tab;
       for (const a of tabLinks) {
@@ -865,11 +459,13 @@
       } catch {
         /* a broken address: open the first section */
       }
+      if (id && !document.getElementById(id) && anchors[id]) id = anchors[id];
       // A form that came back with mistakes opens where the first mistake is
       const invalid = document.querySelector('[data-settings-tab] [aria-invalid="true"]');
       const tab = tabFor(id) || (invalid && invalid.closest("[data-settings-tab]")) || settingsTabs[0];
       showTab(tab);
       const target = id && document.getElementById(id);
+      openFolds(target || invalid);
       if (target && target !== tab) target.scrollIntoView();
       else if (invalid && !id) invalid.focus();
       else if (target) window.scrollTo(0, 0); // a whole section: start at the top, under the page title
@@ -879,6 +475,12 @@
         event.preventDefault();
         const tab = tabFor(a.getAttribute("href").slice(1));
         if (!tab) return;
+        const here = settingsTabs.find((t) => !t.hidden);
+        const dirty = here && here !== tab ? dirtyIn(here) : [];
+        if (dirty.length) {
+          if (!window.confirm("You changed something on this tab and haven't saved it. Leave without saving?")) return;
+          for (const f of dirty) f.reset();
+        }
         history.replaceState(null, "", a.getAttribute("href"));
         showTab(tab);
         window.scrollTo(0, 0);
@@ -889,5 +491,42 @@
     fromAddress();
     // The browser jumps to the address's box once the page has loaded, after this ran: put the right place back
     window.addEventListener("load", () => setTimeout(fromAddress, 0), { once: true });
+
+    // The old-chats archive or delete job: show how far it is, and show the result when it finishes
+    const job = document.querySelector("[data-archive-progress]");
+    if (job) {
+      const tick = async () => {
+        try {
+          const res = await fetch("/settings/archive/status", { credentials: "same-origin", headers: { Accept: "application/json" } });
+          const data = res.ok ? await res.json() : null;
+          if (data && data.state !== "running") {
+            if (forms.some(isDirty)) {
+              job.querySelector("[data-archive-step]").textContent = "Finished. Reload the page to see the result.";
+            } else {
+              submitting = true;
+              location.reload();
+            }
+            return;
+          }
+          if (data) {
+            job.querySelector("[data-archive-step]").textContent = data.step;
+            const bar = job.querySelector("[data-archive-bar]");
+            if (bar) bar.value = Math.min(100, Math.round((100 * data.done) / Math.max(data.total, 1)));
+          }
+        } catch {
+          /* try again on the next round */
+        }
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
+    }
+  }
+
+  // Files page: the box in the table head ticks or clears every row
+  const selectAll = document.querySelector("[data-select-all]");
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      document.querySelectorAll('[data-files-form] input[name="ids"]').forEach((box) => { box.checked = selectAll.checked; });
+    });
   }
 })();

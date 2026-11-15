@@ -171,7 +171,8 @@ class Nightly:
                 log.exception("Couldn't prune old Slack message ids")
             try:
                 from .code_runner import prune_workspaces
-                await asyncio.to_thread(prune_workspaces, self.db, self.settings.data_dir)
+                await asyncio.to_thread(prune_workspaces, self.db, self.settings.data_dir,
+                                        self.settings.code_keep_days)
             except Exception:
                 log.exception("Couldn't delete old Code copies")
             return path.name

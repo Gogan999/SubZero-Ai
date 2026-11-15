@@ -138,7 +138,7 @@ class SlackCardsTest(unittest.TestCase):
                                            text="x" * 5000, link="https://ai.example.org/c/3")
         body = blocks[1]["text"]["text"]
         self.assertLess(len(body), 3000, "Slack section text is limited to 3,000 characters")
-        self.assertIn("Open in SubZero AI to read the whole message", body)
+        self.assertIn("<https://ai.example.org/c/3|Open the whole chat to read the whole message>", body)
 
     def test_text_is_escaped_for_slack(self):
         blocks = slack_cards.approval_card(message_id=7, student_name="<!channel>", subteam=None, title="a & b",
@@ -178,12 +178,22 @@ class SlackCardsTest(unittest.TestCase):
         self.assertLessEqual(len(edit["submit"]["text"]), 24)
 
     def test_dm_text(self):
-        text = slack_cards.dm_text("rejected", title="Arm <PID>", link="https://x/c/1", mentor_name="Kim",
-                                   reason="Ask one thing at a time")
+        text = slack_cards.dm_text("rejected", title="Arm <PID>", mentor_name="Kim", reason="Ask one thing at a time")
         self.assertIn("Kim didn't approve your message in “Arm &lt;PID&gt;”", text)
         self.assertIn("Ask one thing at a time", text)
+        for outcome in ("approved", "edited", "rejected"):
+            # A student gets no link to the website: chats are in the Slack thread with the bot
+            self.assertNotIn("http", slack_cards.dm_text(outcome, title=None, mentor_name=None, reason="x"))
+            self.assertIn("thread with the bot", slack_cards.dm_text(outcome, title=None, mentor_name=None, reason="x"))
         with self.assertRaises(ValueError):
-            slack_cards.dm_text("held", title=None, link="x", mentor_name=None)
+            slack_cards.dm_text("held", title=None, mentor_name=None)
+
+    def test_cards_for_mentors_link_to_the_whole_chat(self):
+        blocks = slack_cards.approval_card(message_id=7, student_name="Ava", subteam=None, title="t", text="q",
+                                           link="https://x/c/9")
+        self.assertIn("<https://x/c/9|Open the whole chat>", blocks[1]["text"]["text"])
+        alert = slack_cards.alert_card(student_name="Ava", title="t", link="https://x/c/9")
+        self.assertIn("<https://x/c/9|Open the whole chat>", alert[0]["text"]["text"])
 
 
 class SettingsTest(unittest.TestCase):

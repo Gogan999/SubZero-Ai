@@ -7,6 +7,7 @@ from __future__ import annotations
 import atexit
 import base64
 import io
+import logging
 import os
 import re
 import shutil
@@ -76,7 +77,7 @@ from subzero_ai.sandbox import (
 )
 
 from .helpers import MENTOR, Harness
-from .test_features import FakeResponse, FakeWeb, repo_zip
+from .helpers import FakeResponse, FakeWeb, repo_zip
 
 BASE = "/srv/sandbox/base.vhdx"
 SWITCH = "szsandbox-internal"
@@ -1321,11 +1322,11 @@ class SandboxSettingsTest(unittest.TestCase):
 
     def test_defaults(self):
         fresh = Settings()
-        self.assertEqual(fresh.code_sandbox, "off")
-        self.assertEqual((fresh.sandbox_ttl_hours, fresh.sandbox_max_sessions), (48, 3))
-        self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (2048, 2, 31))
+        self.assertEqual(fresh.code_sandbox, "hyperv")  # on by default since 0.11 (D57)
+        self.assertEqual((fresh.sandbox_ttl_hours, fresh.sandbox_max_sessions), (48, 2))
+        self.assertEqual((fresh.sandbox_memory_mb, fresh.sandbox_cpus, fresh.sandbox_disk_gb), (6144, 2, 31))
         self.assertEqual((fresh.sandbox_min_free_gb, fresh.sandbox_switch), (20, "szsandbox-internal"))
-        self.assertEqual(fresh.sandbox_proxy_port, 3128)
+        self.assertEqual((fresh.sandbox_proxy_port, fresh.sandbox_gateway_port), (3128, 3129))
         self.assertFalse(fresh.sandbox_guest_sudo, "no sudo in the sandbox unless an admin turns it on")
 
     def test_valid_values_are_accepted(self):
@@ -1796,6 +1797,30 @@ class HostNetworkCheckScriptTest(unittest.TestCase):
         self.assertNotIn("'1-0'", script)
         self.assertIn("LocalPort = $null", script)
 
+    def test_the_blocks_skip_the_gateway_port_too(self):
+        def tcp(proxy, gateway):
+            return [(n, r) for n, p, r in block_rule_specs(proxy, gateway) if p == "TCP"]
+        self.assertEqual(tcp(3128, 3129), [("szsandbox-block-tcp-below", "1-3127"),
+                                           ("szsandbox-block-tcp-above", "3130-65535")])
+        self.assertEqual(tcp(3128, 3130), [("szsandbox-block-tcp-below", "1-3127"), ("szsandbox-block-tcp-between", "3129"),
+                                           ("szsandbox-block-tcp-above", "3131-65535")])
+        self.assertEqual(tcp(9000, 3129), [("szsandbox-block-tcp-below", "1-3128"),
+                                           ("szsandbox-block-tcp-between", "3130-8999"),
+                                           ("szsandbox-block-tcp-above", "9001-65535")])
+        self.assertEqual(tcp(3128, 3128), tcp(3128, None), "one port is one open port")
+
+    def test_the_check_script_verifies_the_gateway_rule_like_the_proxy_rule(self):
+        script = host_network_check_script("szsandbox-internal", 3128, 3129)
+        self.assertIn("-eq 'szsandbox-allow-gateway'", script)
+        self.assertIn("-contains '3129')", script)
+        self.assertIn("$problems.Add('gateway-rule-wrong')", script)
+        self.assertNotIn("gateway-rule-wrong", host_network_check_script("szsandbox-internal", 3128),
+                         "no gateway port, no gateway rule")
+        self.assertIn("allow only TCP to the gateway port", parse_host_network_check('["gateway-rule-wrong"]')[0])
+        seen = []
+        host_network_problems("szsandbox-internal", 3128, lambda s: seen.append(s) or "[]", 4000)
+        self.assertIn("'4000'", seen[0])
+
     def test_the_protocol_blocks_are_the_constant_list(self):
         self.assertEqual(BLOCK_PROTOCOLS, (2, 41, 47, 50, 51))
         self.assertEqual(BLOCK_PROTO_RULE.format(41), "szsandbox-block-proto-41")
@@ -2204,6 +2229,9 @@ class SandboxNetworkScriptTest(unittest.TestCase):
         self.assertIn('ValidateSet("Install", "Remove", "Check")', text)
         self.assertIn('[string]$Switch = "szsandbox-internal"', text)
         self.assertIn("[int]$ProxyPort = 3128", text)
+        self.assertIn("[int]$GatewayPort = 3129", text)
+        self.assertIn('$GatewayRule = "szsandbox-allow-gateway"', text)
+        self.assertIn("-LocalPort $GatewayPort -RemoteAddress $Subnet -InterfaceAlias $Alias", text)
 
     def test_it_only_ever_changes_objects_named_for_the_sandboxes(self):
         text = self.text()
@@ -2259,7 +2287,7 @@ class SandboxNetworkDriftTest(unittest.TestCase):
 
     def test_the_script_and_the_app_use_the_same_problem_codes(self):
         self.assertEqual(set(self.CODE.findall(ps1_text())), self.expected_codes())
-        self.assertEqual(set(self.CODE.findall(host_network_check_script("szsandbox-internal", 3128))),
+        self.assertEqual(set(self.CODE.findall(host_network_check_script("szsandbox-internal", 3128, 3129))),
                          self.expected_codes())
 
     def test_the_script_has_plain_words_for_every_fixed_code(self):
@@ -2269,11 +2297,12 @@ class SandboxNetworkDriftTest(unittest.TestCase):
     def test_the_rule_names_match_the_app_constants(self):
         names = set(re.findall(r'"(szsandbox-(?:block|allow)-[a-z0-9-]+)"', ps1_text()))
         self.assertEqual(names, {sandbox.BLOCK_TCP_BELOW, sandbox.BLOCK_TCP_ABOVE, sandbox.BLOCK_UDP,
-                                 sandbox.BLOCK_ICMP4, sandbox.BLOCK_ICMP6, sandbox.PROXY_RULE})
+                                 sandbox.BLOCK_ICMP4, sandbox.BLOCK_ICMP6, sandbox.PROXY_RULE,
+                                 sandbox.BLOCK_TCP_BETWEEN, sandbox.GATEWAY_RULE})
         self.assertEqual(sandbox.BLOCK_PROTO_RULE.format("$number"), "szsandbox-block-proto-$number")
         for port in (1, 3128, 65535):
-            for name, _, _ in block_rule_specs(port):
-                self.assertIn(f"'{name}'", host_network_check_script("szsandbox-internal", port))
+            for name, _, _ in block_rule_specs(port, 3129):
+                self.assertIn(f"'{name}'", host_network_check_script("szsandbox-internal", port, 3129))
 
     def test_the_protocol_list_is_generated_into_the_script(self):
         self.assertIn(NETWORK_BLOCK_PROTOCOLS_PS, ps1_text())
@@ -2295,6 +2324,62 @@ class SandboxNetworkDriftTest(unittest.TestCase):
     def test_the_block_rule_codes_are_described(self):
         for code in NETWORK_CODE_PREFIXES:
             self.assertTrue(describe_network_problem(code + "x") != "", code)
+
+
+class WindowsNamesTest(unittest.TestCase):
+    def zip_of(self, names: list[str]) -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for name in names:
+                z.writestr(name, "x")
+        return buf.getvalue()
+
+    def test_names_windows_cannot_hold_are_skipped_and_reported(self):
+        bad = ["con", "src/NUL.txt", "aux.java", "lpt1", "COM9.log", "trailing.", "trail ", "a<b", 'q"x', "p|q", "w?",
+               "s*", "dir/prn.x"]
+        good = ["ok.txt", "src/Main.java", "console.txt", "com10", "a.b.c"]
+        with tempfile.TemporaryDirectory() as tmp:
+            skipped: list[str] = []
+            count = unpack_tree(self.zip_of(bad + good), Path(tmp), safe_names=True, skipped=skipped)
+            self.assertEqual(sorted(skipped), sorted(bad))
+            self.assertEqual(count, len(good))
+            self.assertTrue((Path(tmp) / "src" / "Main.java").is_file())
+
+    def test_names_that_differ_only_by_case_are_not_merged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skipped: list[str] = []
+            unpack_tree(self.zip_of(["Readme.md", "README.md", "Src/a.txt", "src/b.txt", "Src/c.txt"]), Path(tmp),
+                        safe_names=True, skipped=skipped)
+            self.assertEqual(sorted(skipped), ["README.md", "src/b.txt"])
+            self.assertEqual(sorted(p.name for p in Path(tmp).rglob("*") if p.is_file()), ["Readme.md", "a.txt", "c.txt"])
+
+    def test_the_default_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(unpack_tree(self.zip_of(["con", "a<b"]), Path(tmp)), 2)
+
+
+class ListingLogTest(unittest.TestCase):
+    def test_a_refused_backend_logs_one_plain_line_without_a_traceback(self):
+        from subzero_ai import sandbox as module
+
+        class Manager:
+            store = mock.Mock(known_names=lambda: set(), any_creating=lambda: False)
+
+            def kinds_in_use(self):
+                return {"hyperv"}
+
+            def backend(self, kind):
+                raise SandboxRefused("Set the sandbox base image in Settings first.")
+
+        logging.disable(logging.NOTSET)  # tests/__init__ turns logging off; this test checks the log line
+        self.addCleanup(logging.disable, logging.CRITICAL)
+        report = {"failed": 0}
+        with self.assertLogs("subzero.sandbox", "WARNING") as logs:
+            module._reap_orphans(Manager(), report)
+        self.assertEqual(report["failed"], 1)
+        [record] = logs.records
+        self.assertIsNone(record.exc_info)
+        self.assertIn("Set the sandbox base image in Settings first.", record.getMessage())
 
 
 if __name__ == "__main__":

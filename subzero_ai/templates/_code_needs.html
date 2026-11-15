@@ -1,0 +1,19 @@
+<div data-needs-list data-count="{{ needs|length }}">
+  {% if needs %}
+  <ol class="needs-list">
+    {% for n in needs %}
+    <li>
+      <a href="/code/{{ n.id }}">
+        <span class="needs-main">
+          <span class="chat-title">{{ n.title }}</span>
+          <span class="chat-meta">{{ n.who }} · {{ n.kind }}{% if n.flagged %} <span class="pill held">Screener flagged this</span>{% endif %}</span>
+        </span>
+        <span class="needs-wait"><span class="visually-hidden">Waiting </span>{{ n.waited }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="fine">Nothing is waiting for a mentor right now.</p>
+  {% endif %}
+</div>

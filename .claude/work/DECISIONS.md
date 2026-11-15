@@ -53,3 +53,79 @@
 - D49. `SLACK_DMS` setting (default on), admin-overridable.
 - D50. Manifest: writable Messages tab, `im:history`, `message.im` event; README permissions + student-facing section; Logan reinstalls the app.
 - D51. `ApprovalService.submit(on_saved=...)` callback, called right after the message is saved and before the reply or card; SlackDMs saves its thread/message links there, so no retry/wait race handling. A failing hook is logged and never blocks review or the reply.
+
+## Code-only pivot, v0.11.0 (2026-11-14)
+- D52 (all): Scope and Logan's decisions are in PLAN.md; the plan doc is the reference. One PR, features committed one by one.
+- D53 (F1): Shared page helpers move to `web_common.py`; `web.py` re-exports them so no test changes in F1 — proves the move changed nothing.
+- D54 (F3): No table is dropped and no data deleted in this release; removed features only lose their code and pages — rollback to v0.10.0 stays a file copy.
+- D55 (F3b): The mentor chat page reuses `/c/{id}` (mentors/admins only, read-only, review buttons); students are redirected to `/code` — Slack cards already link there.
+- D56 (F3b): Review-action routes keep their authorisation inside `ApprovalService` exactly as today — approval flow is off-limits.
+- D57 (G3): "Everything ships enabled" means these defaults: `code_engine=agent`, `code_sandbox=hyperv`, `code_student_access=True`, plan-first available (off per session unless ticked; default tick from a setting, on for students), sub-agents on, web tools on for mentors and students (gateway-enforced switch per role). A one-time upgrade step sets engine/sandbox/student access on existing installs too and audits it — Logan's instruction of 2026-11-14 overrides the plan's "off until tested".
+- D58 (G3): The fallback is one Settings field "Code engine": "New engine (sandbox only)" or "Classic engine". Classic keeps today's behaviour, including mentor sessions without a sandbox.
+- D59 (G3): Test mode (`FAKE_CLAUDE=1` / fake sandbox) keeps working offline: with the fake sandbox the agent engine starts a local fake runner; tests pin the settings they rely on rather than depending on defaults.
+- D60 (G1): The gateway is a hand-written asyncio HTTP/1.1 server (same style as `egress_proxy.py`, no new dependency) on `sandbox_host_address` and new `sandbox_gateway_port` (default 3129). It starts only with the sandbox on and the agent engine selected.
+- D61 (G1): Auth = the sandbox's existing egress token, sent by the SDK as `Authorization: Bearer` (`ANTHROPIC_AUTH_TOKEN`), checked with the same `TokenStore` and peer-address tie as the proxy. Token → sandbox → Code session. No token, wrong address or unknown session: 401, nothing forwarded.
+- D62 (G1): Forwards only `POST /v1/messages` (stream or not) and `POST /v1/messages/count_tokens`; answers `GET /v1/models` and `HEAD|GET /api/hello` locally; everything else 404. Upstream is `anthropic_base_url` or api.anthropic.com. Incoming credential headers are dropped; the real one is added on the host.
+- D63 (G1): Per request the gateway enforces: model in the session's allowed set (Settings models), else 400; appends the team's safety rules as a final `system` text block (never touching the first block); strips server web tools (`web_search*`, `web_fetch*`) when the session isn't allowed web tools; refuses when the session's spend is at its cap (HTTP 402-style error JSON the SDK surfaces).
+- D64 (G1): Usage is counted from the upstream reply (JSON `usage`, or SSE `message_start` + cumulative `message_delta`) and priced with `pricing.cost_usd`; totals are kept per Code session through a small callback interface so the gateway has no DB code of its own. One cap in API-equivalent dollars for both sign-in kinds (subscription shows it as "about $X at API prices") — simpler than a second token cap.
+- D65 (G1): Credentials: `api_key` → `x-api-key: <anthropic_api_key>`; `subscription` → `Authorization: Bearer <token>` + `anthropic-beta` gains `oauth-2025-04-20`. The subscription token is a new secret `code_subscription_token` in config.env (from `claude setup-token`); if empty, the gateway reads `claudeAiOauth.accessToken` from the bridge credentials file when present and unexpired. Both paths are unverified against Anthropic until the mini PC test; errors are surfaced plainly.
+- D66 (G1): Secrets never appear in logs, errors or step output; upstream error bodies are passed through but request headers are never echoed.
+- D67 (G2): Runner protocol (JSON lines). Host → runner: `{type:"start", task, model, cwd, resume?, plan_first, allowed_web, sub_agents, max_turns, append_system}`, `{type:"message", text}`, `{type:"plan_decision", approve, note}`, `{type:"stop"}`. Runner → host: `{type:"ready", runner_version, sdk_version}`, `{type:"session", session_id}`, `{type:"text", text}`, `{type:"tool_start", id, name, input, parent_id?}`, `{type:"tool_end", id, output, is_error}`, `{type:"plan", id, plan}`, `{type:"todo", items}`, `{type:"compact"}`, `{type:"turn_done", usage, cost_usd, num_turns, is_error, error?}`, `{type:"error", message, detail?}` (detail is for logs only, never shown to users). One runner process per run; it stays alive for queued follow-ups until stdin closes or `stop`.
+- D68 (G2): Runner uses `query()` with streaming input, `systemPrompt` preset `claude_code` + append, `settingSources: ["project"]` (so the repo's CLAUDE.md is read), `permissionMode: "bypassPermissions"` (non-root `sandbox` user in a throwaway VM) or `"plan"` when plan-first; in plan mode `canUseTool` holds `ExitPlanMode` until the host's `plan_decision`, then switches to bypass via `setPermissionMode`. The exact plan-approval mechanics are unverified in SDK 0.3.316 and get checked on the mini PC.
+- D69 (G2): The runner gets its endpoint and token from env set by the host for that run (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`), with telemetry, auto-update and non-essential traffic off. It never sees a real key.
+- D70 (G2): `tests/fake_agent_runner.py` speaks the same protocol with scripted behaviour (magic words in the task) so the driver is tested offline; `sandbox_runner/test/` has node tests for the runner's own mapping with a stubbed SDK.
+- D71 (G3): Migration v17 only adds columns to `code_sessions` (`engine TEXT NOT NULL DEFAULT 'classic'`, `agent_session_id TEXT`, `plan_first INTEGER NOT NULL DEFAULT 0`, `cost_usd REAL NOT NULL DEFAULT 0`, `cap_usd REAL`) — v0.10.0 ignores them, so rollback still works. No new status values (the CHECK constraint stays).
+- D72 (G3): Agent events become `code_steps` with the existing kinds: text → `text`; tool calls → `tool` with the SDK tool name; plans → a `tool` step named `plan` with status `pending` that the existing step-decision route approves or declines; notes → `note`.
+- D73 (G3): Two agent sessions run at once (`code_max_running`, default 2); others stay `preparing` with a note "Waiting for a free sandbox" and start in order. `sandbox_memory_mb` default becomes 6144.
+- D74 (G3): The patch comes from the VM: base commit made at prepare, `git diff --binary` against it at the end of each run, stored where the classic engine stores its patch so release/download are unchanged.
+- D75 (G3): Student rules are enforced before anything reaches the runner, in the same `CodeRunner` entry points as today (request, decide_request, request_follow_up, decide_follow_up); the agent engine is refused without a sandbox for everyone.
+- D76 (G3): Caps: `code_cap_student_usd` 5, `code_cap_mentor_usd` 15, editable. Reaching the cap stops the run with a plain note.
+- D77 (G1, review K1): The gateway always removes `mcp_servers` and `mcp_toolset` tools (Anthropic's servers would connect to any URL a student names, around the egress proxy), and refuses `service_tier` and a non-default `speed` (they change the price). When web tools are off it also refuses `source.type == "url"` image/document blocks. Unknown other fields pass, so SDK updates don't break.
+- D78 (G1, review K2): Before forwarding, the gateway reserves a worst-case cost for the request (input estimated from body size, output from `max_tokens`) against the session cap until the reply is counted, so parallel requests can overshoot by about one request, not eight.
+- D79 (G1, review B2): Cost uses the requested model (already allow-listed); a model with no known price is refused (fail closed).
+- D80 (G5): The base image gets its tools from a one-time admin step, `prepare-sandbox-image.cmd` → `python -m subzero_ai sandbox-provision`: a builder VM from the current base (sudo and extra package hosts for the builder only), tools and runner installed by `sandbox_provision.sh`, verified, then saved as a new standalone base disk next to the old one and the setting switched. The service is stopped while it runs (the CLI needs the proxy port and can't share the service's token store); it refuses while the app answers or any sandbox is alive. Never proven on real Hyper-V here; `docs/SANDBOX_IMAGE.md` lists every assumption.
+- D81 (G5): "Image is current" is a `.tools.json` record beside the disk matching TOOLS_VERSION, runner, SDK and Node versions; `--force` builds `-r2`, never overwrites.
+- D82 (G3, review K1): `sandbox-network.ps1` opens the gateway port (default 3129) on the sandbox host address beside the proxy port, with a `GatewayPort` parameter and the matching check in `checks.py`. Logan re-runs the network script on the mini PC.
+- D83 (G3, review K2): Students keep seeing every step of their own session as it happens (the plan's UX says so, and the classic engine did the same). Rule 7 gates the patch download and the Changes panel, not the transcript.
+
+## D84 A follow-up takes back the patch release
+When a follow-up run starts on a session (either engine), `patch_released` goes back to 0 and the mentor releases
+again after looking at the new changes. Audited as part of the follow-up approval. (Review MJ1, rule 7.)
+
+## D85 Students don't see file bodies before release (narrows D83)
+A student still sees their session's steps, but for Write and Edit steps only the file name and a line count until a
+mentor releases the changes; after release the bodies show. Mentors always see everything. Plan-first means a mentor
+no longer approves each edit, so the release is the one place the content is checked.
+
+## D86 Old-chat delete: verified, video-inclusive backup; exact ids
+The delete job picks the chat ids once, makes a backup that includes videos, checks the zip (reads cleanly, has the
+database, not empty), then deletes exactly those ids. Any failure deletes nothing.
+
+## D87 Saved mentor list expires in memory too
+The 7-day limit applies to the list held in memory as well as the one loaded from disk; a saved time in the future
+is rejected.
+
+## D88 Release only what the mentor saw
+`release_patch` refuses unless the session is finished with no follow-up or plan waiting, and the form carries a
+fingerprint of the changes the mentor was shown; a mismatch refuses with "The changes are different now. Look again."
+
+## D89 Plan-first is enforced on the host and in the runner
+Until a plan-first session's plan is approved, the runner denies Write, Edit, MultiEdit, NotebookEdit and Bash, and
+the host stops the run with a mentor note if such a tool starts anyway. Project hooks/settings from the repository
+are not loaded for plan-first runs before approval if the SDK allows turning that off.
+
+## D90 Students can't untick plan-first
+When "Students' sessions start with a plan" is on (default), a student's session is always plan-first; the tick box
+is shown to mentors only. Mentors' own default stays a tick they can change. (For Logan to confirm.)
+
+## D91 Before release a student sees labels, not bodies (extends D85)
+Before release a student sees Claude's own messages, each step's label (tool, file name, short description), the
+task list and the plan; not file bodies, command text past the first line, or command/read output.
+
+## D92 Cap handling near the limit
+The gateway tells the engine when it refused a request for the cap; the session then stops with the cap message.
+A follow-up or plan approval is refused when spent plus one typical request is over the cap.
+
+## D93 Gateway tool allow-list
+The gateway passes only client tools (plain tool definitions) and, when web is on, the web search/fetch server
+tools. Every other server tool type is removed.

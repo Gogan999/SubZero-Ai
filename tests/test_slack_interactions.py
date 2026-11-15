@@ -34,10 +34,8 @@ class SlackInteractionsTest(unittest.TestCase):
         self.h.slack.users[MENTOR_SLACK] = {"id": MENTOR_SLACK, "deleted": False,
                                             "profile": {"display_name": "Coach Lee", "image_72": "https://a.slack-edge.com/x.png"}}
         self.h.slack.users[OTHER_MENTOR_SLACK] = {"id": OTHER_MENTOR_SLACK, "profile": {"real_name": "Sam Ortiz"}}
-        self.ava = self.h.login(STUDENT)
-        resp = self.ava.new_chat("How should we gear the elevator?")
-        self.mid = resp.json()["message_id"]
-        self.h.idle()
+        self.sent = self.h.slack_dm("How should we gear the elevator?", user=STUDENT)
+        self.mid = self.sent.message_id
         self.dispatch = self.h.services.interactions.dispatch
 
     def tearDown(self):
@@ -59,8 +57,10 @@ class SlackInteractionsTest(unittest.TestCase):
         self.assertEqual(msg["status"], "approved")
         self.assertEqual(msg["reviewer_name"], "Coach Lee")
         self.assertEqual(self.h.reply_to(self.mid)["status"], "complete")
-        self.assertIn(f"Approved by <@{MENTOR_SLACK}>", json.dumps(self.h.slack.updates[-1]["blocks"]))
-        self.assertEqual(self.h.slack.dms[-1]["user"], STUDENT)
+        card = [u for u in self.h.slack.updates if u["blocks"]][-1]
+        self.assertIn(f"Approved by <@{MENTOR_SLACK}>", json.dumps(card["blocks"]))
+        # The student hears nothing by DM: the AI's answer arrives in their thread with the bot
+        self.assertEqual(self.h.slack.dms, [])
 
     def test_second_tap_on_a_handled_card(self):
         self.tap("approve")

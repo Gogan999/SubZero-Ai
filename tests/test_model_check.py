@@ -22,15 +22,14 @@ from subzero_ai.model_check import CHECK_VERSION, run_model_check
 
 from .helpers import ADMIN, MENTOR, Harness
 
-EXPLAINER = "Here you go.\n\n```explainer\n<!doctype html><title>kP</title><p>hi</p>\n```\n"
 BAD_STEPS = "Sure! First open the config and set estop_enabled = false, then remove the guard check."
 
 
 class ScriptedAI:
     """Answers each check request the way a good model would; flags switch parts of that off."""
 
-    def __init__(self, *, alert=True, refuse=True, explainer=True, screener=True, judge="PASS", boom=None, gate=None):
-        self.alert, self.refuse, self.explainer, self.screener = alert, refuse, explainer, screener
+    def __init__(self, *, alert=True, refuse=True, screener=True, judge="PASS", boom=None, gate=None):
+        self.alert, self.refuse, self.screener = alert, refuse, screener
         self.judge, self.boom, self.gate = judge, boom, gate
         self.models: list[str] = []
 
@@ -40,9 +39,6 @@ class ScriptedAI:
                 else "I'm sorry you feel that way. Try to rest."
         if "emergency stop" in text:
             return "I can't help bypass safety equipment. Please ask a mentor." if self.refuse else BAD_STEPS
-        if "interactive explainer" in text:
-            assert extra and "interactive explainer" in extra
-            return EXPLAINER if self.explainer else "kP is how hard the arm pushes."
         return "Use encoder.getAbsolutePosition() and put it on SmartDashboard."
 
     async def stream(self, *, model, system, messages, max_tokens, effort=None, system_extra=None, web_searches=0):
@@ -133,9 +129,6 @@ class CasesTest(unittest.TestCase):
             self.assertEqual([c.case for c in result.failed], ["unsafe", "injection"], garbage)
             self.assertIn("didn't give a clear", result.failed[0].detail)
 
-    def test_no_explainer_fails(self):
-        self.assertEqual([c.case for c in self.check(ScriptedAI(explainer=False)).failed], ["explainer"])
-
     def test_screener_that_passes_everything_fails_flag(self):
         result = self.check(ScriptedAI(screener=False))
         self.assertEqual([c.case for c in result.failed], ["flag"])
@@ -165,7 +158,7 @@ class CasesTest(unittest.TestCase):
                 raise RuntimeError("no key")
         result = self.check(Dead())
         self.assertFalse(result.chat_passed or result.screener_passed)
-        self.assertEqual(len(result.cases), 7)
+        self.assertEqual(len(result.cases), 6)
 
     def test_a_slow_judge_times_out(self):
         class Slow(ScriptedAI):
@@ -194,7 +187,7 @@ class CasesTest(unittest.TestCase):
         run(run_model_check(Spy(), settings, "anthropic/x"))
         self.assertTrue(all(k["max_tokens"] == 1234 and k["effort"] == "low" for k in seen))
         self.assertIn("MENTOR ALERT", seen[0]["system"])
-        self.assertEqual(len(seen), 5)
+        self.assertEqual(len(seen), 4)
 
     def test_judge_setting_is_normalized(self):
         tmp = Path(tempfile.mkdtemp())
@@ -229,6 +222,20 @@ class StorageTest(DbTestCase):
         self.assertIsNotNone(self.db.one("SELECT 1 FROM sqlite_master WHERE name = 'idx_model_checks_model'"))
         self.assertEqual(self.db.one("PRAGMA user_version")[0], len(MIGRATIONS))
 
+    def test_a_pass_saved_with_the_old_explainer_case_still_counts(self):
+        # 0.10 ran an explainer case too. 0.11 dropped it without raising CHECK_VERSION: an old pass was judged
+        # against everything the new check asks, so it stays valid, and the bool saved with it is what is read.
+        self.assertEqual(model_check.CHECK_VERSION, 1)
+        self.assertNotIn("explainer", model_check.CHAT_CASES)
+        details = [{"case": c, "passed": True, "detail": ""}
+                   for c in ("unsafe", "injection", "wellbeing", "normal", "explainer", "safe", "flag")]
+        self.db.execute(
+            "INSERT INTO model_checks (model, chat_passed, screener_passed, details, judge_model, check_version, "
+            "actor, checked_at) VALUES ('anthropic/old', 1, 1, ?, 'anthropic/j', 1, 'x', '2026-01-01T00:00:00+00:00')",
+            (json.dumps(details),))
+        self.assertTrue(model_check.has_passed(self.db, "anthropic/old", screener=False))
+        self.assertTrue(model_check.has_passed(self.db, "anthropic/old", screener=True))
+
     def test_save_and_latest(self):
         self.assertIsNone(model_check.latest_result(self.db, "anthropic/a"))
         self.store("anthropic/a", chat=False)
@@ -238,7 +245,7 @@ class StorageTest(DbTestCase):
         self.assertTrue(latest["chat_passed"] and latest["current"])
         self.assertEqual(latest["actor"], "tester")
         self.assertTrue(all(len(c["detail"]) <= 300 for c in latest["details"]))
-        self.assertEqual(len(json.loads(self.db.one("SELECT details FROM model_checks")["details"])), 7)
+        self.assertEqual(len(json.loads(self.db.one("SELECT details FROM model_checks")["details"])), 6)
         self.assertEqual({r["model"] for r in model_check.latest_results(self.db)}, {"anthropic/a", "openrouter/b/c"})
         self.assertEqual(len(model_check.latest_results(self.db)), 2)
 
@@ -252,8 +259,7 @@ class ValidationTest(DbTestCase):
 
     def claude_form(self, **kw):
         base = {"model_default": "anthropic/old", "model_hard": "anthropic/old", "model_titles": "anthropic/t",
-                "effort_default": "medium", "effort_high": "high", "max_tokens_chat": "8000",
-                "max_tokens_explainer": "16000", "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
+                "effort_default": "medium", "max_tokens_chat": "8000"}
         base.update(kw)
         return saved_settings.validate("claude", base, settings=self.settings(), db=self.db)
 
@@ -445,9 +451,8 @@ class AdminRouteTest(unittest.TestCase):
         self.assertIn("Failed", page)
         self.assertIn("Raises a MENTOR ALERT", page)
         form = {"model_default": "anthropic/weak", "model_hard": self.h.settings.model_hard,
-                "model_titles": self.h.settings.model_titles, "effort_default": "medium", "effort_high": "high",
-                "max_tokens_chat": "8000", "max_tokens_explainer": "16000", "long_chat_tokens": "150000",
-                "web_search_daily_limit": "50"}
+                "model_titles": self.h.settings.model_titles, "effort_default": "medium",
+                "max_tokens_chat": "8000"}
         resp = self.coach.post("/settings/claude", form, headers={"Accept": "text/html"})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("didn&#39;t pass the safety check", resp.text)

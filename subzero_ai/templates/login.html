@@ -5,7 +5,7 @@
 <section class="signin-panel">
   <p class="signin-team">For the robotics team</p>
   <h1>{{ settings.app_name }}</h1>
-  <p class="lede">Ask Claude about code, mechanisms, physics, and materials. A mentor reviews each student message before Claude sees it.</p>
+  <p class="lede">Give Claude a task in the team's robot code. A mentor reads each student request before Claude starts, and you can read every step it takes.</p>
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   {% if slack_ready %}
   <a class="button primary slack-signin" href="/auth/login">Sign in with Slack</a>

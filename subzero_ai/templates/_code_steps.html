@@ -1,144 +1,113 @@
-<div class="code-status" data-code-status="{{ session.status }}" {% if session.live %}data-code-live{% endif %}>
-  <span class="pill {{ session.kind }}">{{ session.label }}</span>
-  {% if session.live %}<span class="typing">Claude is working…</span>{% endif %}
-  {% if session.tokens and mentor %}<span class="fine" title="Estimated from the model's price list">{{ session.usage }} so far</span>{% endif %}
-  {% if can_stop %}
-  <form method="post" action="/code/{{ session.id }}/stop">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="button small quiet" type="submit" data-confirm="Stop this session? Steps waiting for approval are declined.">Stop</button>
-  </form>
-  {% endif %}
-  {% if can_extend %}
-  <form method="post" action="/code/{{ session.id }}/extend">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="button small quiet" type="submit">Give the sandbox more time</button>
-  </form>
-  {% endif %}
-</div>
-{% if sandbox_left %}<p class="code-warning" role="note">This workspace is deleted in {{ sandbox_left }}.</p>{% endif %}
-{% if session.error %}<p class="form-error" role="alert">{{ session.error }}</p>{% endif %}
-{% if mentor and screen_note %}<p class="code-warning" role="note">{{ screen_note }}</p>{% endif %}
-{% if awaiting and not mentor %}<p class="code-reason">Waiting for a mentor to approve your request. Nothing has started yet, and no sandbox has been made.</p>{% endif %}
-{% if follow_up_waiting and not mentor %}<p class="code-reason">Waiting for a mentor to approve your follow-up before Claude sees it.</p>{% endif %}
-{% if awaiting and mentor %}
-<section class="panel" aria-labelledby="request-title">
-  <h2 id="request-title">Approve this request?</h2>
-  <p class="field-hint">Approving makes this session's sandbox and starts Claude. Declining stops the request, and the student sees your note.</p>
-  <div class="code-review">
-    <form method="post" action="/code/{{ session.id }}/approve-request">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="button small primary" type="submit">Approve and start</button>
-    </form>
-    <form method="post" action="/code/{{ session.id }}/decline-request" class="code-decline">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label class="visually-hidden" for="request-note">Note for the student</label>
-      <input id="request-note" name="note" maxlength="500" placeholder="Why not, or what to change (the student sees this)">
-      <button class="button small quiet" type="submit">Decline</button>
-    </form>
+{# The part of a session page that redraws itself: see pollCode in app.js. Every direct child has a data-key so the script
+   can swap only what changed, and leave alone anything a person is typing in or has opened. #}
+{% from "_code_step.html" import step with context %}
+<div data-code-live data-poll="{{ poll }}" data-state="{{ session.status }}">
+
+  <div class="code-status" data-key="head">
+    <span class="pill {{ session.kind }}">{{ session.label }}</span>
+    {% if session.live %}<span class="typing">Claude is working…</span>{% endif %}
+    {% if mentor and session.cost %}<span class="fine" title="Estimated from the model's price list">{{ session.cost }}</span>{% endif %}
+    {% if sandbox_left %}<span class="fine">This workspace is deleted in {{ sandbox_left }}.</span>{% endif %}
+    <span class="code-actions">
+      {% if mentor and can_stop %}
+      <form method="post" action="/code/{{ session.id }}/stop"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button small" type="submit" data-confirm="Stop this session? Steps waiting for approval are declined.">Stop</button></form>
+      {% endif %}
+      {% if can_extend %}
+      <form method="post" action="/code/{{ session.id }}/extend"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button small" type="submit">Give the sandbox more time</button></form>
+      {% endif %}
+      {% if can_release %}
+      <form method="post" action="/code/{{ session.id }}/release"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="fingerprint" value="{{ fingerprint }}">
+        <button class="button small primary" type="submit" data-confirm="Release these changes? {{ session.owner }} will be able to read and download them.">Release to student</button></form>
+      {% endif %}
+      {% if changes %}<a class="button small" href="/code/{{ session.id }}/changes.patch" download>Download patch</a>{% endif %}
+      {% if mentor %}
+      <form method="post" action="/code/{{ session.id }}/delete"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button small quiet" type="submit" data-confirm="Delete this session? Its sandbox and copies of the repository are deleted, and its steps are removed. This can't be undone.">Delete</button></form>
+      {% endif %}
+    </span>
   </div>
-</section>
-{% endif %}
-<ol class="code-steps">
-  <li class="code-step note"><p class="code-label">Task</p><div class="plain">{{ session.task }}</div></li>
-  {% for step in steps %}
-  {% if step.kind == 'text' %}
-  <li class="code-step claude"><div class="prose">{{ step.html|safe }}</div></li>
-  {% elif step.kind == 'note' %}
-  <li class="code-step note">{% if step.label %}<p class="code-label">{{ step.label }}</p>{% endif %}<div class="plain">{{ step.output }}</div>
-    {% if step.note %}<p class="tag-reason">Note: {{ step.note }}</p>{% endif %}
-    {% if step.status == 'pending' and mentor %}
-    <div class="code-review">
-      <form method="post" action="/code/steps/{{ step.id }}/approve-follow-up">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <button class="button small primary" type="submit">Send to Claude</button>
-      </form>
-      <form method="post" action="/code/steps/{{ step.id }}/decline-follow-up" class="code-decline">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <label class="visually-hidden" for="decline-follow-{{ step.id }}">Note for the student</label>
-        <input id="decline-follow-{{ step.id }}" name="note" maxlength="500" placeholder="Why not, or what to ask instead (optional)">
-        <button class="button small quiet" type="submit">Decline</button>
-      </form>
+
+  <div class="code-states" data-key="state">
+    {% if mentor and screen_note %}<p class="code-warning" role="note">{{ screen_note }}</p>{% endif %}
+    {% if awaiting and not mentor %}<p class="code-state" role="status">A mentor will read your request before Claude starts. You can close this page.</p>{% endif %}
+    {% if session.status == 'preparing' %}<p class="code-state" role="status">{{ queue_note or 'Starting your sandbox. This can take a minute.' }}</p>{% endif %}
+    {% if plan_waiting and not mentor %}<p class="code-state" role="status">A mentor is reading Claude's plan.</p>{% endif %}
+    {% if follow_up_waiting and not mentor %}<p class="code-state" role="status">Waiting for a mentor to approve your follow-up. Claude doesn't see it until a mentor approves it.</p>{% endif %}
+    {% if waiting_for_changes %}<p class="code-state" role="status">{% if changes_before %}A mentor needs to look at the new changes. You can read and download them once a mentor releases them again.{% else %}A mentor is looking at your changes. You can read and download them once a mentor releases them.{% endif %}</p>{% endif %}
+    {% if no_changes %}<p class="code-state" role="status">Claude finished without changing any files.</p>{% endif %}
+    {% if what_next %}
+    <div class="code-ended" role="status">
+      <p class="code-ended-title">{{ what_next.title }}</p>
+      {% if what_next.reason %}<p>{{ what_next.reason }}</p>{% endif %}
+      <p>{{ what_next.next }}</p>
+      {% if what_next.raw %}<details class="code-fold"><summary>Details for mentors</summary><div class="plain">{{ what_next.raw }}</div></details>{% endif %}
     </div>
     {% endif %}
-  </li>
-  {% else %}
-  <li class="code-step tool {{ step.status }}" id="step{{ step.id }}">
-    <p class="code-label">
-      {{ step.label }}
-      {% if step.status == 'pending' %}<span class="pill pending">Needs approval</span>
-      {% elif step.status == 'declined' %}<span class="pill bad">Declined{% if step.reviewer %} by {{ step.reviewer }}{% endif %}</span>
-      {% elif step.status == 'error' %}<span class="pill bad">Didn't work</span>
-      {% elif step.reviewer %}<span class="pill ok">Approved by {{ step.reviewer }}</span>{% endif %}
-    </p>
-    {% if step.reason %}<p class="code-reason">{{ step.reason }}</p>{% endif %}
-    {% if step.command %}<pre class="code-command"><code>{{ step.command }}</code></pre>{% endif %}
-    {% if step.runs_changes %}<p class="code-warning" role="note">This runs with the app's own permissions, including code Claude changed in this session ({{ step.runs_changes|join(', ') }}). Check those changes above before you run it.</p>{% endif %}
-    {% if step.diff %}<pre class="code-diff"><code>{% for line in step.diff.splitlines() %}<span class="{{ 'add' if line.startswith('+') and not line.startswith('+++') else 'del' if line.startswith('-') and not line.startswith('---') else 'hunk' if line.startswith('@@') else '' }}">{{ line }}</span>
-{% endfor %}</code></pre>{% endif %}
-    {% if step.note %}<p class="tag-reason">Note: {{ step.note }}</p>{% endif %}
-    {% if step.status == 'pending' %}
-      {% if mentor %}
+  </div>
+
+  <ol class="code-steps" data-key="steps" data-morph>
+    <li class="code-step note" data-key="task"><p class="code-label">Task</p><div class="plain">{{ session.task }}</div></li>
+    {% for st in steps %}{{ step(st) }}{% endfor %}
+  </ol>
+
+  <div data-key="needs">
+    {% if awaiting and mentor %}
+    <section class="panel" aria-labelledby="request-title">
+      <h2 id="request-title">Approve this request?</h2>
+      <p class="field-hint">
+        {% if free_clicks %}After you approve, Claude works in the sandbox without step-by-step clicks.{% else %}After you approve, you approve each change and command Claude asks for.{% endif %}
+        {% if session.plan_first %} Claude will show a plan first, and nothing changes until you approve it.{% endif %}
+        Declining stops the request, and the student sees your note.</p>
       <div class="code-review">
-        <form method="post" action="/code/steps/{{ step.id }}/approve">
+        <form method="post" action="/code/{{ session.id }}/approve-request">
           <input type="hidden" name="csrf" value="{{ csrf }}">
-          <button class="button small primary" type="submit">{{ 'Run it' if step.tool == 'run_command' else 'Approve change' }}</button>
+          <button class="button small primary" type="submit">Approve and start</button>
         </form>
-        <form method="post" action="/code/steps/{{ step.id }}/decline" class="code-decline">
+        <form method="post" action="/code/{{ session.id }}/decline-request" class="code-decline">
           <input type="hidden" name="csrf" value="{{ csrf }}">
-          <label class="visually-hidden" for="decline-{{ step.id }}">Note for Claude</label>
-          <input id="decline-{{ step.id }}" name="note" maxlength="500" placeholder="Why not, or what to do instead (optional)">
+          <label class="visually-hidden" for="request-note">Note for the student</label>
+          <input id="request-note" name="note" maxlength="500" placeholder="Why not, or what to change (the student sees this)" autocomplete="off">
           <button class="button small quiet" type="submit">Decline</button>
         </form>
       </div>
-      {% else %}
-      <p class="code-reason">Waiting for a mentor to look at this step.</p>
-      {% endif %}
-    {% elif step.output and step.status in ('done', 'error') and not step.diff %}
-    <details class="code-output"><summary>{{ 'Output' if step.tool == 'run_command' else 'Details' }}</summary><pre><code>{{ step.output }}</code></pre></details>
+    </section>
     {% endif %}
-  </li>
-  {% endif %}
-  {% endfor %}
-</ol>
-{% if waiting_for_changes %}
-<p class="code-reason" role="status">Waiting for a mentor to look at your changes. You can download them once a mentor releases them.</p>
-{% endif %}
-{% if changes %}
-<section class="panel" aria-labelledby="changes-title">
-  <h2 id="changes-title">Changes</h2>
-  <ul class="simple-list">
-    {% for c in changes %}<li><span class="mono">{{ c.name }}</span> <span class="field-hint">{{ c.kind }}</span></li>{% endfor %}
-  </ul>
-  <p class="field-hint">Apply the patch in your copy of the repository with <span class="mono">git apply code-session-{{ session.id }}.patch</span>, then test on the robot before committing.</p>
-  <div class="form-actions"><a class="button" href="/code/{{ session.id }}/changes.patch" download>Download patch</a></div>
-</section>
-{% endif %}
-{% if can_release and changes %}
-<section class="panel" aria-labelledby="release-title">
-  <h2 id="release-title">Release to student</h2>
-  <p class="field-hint">Read the changes above first. Once you release them, {{ session.owner }} can download the patch.</p>
-  <form method="post" action="/code/{{ session.id }}/release">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="button small primary" type="submit">Release to student</button>
-  </form>
-</section>
-{% elif mentor and released %}
-<p class="field-hint">Released to {{ session.owner }}, who can download the patch.</p>
-{% endif %}
-{% if can_follow_up %}
-<form class="panel" method="post" action="/code/{{ session.id }}/follow-up">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <div class="field">
-    <label for="follow-up">{{ 'Ask Claude to do more' if mentor else 'Ask for more' }}</label>
-    <textarea id="follow-up" name="text" rows="3" maxlength="8000" required placeholder="Also add a unit test for the new limit."></textarea>
-    {% if not mentor %}<p class="field-hint">A mentor reads this before Claude sees it.</p>{% endif %}
   </div>
-  <div class="form-actions"><button class="button primary" type="submit">{{ 'Send' if mentor else 'Ask a mentor' }}</button></div>
-</form>
-{% endif %}
-{% if mentor %}
-<form class="form-actions" method="post" action="/code/{{ session.id }}/delete">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <button class="button small quiet" type="submit" data-confirm="Delete this session? Its sandbox and copies of the repository are deleted, and its steps are removed. This can't be undone.">Delete session</button>
-</form>
-{% endif %}
+
+  <div data-key="changes">
+    {% if files %}
+    <section class="panel code-changes" aria-labelledby="changes-title">
+      <h2 id="changes-title">Changes</h2>
+      <p class="field-hint">{{ files|length }} file{{ 's' if files|length != 1 }} changed.
+        {% if mentor and student_session and not released %}Read them before you release them to {{ session.owner }}.{% endif %}
+        To use them, apply the patch in your copy of the repository with <span class="mono">git apply code-session-{{ session.id }}.patch</span>, then test on the robot before committing.</p>
+      {% for f in files %}
+      <details class="diff-file"{% if not f.folded %} open{% endif %}>
+        <summary><span class="diff-name mono">{{ f.name }}</span> <span class="diff-kind">{{ f.label }}</span>
+          {% if f.added or f.removed %}<span class="diff-count"><span class="add">+{{ f.added }}</span> <span class="del">−{{ f.removed }}</span></span>{% endif %}</summary>
+        {% if f.lines %}<pre class="diff-body"><code>{% for css, text in f.lines %}<span class="{{ css }}">{{ text }}</span>{% endfor %}</code></pre>{% endif %}
+        {% if f.cut %}<p class="fine diff-cut">{{ f.cut }} more line{{ 's' if f.cut != 1 }} not shown here. The download has everything.</p>{% endif %}
+      </details>
+      {% endfor %}
+      {% if more_files %}<p class="fine">{{ more_files }} more file{{ 's' if more_files != 1 }} not shown here. The download has everything.</p>{% endif %}
+    </section>
+    {% elif changes %}
+    <section class="panel code-changes" aria-labelledby="changes-title">
+      <h2 id="changes-title">Changes</h2>
+      <p class="field-hint">The changes are in the download.</p>
+    </section>
+    {% endif %}
+    {% if patch_problem %}
+    <section class="panel code-changes" aria-labelledby="changes-title">
+      <h2 id="changes-title">Changes</h2>
+      <p class="field-hint" role="status">{{ patch_problem }}</p>
+    </section>
+    {% endif %}
+    {% if mentor and released %}<p class="fine">Released to {{ session.owner }}, who can read and download the changes.</p>{% endif %}
+  </div>
+
+  <div hidden data-key="composer" data-composer-state data-open="{{ 'yes' if can_follow_up else 'no' }}" data-hint="{{ composer_hint }}"></div>
+</div>

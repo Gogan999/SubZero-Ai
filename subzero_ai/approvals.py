@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from . import slack_cards
-from .attachments import MAX_FILES, Attachments, Prepared
+from .attachments import Attachments
 from .config import Settings
 from .db import Database, utcnow
-from .generation import ReplyRunner, asks_for_explainer, load_options, options_labels
+from .generation import ReplyRunner
 from .live import Broker, Tasks
 from .roles import is_builtin_user, is_excluded_account
 from .screener import Screener
@@ -103,42 +103,30 @@ class ApprovalService:
 
     # ---------------------------------------------------------------- submit
     async def submit(self, viewer: Viewer, text: str, conversation_id: int | None = None,
-                     subteam: str | None = None, files: list[Prepared] | tuple = (),
-                     explainer: bool = False, project_id: int | None = None,
-                     options: dict | None = None, on_saved: Callable[[int, int], None] | None = None,
+                     subteam: str | None = None, on_saved: Callable[[int, int], None] | None = None,
                      model: str | None = None) -> Outcome:
         """on_saved(conversation_id, message_id), if given, is called right after the message is saved and
         before anything else happens to it (the reply starting, the Slack card). `model` (mentors' picks) is used
         only when this message starts a new chat; the default model is used otherwise."""
         text = clean_text(text)
-        # There's no explainer switch any more: asking for one in words is how a student requests it
-        explainer = explainer or asks_for_explainer(text)
         if not text:
-            if files:
-                return Outcome(False, "invalid", "Add a message saying what you'd like Claude to do with the files.")
             return Outcome(False, "invalid", "Type a message first.")
-        if len([f for f in files if f.kind != "frame"]) > MAX_FILES:
-            return Outcome(False, "invalid", f"You can attach up to {MAX_FILES} files to one message.")
         if len(text) > MAX_MESSAGE_CHARS:
             return Outcome(False, "invalid", f"That message is over {MAX_MESSAGE_CHARS:,} characters. "
                                              "Shorten it or split it into parts.")
         if conversation_id is None:
-            return await self._submit(viewer, text, None, subteam, files, explainer, project_id, options or {},
-                                      on_saved, model)
+            return await self._submit(viewer, text, None, subteam, on_saved, model)
         lock = self._chat_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            return await self._submit(viewer, text, conversation_id, subteam, files, explainer, None, options or {},
-                                      on_saved)
+            return await self._submit(viewer, text, conversation_id, subteam, on_saved)
 
-    def window_applies(self, viewer: Viewer, conversation_id: int | None, files=()) -> bool:
-        """Whether this message can skip review because a mentor approved the chat a few minutes ago.
-        Messages with files always wait: a mentor hasn't seen the file."""
-        return (conversation_id is not None and not files
+    def window_applies(self, viewer: Viewer, conversation_id: int | None) -> bool:
+        """Whether this message can skip review because a mentor approved the chat a few minutes ago."""
+        return (conversation_id is not None
                 and viewer.slack_user_id not in self.settings.always_review_slack_ids
                 and self.store.window_open(conversation_id, self.settings.approval_window_minutes))
 
     async def _submit(self, viewer: Viewer, text: str, conversation_id: int | None, subteam: str | None,
-                      files, explainer: bool, project_id: int | None, options: dict,
                       on_saved: Callable[[int, int], None] | None = None, model: str | None = None) -> Outcome:
         needs_review = (not viewer.is_mentor) or self.settings.mentors_need_approval
 
@@ -159,17 +147,10 @@ class ApprovalService:
                 return Outcome(False, "limit", f"You've reached today's limit of {self.settings.limit_approved_per_day} "
                                                "approved messages. It resets at midnight.")
 
-        searching = bool(options.get("search") or options.get("research"))
-        if (options.get("search") or options.get("research")) and self.runner.searches_left() <= 0:
-            return Outcome(False, "limit", "Web search isn't available right now: the team has used today's "
-                                           "searches, or an admin turned it off. Turn off Web search in the tools "
-                                           "menu and send again.")
-
         status = PENDING if needs_review else AUTO
         screen = None  # "passed", "off", or the reason the screener flagged it
         screen_note = None
-        # Web searches cost money per search, so a message asking for them always waits for a mentor
-        if needs_review and not searching and self.window_applies(viewer, conversation_id, files):
+        if needs_review and self.window_applies(viewer, conversation_id):
             if self.settings.screener_enabled:
                 verdict = await self.screener.check(text)
                 if verdict.passed:
@@ -187,25 +168,14 @@ class ApprovalService:
         with self.db.transaction() as conn:
             if conversation_id is None:
                 conversation_id = self.store.create_conversation(
-                    conn, owner_id=viewer.id, model=model or self.settings.model_default, subteam=subteam,
-                    project_id=project_id)
+                    conn, owner_id=viewer.id, model=model or self.settings.model_default, subteam=subteam)
                 self.db.audit("conversation_started", actor_id=viewer.id, target_type="conversation",
                               target_id=conversation_id, details={"model": model} if model else None, conn=conn)
             message_id = self.store.add_message(conn, conversation_id=conversation_id, author_id=viewer.id,
-                                                role="user", content=text, status=status,
-                                                wants_explainer=explainer,
-                                                options=json.dumps(options) if options else None)
+                                                role="user", content=text, status=status)
             if screen_note:
                 conn.execute("UPDATE messages SET screen_note = ? WHERE id = ?", (screen_note, message_id))
-            for item in files:
-                self.attachments.save(conn, message_id, item)
             details = {"conversation": conversation_id, "status": status, "chars": len(text)}
-            if files:
-                details["files"] = [f"{item.name} ({item.size:,} bytes)" for item in files if item.kind != "frame"]
-            if explainer:
-                details["explainer"] = True
-            if options:
-                details["tools"] = options_labels(options)
             self.db.audit("message_sent", actor_id=viewer.id, target_type="message", target_id=message_id,
                           details=details, conn=conn)
             if status == GRACE:
@@ -242,8 +212,7 @@ class ApprovalService:
             text=msg["content"], link=self.link(conv["id"]),
             previous_reply=previous["content"] if previous else None,
             files=[(f["name"], f["size"]) for f in self.attachments.for_message(message_id) if f["kind"] != "frame"],
-            explainer=bool(msg["wants_explainer"]), project=conv["project_name"],
-            tools=options_labels(load_options(msg["options"])), screen_note=msg["screen_note"])
+            screen_note=msg["screen_note"])
         try:
             posted = await self.slack.post_message(self.settings.slack_approvals_channel,
                                                    slack_cards.card_fallback_text(msg["author_name"]), blocks)
@@ -252,6 +221,62 @@ class ApprovalService:
             log.exception("Couldn't post the approval card for message %s", message_id)
             self.db.audit("slack_card_failed", actor_id=None, target_type="message", target_id=message_id,
                           details={"error": str(exc)})
+
+    REPOST_MAX = 40  # cards posted by one press of the button; pressing again carries on with the rest
+    REPOST_COOLDOWN = 10.0  # seconds before the button works again
+    REPOST_MEMORY = 600.0  # a message reposted this recently is skipped by the next press
+
+    async def repost_cards(self) -> dict:
+        """Post the approval card again for messages still waiting for a mentor (the Settings page's "Post the cards
+        again", for when cards were missed or scrolled away). It uses the same card as the first time, so who can
+        approve doesn't change. The old card, if there was one, is replaced by a short note, and the new card takes
+        over the message's later updates. At most REPOST_MAX cards per press, and a second press while one is running
+        or just after it posts nothing ("busy"). Returns the counts: posted, failed, skipped (decided or deleted
+        meanwhile), remaining (still to do next press)."""
+        now = time.monotonic()
+        if getattr(self, "_reposting", False) or now - getattr(self, "_repost_ended", -1e9) < self.REPOST_COOLDOWN:
+            return {"posted": 0, "failed": 0, "skipped": 0, "remaining": 0, "busy": True}
+        self._reposting = True
+        done: dict[int, float] = {k: t for k, t in getattr(self, "_repost_done", {}).items()
+                                  if now - t < self.REPOST_MEMORY}
+        self._repost_done = done
+        posted = failed = skipped = 0
+        try:
+            todo = [m["id"] for m in self.store.pending_messages() if m["id"] not in done]
+            remaining = max(len(todo) - self.REPOST_MAX, 0)
+            for message_id in todo[:self.REPOST_MAX]:
+                try:
+                    msg = self.store.message(message_id)  # decided or deleted since the list was read?
+                    if msg is None or msg["status"] != PENDING:
+                        skipped += 1
+                        continue
+                    old = self.store.card(message_id)
+                    await self._post_card(message_id)
+                    new = self.store.card(message_id)
+                    if new is None or (old is not None and (new["channel"], new["ts"]) == (old["channel"], old["ts"])):
+                        failed += 1
+                        continue
+                    posted += 1
+                    done[message_id] = time.monotonic()
+                    if old is None:
+                        continue
+                    if old["reminded_at"]:  # already reminded once; don't send another at once
+                        self.db.execute("UPDATE slack_cards SET reminded_at = ? WHERE message_id = ?",
+                                        (old["reminded_at"], message_id))
+                    note = [{"type": "context", "elements": [{"type": "mrkdwn",
+                                                              "text": "This card was posted again below."}]}]
+                    try:
+                        await self.slack.update_message(old["channel"], old["ts"],
+                                                        slack_cards.card_fallback_text(msg["author_name"]), note)
+                    except Exception:
+                        log.exception("Couldn't replace the old Slack card for message %s", message_id)
+                except Exception:
+                    failed += 1
+                    log.exception("Couldn't post the card again for message %s", message_id)
+        finally:
+            self._reposting = False
+            self._repost_ended = time.monotonic()
+        return {"posted": posted, "failed": failed, "skipped": skipped, "remaining": remaining}
 
     # -------------------------------------------------------------- decisions
     async def approve(self, reviewer: Viewer, message_id: int, edited_text: str | None = None) -> Outcome:
@@ -401,7 +426,7 @@ class ApprovalService:
             except Exception:
                 log.exception("Couldn't post the decision for message %s in Slack", message_id)
         if outcome in (APPROVED, EDITED, REJECTED) and self.slack is not None and msg["author_notify_dm"]:
-            text = slack_cards.dm_text(outcome, title=conv["title"], link=link, mentor_name=msg["reviewer_name"],
+            text = slack_cards.dm_text(outcome, title=conv["title"], mentor_name=msg["reviewer_name"],
                                        reason=msg["review_note"])
             try:
                 await self.slack.dm(msg["author_slack_id"], text)
