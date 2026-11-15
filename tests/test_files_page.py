@@ -694,7 +694,10 @@ class LiveRunnerTest(FilesBase):
         self.assertIn("Try again in a few minutes", self.page().text)
         self.do(ids=[f"w-{sid}", f"s-{sb}"])
         self.assertTrue((self.data / "code" / str(sid)).is_dir())
+        self.assertTrue(self.s.code.agent.has_live_run(sid))
         self.s.code.agent._runs[sid].closed = True
+        self.assertFalse(self.s.code.agent.has_live_run(sid))
+        self.assertFalse(self.s.code.agent.has_live_run(sid + 1000))
         self.assertFalse(self.store().find(f"w-{sid}").in_use)
 
 

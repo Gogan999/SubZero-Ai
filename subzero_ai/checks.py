@@ -70,7 +70,7 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
                 add(FAIL, "The Claude subscription needs AI_BACKEND=pi",
                     "Set AI_BACKEND=pi in config.env, or turn off Claude subscription under AI providers.")
             elif bridge_logged_in(settings.data_dir):
-                add(OK, "Claude subscription is signed in (Claude Code login found)")
+                add(OK, "Claude subscription is signed in (Claude login found)")
             else:
                 add(FAIL, "Claude subscription isn't signed in",
                     "Sign in under Settings, AI and keys, Claude subscription (or run python -m subzero_ai claude-login).")

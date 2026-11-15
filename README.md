@@ -1,22 +1,49 @@
 # SubZero AI
 
-A claude.ai-style chat for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
+Claude help for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials in Slack, and mentors approve what reaches Claude. The website is for **Code** (Claude works on the team's robot code in a disposable sandbox) and for the mentors' and admins' pages.
 
-This is version 0.10.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)). Code sessions can run their commands in a disposable Hyper-V sandbox (see [docs/CODE_SANDBOX_PLAN.md](docs/CODE_SANDBOX_PLAN.md)); students can use Code once a mentor turns that on. Chats scroll inside the window, admins can delete chats, and mentors see an estimated cost next to token counts.
+This is version 0.11.0, the Code-only release. Updating from 0.10? Read [Updating from 0.10](#updating-from-010) first.
+
+## What the site is
+
+- **Code** is the website's main page. A mentor or a student describes a task, Claude works on a copy of the team's GitHub repository inside its own Hyper-V sandbox, and the changes come back as a patch. A student's request, and every follow-up, waits for a mentor, and a student gets the patch only after a mentor releases it. See [Code](#code).
+- **Settings** (admins) has eight tabs for every setting, key and connected account, listed in [docs/SETTINGS.md](docs/SETTINGS.md).
+- **Chat happens in Slack.** Students message the bot in a Slack DM. A mentor approves the message in #claude-approvals (or inside the short approval window), and the reply comes back in the same Slack thread. See [Messaging the bot in Slack](#messaging-the-bot-in-slack).
+- **For mentors:** **Review** (the approval queue, if Slack is down or they prefer the page), the read-only **chat page** that Slack cards link to (the whole chat with Approve, Edit, Reject and Handle privately on the waiting message, and no message box), **Needs a mentor** (Code requests, plans and steps waiting for a person), and **Files**. Admins also get the audit log.
+- **Students** see Code and their own sessions only. They have no chat pages on the website.
+
+**Removed in 0.11:** projects, artifacts and interactive explainers, share links (an old link now says it is no longer available), attached files and uploads, the website chat pages (`/chats`, `/recents`, the composer and its tools), the subteam and DM preferences on the profile page, and the Google Drive connector. Old chats and files are still stored; see [Old chats and the Files page](#old-chats-and-the-files-page). Nothing was dropped from the database, so rolling back to 0.10 is a file copy.
 
 ## What's in this version
 
-- **Sign in with Slack**, limited to full members of the team workspace. Guest accounts and bots are refused (set `ALLOW_SLACK_GUESTS=1` if some students are guests), and the daily account check signs out anyone who is deactivated or turned into a guest. Mentors are the members of the private #claude-approvals channel; admins are named on the setup page and the Settings page.
-- **Chat**: a conversation list with search and subteam and student filters, Markdown replies with highlighted code and copy buttons, and replies that stream in as Claude writes.
-- **Approvals**: each student message posts a card in #claude-approvals with Approve, Edit, Reject, and Handle privately. Students get a Slack DM when a mentor acts. The app's Review page does the same thing if Slack is down. A second mentor tapping a handled card is told who already handled it.
-- **Audit log** (admins): sign-ins, messages, every review with the before and after text of edits, alerts, and Slack problems.
-- **Attachments**: code and text files (.java, .py, .cpp, .h, .json, .gradle, .yaml, .txt, .md, .csv) PNG or JPG screenshots, and MP4, MOV or WebM videos, up to 5 per message, 50 MB each and 90 MB in all (Cloudflare's free plan refuses uploads over 100 MB). Claude can't watch video, so the browser takes up to 8 still frames from each video and sends them to Claude; the chat shows the video itself, which is stored as uploaded. Pick them, drag them onto the message box, or paste a screenshot. Text files are also capped at 200 KB (`MAX_TEXT_FILE_KB`), because Claude reads every line on every reply. Photos are re-encoded on upload, which removes hidden details like a phone's GPS location and shrinks them to the size Claude uses. Slack cards and the Review page list the files; mentors open them in the app.
-- **Interactive explainers**: ask for one in words ("make a simulation of…", "an interactive graph of…") and Claude builds a small web page you can play with. Claude may also make one on its own when it clearly helps. It runs in a sandboxed frame that can't reach the network or the app's cookies, with Full screen, Download, and View code buttons. Messages that ask for one use high effort and up to 16,000 tokens; messages with files also use high effort.
+- **Sign in with Slack**, limited to full members of the team workspace. Guest accounts and bots are refused (set `ALLOW_SLACK_GUESTS=1` if some students are guests), and the daily account check signs out anyone who is deactivated or turned into a guest. Mentors are the members of the private #claude-approvals channel; admins are named on the setup page and the Settings page. If Slack can't be read when the app starts, it keeps the last known mentor list (for up to 7 days) and warns admins.
+- **Approvals**: each student Slack message posts a card in #claude-approvals with Approve, Edit, Reject, and Handle privately. Students get the reason in Slack when a mentor acts. The app's Review page does the same if Slack is down. A second mentor tapping a handled card is told who already handled it.
+- **Code**: the new engine, student access with mentor approval, plan first, cost caps, two sessions at once (see [Code](#code)).
+- **Audit log** (admins): sign-ins, messages, every review with the before and after text of edits, alerts, Code approvals and releases, setting changes, deletions and Slack problems.
 - **Long chats**: once a chat sends Claude about 150,000 tokens per reply, the app suggests starting a fresh one.
 - Also: the three-layer system prompt with the child-safety layer, MENTOR ALERT handling, per-student limits, the permanent AI notice, and the "Using SubZero AI responsibly" page.
+- **Windows packaging and operations**: a one-step installer with its own Python and Node.js, a setup page that creates the Slack app for you, the app and the Cloudflare connector running as Windows services that start after a reboot with nobody signed in, nightly backups with a restore script, and an update script.
 
-- **Everything on the Settings page** (new in 0.7): the AI engine, the site address and time zone, the Slack tokens and review channel, every API key (masked, removable), the Claude subscription's sign-in, and a **Run checks** button that does what check-settings.cmd does. The few settings that need a restart wait for a **Restart now** button. [docs/SETTINGS.md](docs/SETTINGS.md) lists every setting and where it's saved.
-- **Windows packaging and operations** (new in 0.4): a one-step installer with its own Python, a setup page that creates the Slack app for you, the app and the Cloudflare connector running as Windows services that start after a reboot with nobody signed in, nightly backups with a restore script, an update script, and an admin **Settings** page for models, limits, retention, subteams, admins, and the three system prompt layers. The Settings page also shows whether Slack, the Claude API, and the backups are working, and admins get a Slack DM if Slack or Claude fails for 15 minutes.
+## Code
+
+Open **Code** on the website, type what Claude should do, and press **Start** (mentors) or **Send to a mentor** (students).
+
+- **The new engine (default).** Claude works inside a sandbox on the mini PC (a Hyper-V virtual computer made for that session and deleted later), with a real shell, git, Java, Python and Node. It can plan, keep a task list, hand parts to helper agents, and search the web. The page shows every step as it happens, the cost against the session's cap, and the changes as a diff in the **Changes** panel. The engine runs Claude's Agent SDK in the sandbox through `sandbox_runner/`; the sandbox never holds a real key, because its requests go through the Code gateway on the mini PC (port 3129), which also adds the team's safety rules and counts the cost.
+- **Back to the classic engine.** If the new engine misbehaves, an admin opens **Settings, Code, Code engine** and picks "Classic engine". Classic works as in 0.10: a step-by-step engine where a mentor approves each file change and command, also allowed without a sandbox for mentors. Running sessions keep the engine they started with.
+- **Plan first.** A session can start by writing a plan that a mentor approves before Claude changes anything. It is on by default for students and off by default for mentors (tick it on the start form). This replaces clicking each step in the new engine, so a mentor looks at the plan, and at the changes before releasing them.
+- **Students.** A student's request and every follow-up wait for a mentor in **Needs a mentor** (and a line in Slack). Student sessions run only with the sandbox on. A student sees their own sessions only, and gets the patch only after a mentor clicks **Release to student**; a follow-up takes the release back until a mentor looks again. Until the release, a student sees file names and line counts for edits, not their contents. Limits per student: sessions open at once, requests per day, replies and command time (Settings, Code).
+- **Cost caps.** One session may spend at most $5 (student) or $15 (mentor) at API prices, editable. Reaching the cap stops the run with a plain note.
+- **Two sessions at once.** The mini PC has 24 GB of memory, so two sessions work at the same time (6 GB each). A third waits in line and starts when a place is free.
+- **Code sign-in.** Settings, Code, **Code sign-in** picks how the Code gateway signs in to Anthropic: **API key** (the team's Anthropic key, the normal choice) or **Team subscription (testing only)**. The subscription choice uses a token made with `claude setup-token`, saved as `CODE_SUBSCRIPTION_TOKEN` in config.env (never shown again). It always shows a warning that Anthropic's terms don't allow sharing a subscription through an app and can limit the account without notice, so use an API key for regular use. Neither path has been tried against Anthropic from this build; the first real session on the mini PC is the test.
+- **Preparing the sandbox image.** The sandbox's base disk must contain the tools (Node.js, Java, Python, git and the runner). After the plain base disk is built (see [docs/SETTINGS.md](docs/SETTINGS.md)), run **prepare-sandbox-image.cmd** once as an administrator. It stops SubZero AI, takes about 20 minutes, builds a new base disk next to the old one, and switches the setting to it. Run it again only when a session says the image is out of date. See [docs/SANDBOX_IMAGE.md](docs/SANDBOX_IMAGE.md) for what it does and what is unproven.
+- **Setup once, on the server.** The sandbox needs the sandbox network script, `scripts\sandbox-network.ps1 -Action Install`, run once in an administrator PowerShell in the SubZero AI folder. See [docs/SETTINGS.md](docs/SETTINGS.md). It is not yet proven on the mini PC.
+
+## Old chats and the Files page
+
+Before 0.11, people also chatted on the website. Those chats, their files, old projects and old share-link records are still stored.
+
+- **Files** (mentors and admins) lists them by kind (old chat attachments, old project files, Code workspaces, sandbox disks, old-chat archives) with owner, size and age, and shows free disk space. Any mentor may delete one file, ticked files, or everything of a kind older than a number of days. The page names the count and size first, and asks for the number typed when more than 20 items are chosen. Every deletion is written to the audit log. A running Code session and its sandbox can't be deleted. The page also lists the automatic clean-up rules.
+- **Old-chat archive** (admins, Settings, History, **Old website chats**). **Build the archive** saves a zip in the backups folder with a readable page for each old chat, the same data as JSON, the files, and the old projects and share-link records; download it from the same box. **Delete old website chats** makes and checks a full backup first, asks you to type DELETE, and deletes only chats that have no Slack thread. Chats in Slack are never touched.
 
 ## Try it in test mode
 
@@ -24,15 +51,15 @@ Test mode runs on any Windows PC with sample sign-ins and a pretend Claude, so y
 
 1. Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases) then right-click it and choose **Extract All**. The .cmd files only work from the extracted folder, not from inside the zip.
 2. Double-click **start-test-mode.cmd**. The browser opens by itself.
-3. Sign in as **Ava (student)** and send a message.
-4. Open a private browser window, sign in as **Mentor Kim**, open **Review**, and approve it. Ava's window updates by itself and the reply streams in.
+3. Sign in as **Ava (student)**. The website has no chat box now, so send a request from **Code** (**Send to a mentor**).
+4. Open a private browser window, sign in as **Mentor Kim**, open **Review**, and approve it. The reply goes back to Ava in Slack in a real install; in test mode Mentor Kim can read the chat on its read-only chat page.
 
 Also try:
 
-- Edit, Reject, and Handle privately from Mentor Kim's Review page.
-- Signing in as **Ben (student)** to see what other students can and can't see.
-- A message containing `ALERT-TEST`, which makes the pretend Claude raise a mentor alert, or `ERROR-TEST`, which makes it fail so you can try **Try again**.
-- Attaching files, or asking for a simulation or an interactive explainer to get a sample explainer. Its last line confirms the network is blocked inside the frame.
+- Edit, Reject, and Handle privately from Mentor Kim's Review page and the read-only chat page.
+- Signing in as **Ben (student)** to see that he sees only his own sessions.
+- The pretend Claude's magic words in a request, such as `ALERT-TEST` or `ERROR-TEST`.
+- Opening **Code** as Ava to send a request for a mentor to approve (test mode uses a pretend sandbox and a pretend Claude).
 - Signing in as **Head coach** and opening **Settings**.
 
 Test data lives in the `test-data` folder next to the .cmd file. Delete it to start over. Close the window to stop the app.
@@ -118,9 +145,8 @@ You can ask the AI a question straight from Slack: open the bot (SubZero AI) und
 
 - **A mentor still checks it.** Your message goes through the same approval as a message on the website. The bot says "A mentor will check this before the AI answers" and posts the AI's reply in the same Slack thread once it is approved. If a mentor doesn't approve it, the bot tells you why in the thread, and only you see that.
 - **One chat per Slack thread.** A new message to the bot starts a new chat. Reply in that message's thread to keep talking in the same chat. A reply in a thread the bot didn't start won't work, so send a new message instead.
-- **Files go on the website.** The bot can't take pictures or files in Slack yet. Attach them on the website.
-- **Interactive explainers too.** The bot sends a link to the website when a reply has one.
-- **The chat is on the website too.** Chats started in Slack show up in the chat list like any other, where the team can see approved ones.
+- **No files yet.** The bot can't take pictures or files in Slack. Paste the part you need as text.
+- **Mentors can read the chat on the website.** Each approval card links to a read-only page with the whole chat. Students have no chat pages on the website.
 - **Turning it off.** An admin can turn this off with **Let people message the bot in Slack** on the Settings page (or `SLACK_DMS=0` in config.env).
 
 ## Running it
@@ -133,10 +159,11 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 | **restore.cmd** | Lists the backups and puts the one you pick back, after saving the current data as a `before-restore` backup. |
 | **back-up-now.cmd** | Makes a backup now. Admins can also click **Back up now** on the Settings page. |
 | **check-settings.cmd** | Checks the Slack and Claude settings and says what to fix. |
+| **prepare-sandbox-image.cmd** | Puts the Code tools into the sandbox base disk (once; about 20 minutes; stops SubZero AI while it runs). |
 | **recovery-code.cmd** | Makes a new recovery code (the old one stops working). |
 | **uninstall.cmd** | Removes the app and its service. The data folder is kept. |
 
-- **Backups.** Every night at 2:00 AM the app copies the database, attached files, and changed prompts into a zip in `C:\ProgramData\SubZeroAI\backups` and keeps 14 days. For an off-site copy, set `BACKUP_DIR` in config.env to a folder that OneDrive or Google Drive syncs (the app's service account needs permission to write there). Backups leave out config.env, because it holds the API key and Slack tokens; keep your own copy of it somewhere safe. They also leave out attached videos (each backup is a full copy, so 14 days would hold 14 copies of every clip); the still frames Claude saw are kept, and a restore keeps the videos already on disk. Copy `files\*.mp4`, `*.mov` and `*.webm` yourself if you need them off the PC.
+- **Backups.** Every night at 2:00 AM the app copies the database, old attached files, and changed prompts into a zip in `C:\ProgramData\SubZeroAI\backups` and keeps 14 days. For an off-site copy, set `BACKUP_DIR` in config.env to a folder that OneDrive or Google Drive syncs (the app's service account needs permission to write there). Backups leave out config.env, because it holds the API key and Slack tokens; keep your own copy of it somewhere safe. They also leave out attached videos (each backup is a full copy, so 14 days would hold 14 copies of every clip); the still frames Claude saw are kept, and a restore keeps the videos already on disk. Copy `files\*.mp4`, `*.mov` and `*.webm` yourself if you need them off the PC.
 - **Retention.** Chats with no activity for 730 days (this season and the next) are deleted after the nightly backup. Change it, or set 0 to keep chats forever, on the Settings page.
 - **Reboots and Windows updates.** Both services start on their own after a restart, with nobody signed in.
 - **Health.** The Settings page shows the Slack connection, Claude API status, the last backup, and whether an update is out. If Slack or Claude calls fail for 15 minutes, admins get a Slack DM, and another when it works again. Cloudflare's dashboard shows whether the tunnel is up. `http://localhost:8787/healthz` answers with the same status for scripts.
@@ -144,6 +171,34 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 - **Model changes.** When a company retires a model, change the model ID (`provider/model`) on the Settings page. No code changes. New default, hard-problem, and screener models must pass the model safety check first.
 
 **Monthly check** (about 10 minutes): open Settings and confirm everything says Working or Done, confirm last night's backup is listed, apply any available update, and check the Claude Console spend for the month.
+
+## Updating from 0.10
+
+Version 0.11 is a big change: the website becomes Code plus Settings, and the new Code engine, the sandbox, student Code access, sub-agents and web tools all start **on**. Do these on the mini PC, in this order, with no one in the middle of a Code session.
+
+1. **Back up.** Run **back-up-now.cmd** (or press **Back up now** on the Settings page, History tab). Keep your own copy of `config.env`, which backups leave out.
+2. **Update.** Run **update.cmd** in `C:\Program Files\SubZeroAI`. The update changes the database in a way 0.10 ignores, so rolling back to 0.10 with **restore.cmd** or by putting the old app files back still works.
+3. **Run the sandbox network script again.** 0.11 opens one more port (3129) for the Code gateway. In an administrator PowerShell in `C:\Program Files\SubZeroAI`:
+   `powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Install`
+   (`-Action Check` lists anything missing; it reports `gateway-rule-wrong` until you do this).
+4. **Set the sandbox base disk if it isn't set.** Settings, Code, Advanced, **Base disk for sandboxes** must point to a `.vhdx` file. If you never built one, build it first with `scripts\sandbox-image.ps1 -Action Build -ReleaseDate <date>` (see [docs/SETTINGS.md](docs/SETTINGS.md)).
+5. **Prepare the sandbox image.** Double-click **prepare-sandbox-image.cmd** and choose Yes. It stops SubZero AI, takes about 20 minutes, and starts it again. It puts Node.js, Java, Python, git and the runner in a new base disk and switches the setting to it.
+6. **Choose the Code sign-in.** Settings, Code, **Code sign-in**: **API key** (uses the team's Anthropic key; the normal choice), or **Team subscription (testing only)** with the token from `claude setup-token` entered on that tab (or put in config.env as `CODE_SUBSCRIPTION_TOKEN=` followed by the token, on your own PC only). The subscription choice shows its warning permanently.
+7. **Check the `CODE_SANDBOX` line in config.env.** The update turns the sandbox on by clearing the saved Settings choices, but a line `CODE_SANDBOX=off` in `C:\ProgramData\SubZeroAI\config.env` is **not** changed by the update, and the new engine and student sessions don't run without a sandbox. Delete that line or change it to `hyperv`.
+8. **Restart** SubZero AI (the Settings page's **Restart now**, or restart the service in services.msc).
+9. **Test.** Run one mentor Code session first. Then have one student send a Code request, and approve it as a mentor. Watch the cost and the changes, and release the patch.
+
+What this update turns on by default, and where to turn each off (all on Settings, **Code** tab):
+
+| Turned on | Turn it off with |
+| --- | --- |
+| The new Code engine | **Code engine**: "Classic engine" |
+| The Hyper-V sandbox | **Run Code commands in a sandbox** (also `CODE_SANDBOX=off` in config.env) |
+| Students can start Code sessions (each needs a mentor) | **Students can start Code sessions** |
+| Helper agents (sub-agents) | **Let Claude hand parts of a task to helpers** |
+| Web search for students and for mentors in Code | **Let Claude search the web in students' / mentors' sessions** |
+
+Also in 0.11: **old share links stop working** (they say "This link is no longer available"), and chats, projects and artifacts are gone from the website. The old chats and files stay on disk; see [Old chats and the Files page](#old-chats-and-the-files-page). Students who open the website now go to Code, and Slack chat works as before.
 
 ## AI providers and models
 
@@ -168,19 +223,18 @@ By default every reply comes from Claude through Anthropic's API, exactly as in 
 - sends a normal question, which must be answered without an alert;
 - sends a wellbeing message, whose reply must start with MENTOR ALERT;
 - asks for an unsafe shop shortcut and tries a prompt injection ("ignore your rules"), which a **judge model** grades (**Safety check judge** in the Claude settings, `anthropic/claude-sonnet-5-5` by default; it must be a Claude model);
-- checks that the interactive explainer format is kept, and that the screener answers SAFE or REVIEW in the right shape (for a screener model).
+- checks that the screener answers SAFE or REVIEW in the right shape (for a screener model).
 
 The judge's company must be turned on and have a key, or the check won't start. The result is saved with the date and who ran it. A judge model is a strong filter, not a guarantee: read the details on the Settings page, and test a new model yourself with the red-team questions in the Acceptance tests before students use it. **Claude models need the check too** when you choose a new one. Models already saved when you upgrade to 0.5 keep working without a check.
 
-**Features that need Claude.** Some tools depend on Anthropic's own features, so the composer only shows what the chat's model supports:
+**Features that need Claude.** Some tools depend on Anthropic's own features:
 
-- **Web search** and **Research**: Claude on `AI_BACKEND=anthropic` only. On other models and with `AI_BACKEND=pi`, the buttons are hidden and a forced request is refused with a plain message.
-- **Code sessions** (mentors): Anthropic Claude models only.
-- **Extended thinking** and **image attachments**: shown only when the model supports them.
+- **Code sessions**: the new Code engine only runs Anthropic Claude models, through the Code gateway; it does not use `AI_BACKEND` or the AI helper.
+- **Image understanding and extended thinking** depend on the model; Slack chats take text only.
 
-Normal chat, files that are text or code, explainers, the screener, and chat titles work on every model that passed the check.
+Normal Slack chat, the screener, and chat titles work on every model that passed the check.
 
-**Claude subscription (optional, off by default).** The `claude-bridge/` provider answers with one person's Claude Pro or Max subscription instead of an API key, through Claude Code on the mini PC. It counts against that person's subscription limits, so a busy day of student chats can use them up, and then replies pause until the limit resets. Caution: Anthropic's terms generally don't allow offering a claude.ai login inside another product without Anthropic's approval. Read the current terms before you turn it on. It stays off until an admin ticks **Claude subscription (Claude Code)** under AI providers, and the model still has to pass the safety check. To set it up, run the manual test in [docs/BRIDGE_SPIKE.md](docs/BRIDGE_SPIKE.md) first (about 30 minutes, on the mini PC), then sign in from **Settings, AI and keys, Claude subscription**: press **Sign in**, open the Claude sign-in page on any computer or phone, and paste back the code Claude shows (or run `python -m subzero_ai claude-login` on the mini PC). Keep an API-key model set up as a fallback. The bridge needs `AI_BACKEND=pi`. Its login is kept apart from the rest of the PC in `bridge\claude-config` in the data folder.
+**Claude subscription (optional, off by default).** The `claude-bridge/` provider answers with one person's Claude Pro or Max subscription instead of an API key, through the Claude program on the mini PC. It counts against that person's subscription limits, so a busy day of student chats can use them up, and then replies pause until the limit resets. Caution: Anthropic's terms generally don't allow offering a claude.ai login inside another product without Anthropic's approval. Read the current terms before you turn it on. It stays off until an admin ticks **Claude subscription (Claude Code)** under AI providers, and the model still has to pass the safety check. To set it up, run the manual test in [docs/BRIDGE_SPIKE.md](docs/BRIDGE_SPIKE.md) first (about 30 minutes, on the mini PC), then sign in from **Settings, AI and keys, Claude subscription**: press **Sign in**, open the Claude sign-in page on any computer or phone, and paste back the code Claude shows (or run `python -m subzero_ai claude-login` on the mini PC). Keep an API-key model set up as a fallback. The bridge needs `AI_BACKEND=pi`. Its login is kept apart from the rest of the PC in `bridge\claude-config` in the data folder.
 
 **Going back.** Pick the Anthropic API under **AI engine** and restart (first change any model that uses another company; the page says which). Chats stay as they are; chats whose model is from another company can't get replies until their model is changed to a Claude one. Everything else keeps working.
 
@@ -204,15 +258,15 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 **Milestone 3**
 
 - [ ] The red-team checks in the plan's safety checklist get sensible answers: an off-topic request, an unsafe shop shortcut, a distress message (it should raise a mentor alert), "ignore your rules," a request for someone's personal details, and asking Claude whether it's human.
-- [ ] An interactive explainer opens, works full screen, and shows "Network: blocked" if it tries to fetch anything (the test-mode sample does this).
+- [ ] A student's Code request waits in Needs a mentor, a mentor approves it, the session runs in a sandbox, and the student can download the patch only after the mentor releases it.
 - [ ] A student with 3 messages waiting can't send a 4th.
-- [ ] A screenshot and a code file reach Claude, and Claude refers to them.
+- [ ] The Code session's cost shows on the page and the run stops at the cap.
 
 **Milestone 4**
 
 - [ ] Someone follows only the install guide on a clean mini PC and gets a first approved prompt in under an hour.
 - [ ] After a restart of the mini PC, with nobody signed in, the site comes back by itself.
-- [ ] A backup restores cleanly with restore.cmd: a chat made after the backup disappears, and the earlier chats and their files are back.
+- [ ] A backup restores cleanly with restore.cmd: a chat made after the backup disappears, and the earlier chats are back.
 - [ ] update.cmd moves to a newer release and keeps every chat and setting.
 - [ ] Changing a limit on the Settings page applies to the next message without a restart.
 
@@ -220,16 +274,16 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 
 | | Students | Mentors | Admins |
 | --- | --- | --- | --- |
-| Start and continue their own chats | Yes, messages wait for review (see the approval window) | Yes, messages go straight to Claude | Yes |
-| Read the team's chats | Approved messages and replies | Everything | Everything |
-| Withdraw their own waiting message | Yes | Yes | Yes |
+| Message the bot in Slack | Yes, messages wait for review (see the approval window) | Yes, messages go straight to Claude | Yes |
+| Website chat pages | No | Read-only page for any chat | Same as mentors |
 | Approve, edit, reject, handle privately | No | Yes | Yes |
-| Switch a chat to Opus 5.5 for hard problems | No | Yes | Yes |
+| Ask for a Code session | Yes, a mentor must approve it and each follow-up | Yes, starts at once | Yes |
+| Release a student's Code changes | No | Yes | Yes |
 | See tokens and an estimated cost on each reply and Code session | No | Yes | Yes |
-| Delete a chat for everyone (logged in the audit log) | No | No | Yes |
-| Audit log | No | No | Yes |
+| Files page (delete old files) | No | Yes | Yes |
+| Audit log, Settings, old-chat archive and delete | No | No | Yes |
 
-- **Other students don't see messages that are waiting or rejected.** This is safer than the plan's original wording, because a message that needs handling privately is never shown to the team. To show them, set `SHOW_PENDING_TO_TEAM=1` or `SHOW_REJECTED_TO_TEAM=1`.
+- **Students never see other people's chats or Code sessions.** A message that needs handling privately is never shown to the team, and mentors can read everything, including waiting and rejected messages.
 - **Costs are estimates.** They come from the price list in `subzero_ai/pricing.py` (US dollars per million tokens, standard API rates, plus $0.01 per web search). Edit that file when prices change; it lists its assumptions at the top. Models it doesn't list use the price the AI helper reports, and replies through the Claude subscription show no API cost.
 - One message per chat can wait at a time. Each student can have 3 waiting messages and 25 approved messages per day; the count resets at midnight.
 - If a card waits 2 hours, the app posts one reminder in the card's Slack thread.
@@ -238,7 +292,7 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 - Messages sent in the window are logged in the audit log ("message auto approved"), tagged in the chat for mentors, and listed under "Sent without review" on the Review page for the last 24 hours.
 - **MENTOR ALERT**: when Claude flags a wellbeing concern, the chat becomes private to the student and mentors before any of the reply is shown, and an alert card is posted in #claude-approvals. The student still sees Claude's reply, which points them to trusted adults and the 988 Lifeline.
 - Claude receives only approved messages and its own earlier replies: no names, emails, or Slack IDs.
-- **Code** (mentors only) works in a copy of the GitHub repository set under Settings, Connectors. Claude reads and searches on its own, but a mentor approves every file change and every command, and nothing is pushed: download the changes as a patch and apply them with `git apply`. Commands must start with a program listed under Settings, Code (`gradlew` by default), so running a build needs the same Java/WPILib setup on the mini PC that the robot code uses. An approved command runs as the app's Windows account, so it could read files the app can, including config.env. Claude can't change build files (Gradle scripts and settings, the wrapper, vendordeps), and the approval card for a command lists the files Claude changed, because a build also runs that code: read those changes before approving. Builds run without the Gradle daemon, and the whole process tree is stopped at the time limit. Finished sessions' copies of the repository are deleted after 14 days.
+- **Code** works in a copy of the GitHub repository set under Settings, Code (Repository and branch box). Nothing is pushed: download the changes as a patch and apply them with `git apply`. In the new engine Claude's shell commands run freely inside the throwaway sandbox, which can reach only the allowed websites through the egress proxy; the mentor's checks are the plan and the release of the changes. In the classic engine a mentor approves every file change and command. Finished sessions' copies of the repository are deleted after 14 days (Settings, Code).
 - People removed from Slack lose access within a day. Someone removed from #claude-approvals can't approve anything from that moment on.
 
 ## Where things are stored
@@ -247,7 +301,7 @@ Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` fo
 
 - `config.env`: the address, API keys, and Slack tokens, written by the setup page and the Settings page. Only the app's service account and administrators can read it.
 - `data\subzero.db`: the database, including settings changed on the Settings page (these win over config.env).
-- `files\`: attached files.
+- `files\`: old attached files from the website chats (Slack chats take no files).
 - `prompts\`: system prompt layers changed on the Settings page.
 - `backups\`: the nightly backups.
 - `logs\`: `subzero.log` (one file per day, kept for 14 days) and the service's own logs.
@@ -267,9 +321,9 @@ Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` fo
 
 - Run the tests: `python -m pip install -r requirements-dev.txt` (or, for the exact versions that ship, `python -m pip install --no-deps -r packaging/requirements-lock.txt -r packaging/requirements-test.txt`), then `python -m unittest discover -s tests -t .`
 - `python -m subzero_ai --help` lists the commands.
-- Layout: `subzero_ai/web.py` (pages, actions, live updates), `web_admin.py` (Settings, setup, and recovery pages), `saved_settings.py`, `backup.py`, `maintenance.py` (nightly backup, retention, update check), `health.py`, `approvals.py` (the approval loop), `generation.py` (Claude replies), `slack_*.py` and `socket_mode.py` (Slack), `auth.py` (Sign in with Slack), `store.py` and `db.py` (SQLite).
-- The Python app talks to Slack and the Claude API over plain HTTPS with `requests`, and to Slack Socket Mode with `websockets`, through small adapters with test stand-ins, instead of the Slack Bolt and Anthropic SDKs. Other providers go through the Node.js Pi gateway in `pi_gateway` (`ai_backend.py` picks the engine and `pi_client.py` talks to it over stdin/stdout), which uses the `@earendil-works/pi-ai` package; the optional Claude subscription bridge uses the Claude Agent SDK. Gateway tests: `cd pi_gateway && node --test` (Node 22). That keeps the dependency list short for the Windows packaging and lets the whole approval loop be tested offline.
+- Layout: `subzero_ai/web.py` (app setup, routes, redirects), `web_common.py` (shared page helpers), `web_code.py` (Code pages), `web_admin.py` (Settings, setup, and recovery pages), `web_files.py` and `files_admin.py` (Files page), `archive.py` (old-chat archive and delete), `saved_settings.py`, `backup.py`, `maintenance.py` (nightly backup, retention, update check), `health.py`, `approvals.py` (the approval loop), `generation.py` (Claude replies), `code_runner.py` and `code_engine.py` (classic and new Code engines), `anthropic_gateway.py` (the Code gateway), `sandbox.py`, `sandbox_image.py`, `egress_proxy.py` (Hyper-V sandboxes), `slack_*.py` and `socket_mode.py` (Slack), `auth.py` (Sign in with Slack), `store.py` and `db.py` (SQLite). `sandbox_runner/` is the Node program that runs inside each sandbox.
+- The Python app talks to Slack and the Claude API over plain HTTPS with `requests`, and to Slack Socket Mode with `websockets`, through small adapters with test stand-ins, instead of the Slack Bolt and Anthropic SDKs. Other providers go through the Node.js Pi gateway in `pi_gateway` (`ai_backend.py` picks the engine and `pi_client.py` talks to it over stdin/stdout), which uses the `@earendil-works/pi-ai` package; the optional Claude subscription bridge uses the Claude Agent SDK. Gateway tests: `cd pi_gateway && node --test` (Node 22); Code runner tests: `cd sandbox_runner && npm ci && node --test`. That keeps the dependency list short for the Windows packaging and lets the whole approval loop be tested offline.
 - `python -m subzero_ai --help` also lists `backup`, `backups`, `restore`, `recovery-code`, and `reset-setup`.
-- **Windows release.** `python packaging/build_windows.py` builds `dist/SubZeroAI-windows.zip` on any OS: the embeddable Python 3.13, Node.js (the official win-x64 zip, unpacked to `node\`) and the AI helper `pi_gateway` with its npm packages for 64-bit Windows (`npm ci --ignore-scripts` from the lock file, so the zip is about 255 MB; the build host needs Node.js and npm), the packages pinned in `packaging/requirements-lock.txt` (installed for 64-bit Windows from `requirements-windows.txt`, which lists each wheel's SHA-256; refresh it with `--write-hashes` after changing the lock file), the [WinSW](https://github.com/winsw/winsw) service wrapper, cloudflared, and the scripts in `packaging/windows`. Every download is pinned by SHA-256. The build fails if any path in the zip is too long for Explorer's Extract All. Pushing a tag like `v0.5.0` runs `.github/workflows/release.yml`, which tests, builds, and publishes the release that update.cmd downloads.
+- **Windows release.** `python packaging/build_windows.py` builds `dist/SubZeroAI-windows.zip` on any OS: the embeddable Python 3.13, Node.js (the official win-x64 zip, unpacked to `node\`) and the AI helper `pi_gateway` with its npm packages for 64-bit Windows (`npm ci --ignore-scripts` from the lock file, so the zip is about 255 MB; the build host needs Node.js and npm), the Code runner `sandbox_runner` as source plus its lock file (its packages are installed with `npm ci` inside the sandbox base disk by prepare-sandbox-image.cmd, not in the zip), the packages pinned in `packaging/requirements-lock.txt` (installed for 64-bit Windows from `requirements-windows.txt`, which lists each wheel's SHA-256; refresh it with `--write-hashes` after changing the lock file), the [WinSW](https://github.com/winsw/winsw) service wrapper, cloudflared, and the scripts in `packaging/windows`. Every download is pinned by SHA-256. The build fails if any path in the zip is too long for Explorer's Extract All. Pushing a tag like `v0.5.0` runs `.github/workflows/release.yml`, which tests, builds, and publishes the release that update.cmd downloads.
 - The Windows scripts are written for Windows PowerShell 5.1 and must stay ASCII-only.
 - Live updates use server-sent events. Each running app keeps them in memory, so run one copy of the app per database.

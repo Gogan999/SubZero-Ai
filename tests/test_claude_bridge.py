@@ -262,7 +262,7 @@ class LoginTest(unittest.TestCase):
         (self.tmp / "bridge" / "claude-config" / ".credentials.json").write_text('{"secret": "x"}')
         self.assertTrue(bridge_logged_in(self.tmp))
         results = run()
-        self.assertEqual(results["Claude subscription is signed in (Claude Code login found)"].status, OK)
+        self.assertEqual(results["Claude subscription is signed in (Claude login found)"].status, OK)
         self.assertNotIn("secret", "".join(r.detail for r in results.values()))
 
     def test_check_needs_the_pi_backend(self):

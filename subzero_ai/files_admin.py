@@ -240,12 +240,8 @@ class FileStore:
                        (session_id,)) is not None:
             return True  # a follow-up or a plan waiting for a mentor, or a step waiting to be approved
         agent = getattr(self.code, "agent", None)
-        runs = getattr(agent, "_runs", None)
-        if runs:
-            with getattr(agent, "_lock", nullcontext()):
-                run = runs.get(session_id)
-            if run is not None and not getattr(run, "closed", False):
-                return True  # an idle runner is still holding the sandbox; it is closed after a few minutes
+        if agent is not None and agent.has_live_run(session_id):
+            return True  # an idle runner is still holding the sandbox; it is closed after a few minutes
         return False
 
     def _changes(self, row: sqlite3.Row, folder: Path) -> str:

@@ -6,23 +6,18 @@ change to a template (`subzero_ai/templates/`), the stylesheet
 must follow it. If a change needs something this file does not allow, update
 this file in the same pull request and say why in the PR description.
 
-The standards describe the site as it is today (version 0.4.0, with the
-claude.ai-style sidebar layout). Places where
+The standards describe the site as it is today (version 0.11.0: Code, the mentor
+Review pages, Files and Settings, with a sidebar layout). Places where
 the current code falls short are listed under [Known gaps](#known-gaps) so they
 can be fixed in small, separate PRs. New work must meet the standard even where
 old code does not yet.
 
 ## 1. Principles
 
-1. **Feels like claude.ai.** Students should already know how to use it. Copy
-   claude.ai's layout and interaction patterns (left sidebar with New chat,
-   Chats, Projects, Artifacts, Code, Recents and the account menu; centered
-   thread; a rounded composer with tools on the left and the model and Send on
-   the right; Markdown replies with code blocks) unless a safety feature needs
-   something different. claude.ai features that aren't built yet still get
-   their place in the layout, marked with a **Soon** pill (see
-   [Coming soon](#coming-soon-placeholders)) and listed in
-   `docs/FEATURES_TODO.md`.
+1. **Familiar and plain.** Students should already know how to use it. Use the layout and interaction patterns
+   people know from chat and coding tools (left sidebar, one big box to start, Markdown replies with code blocks)
+   unless a safety feature needs something different. Chatting happens in Slack; the site is Code, the mentors'
+   Review pages, Files and Settings. Don't add a control that doesn't work yet.
 2. **Status is never hidden.** Every student message shows where it stands
    (waiting, approved, edited, rejected, held). Use the inspection tag (see
    [Tags](#tags-message-status)) for this, never color alone.
@@ -38,9 +33,6 @@ old code does not yet.
 6. **No build step.** Plain CSS and plain JavaScript served from `static/`. No
    frameworks, preprocessors, CSS-in-JS, web fonts or CDN assets. The site runs
    on a mini PC behind a tunnel and must load fast and offline-from-the-internet.
-   This rule covers the site's own pages only. Explainer pages that Claude
-   writes may load libraries from the CDNs allowed in `EXPLAINER_CDNS`
-   (`render.py`) inside their sandbox; that is deliberate.
 
 ## 2. Color
 
@@ -94,8 +86,7 @@ Rules:
   focus ring. All current text pairs pass in both themes (lowest is
   `--brand` on `--frost` in dark mode at 5.2:1). Check any new pair before
   merging.
-- The one exception to "no raw colors" is the explainer iframe, which keeps a
-  white background because the page inside it is written for light mode.
+- There is no exception to "no raw colors" now that interactive explainers are gone.
 
 ## 3. Typography
 
@@ -159,13 +150,11 @@ Rules:
 - **App shell** (signed in): `.shell` is a grid of the sidebar and
   `.main-col`. The AI notice and test-mode bar sit at the top of `.main-col`,
   then `main`. The window scrolls; the sidebar is sticky.
-- **Chat pages** (`body.chat-page`, the conversation page) fill the window
-  exactly and the window never scrolls. The header, messages and long-chat
-  warning sit in `.thread-scroll` (`data-scroller`), which scrolls on its own;
-  the composer sits under it and stays at the bottom. The scroller spans the
-  whole column so its scrollbar is at the window's edge, and pads its content
-  in to the 780px reading width. New replies keep it pinned to the bottom only
-  if the reader was already near the bottom.
+- **Session pages** (the Code session) fill the window exactly and the window
+  never scrolls. The transcript sits in a scroller (`.code-scroll`, `data-scroller`) that scrolls
+  on its own, with the follow-up form under it at the bottom. The scroller spans the whole column so its scrollbar is
+  at the window's edge, and pads its content in to the 780px reading width. New steps keep it pinned to the bottom
+  only if the reader was already near the bottom.
 - Side padding is at least 1rem on phones and 1.25rem on wider screens. There
   must never be sideways page scrolling.
 
@@ -179,26 +168,28 @@ here in the same PR.
 `_sidebar.html`, on every signed-in page, top to bottom:
 
 - Brand (hidden on phones, where the mobile bar shows it).
-- `.side-new`: New chat, with a 28px brand-filled circle around the plus icon.
-  This is the sidebar's one brand-filled element.
-- `.side-nav`: Chats (`/recents`), Projects (`/projects`), Artifacts (`/artifacts`), Code. Each row is
-  icon + label, with a `.soon` pill or `.count` pushed right. The current page
-  gets `aria-current="page"` and a `--frost` fill.
-- Mentor tools (mentors only, with an `.side-label` heading): Review with the
-  waiting count, then Audit log and Settings for admins. The approval queue
-  must stay one click away for mentors.
-- Recents (`.chat-list`): the viewer's own chats, newest first, at most 25,
-  then a link to the full Chats page. Pills show Private and "n waiting".
+- `.side-start`: New session, with a 28px brand-filled circle (`.side-plus`) around the plus icon. This is the
+  sidebar's one brand-filled element.
+- `.side-nav` (mentors only): Needs a mentor with a live `.count` (also shown in the tab title), Review with the
+  waiting count, Files, and for admins Audit log and Settings (a `.count.alert` "!" when something needs attention).
+  Each row is icon + label; the current page gets `aria-current="page"` and a `--frost` fill. The approval queue must
+  stay one click away for mentors.
+- Sessions (`.side-sessions`, headed "Sessions" for mentors and "Your sessions" for students): newest first, each with
+  a status pill, then an "All sessions" link. Students see only their own and no other navigation.
 - The account button (`.account`) pinned to the bottom: avatar, name, role.
 
-### Composer tools menu
+### Code home
 
-The tools menu holds `.menu-group` fieldsets: Tools (Web search, Research,
-Extended thinking as checkboxes, each a `.menu-item.toggle` with a
-`.menu-hint` line) and Response style (radios). Tools that are on show as
-`.tool-chip`s beside the button. A reply that searched the web ends with a
-`.sources` disclosure listing the pages, opened in a new tab with
-`rel="noopener noreferrer nofollow"`.
+`code.html`. A "Needs a mentor" section (mentors) above a `.start` block: the title "What should Claude do?", one
+`.composer-box` with the task, a Plan first tick, the model and the Start button (students' says "Send to a mentor"),
+and a `.repo-line` naming the repository and branch. When Code can't start, the block says why in plain words and
+links to the Settings Code tab. Below it, the session list (`#sessions`). Keep the page bare.
+
+### Needs a mentor
+
+`.needs` with a `.needs-list`: one row per thing waiting on a person (a student's request, a plan to approve, a step
+to approve, a follow-up). A row has the title and who and what (`.needs-main`), and how long it has waited
+(`.needs-wait`). The list refreshes itself and updates the sidebar count.
 
 ### Appearance switch
 
@@ -209,27 +200,11 @@ and saves it; without the script the form posts and the page reloads.
 
 ### Menus
 
-Pop-up menus (the account menu, the composer's tools menu) are `<details
+Pop-up menus (the account menu) are `<details
 data-menu>` with a `<summary>` trigger and a `.menu` panel: `--sheet` fill,
 1px `--rule` border, `--radius` corners, no shadow. Items are `.menu-item`
 (links or buttons, icon + label). The script closes an open menu on a click
 outside it or Escape, returning focus to the trigger.
-
-### Coming soon placeholders
-
-A claude.ai feature that isn't built yet can appear in the layout so the site
-matches claude.ai, but it must be impossible to mistake for a working control:
-
-- Mark it with a `.soon` pill ("Soon"): `--muted-bg` fill, `--ink-2` text, a
-  dashed `--field-edge` border. The dashed border is reserved for this.
-- A placeholder in a menu is a `<span class="menu-item"
-  aria-disabled="true">`, not a link or button. A placeholder button uses the
-  `disabled` attribute and a `title` saying it's coming soon.
-- A placeholder in the sidebar links to a "Coming soon" page
-  (`coming_soon.html`, data in `COMING_SOON` in `web.py`) that says what the
-  feature will do and what to use until then.
-- Every placeholder has a row in `docs/FEATURES_TODO.md`. Remove the pill when
-  the feature ships.
 
 ### Icons
 
@@ -245,7 +220,7 @@ fonts or image files.
 
 | Class | Use |
 |---|---|
-| `.button.primary` | The one main action on a screen (New chat, Send, Approve on the queue). At most one per view area. |
+| `.button.primary` | The one main action on a screen (New session, Start, Approve on the queue). At most one per view area. |
 | `.button` (default) | Ordinary actions |
 | `.button.quiet` | Low-priority actions next to content (Withdraw) |
 | `.button.approve` / `.button.reject` | Mentor review actions only |
@@ -303,95 +278,38 @@ punched eyelet showing a student message's status. Rules:
   Pygments via `/assets/code.css`; they must work in both themes.
 - Tables in replies scroll sideways inside themselves.
 
-### Explainers
-
-Interactive explainers sit in an `.explainer` frame with a bar holding the
-label and text-style actions (Full screen, Download, View code). The iframe is
-sandboxed; never relax the sandbox for styling reasons.
-
-### Artifact cards
-
-The Artifacts gallery (`artifacts.html`) is a `.artifact-grid` of
-`.artifact-card`s: a `--sheet` card with the artifacts icon in a 36px
-`--muted-bg` square, the title, a `.chat-meta` line (kind, owner, time,
-Private pill) and a link back to the chat. The title link covers the whole
-card (the focus ring goes around the card); the chat link sits above it so it
-stays clickable. Each artifact gets its own page (`artifact.html`) showing the
-same `.explainer` frame as the chat, taller, under a `.crumbs` link back to the
-gallery.
-
-### Projects
-
-The Projects page reuses the artifact cards (with a `.card-text` description
-line). A project page is `.project-layout`: the project's composer
-(`.composer.big`) and its chat list on the left, and the `.project-side`
-"Project knowledge" card on the right (below on phones under 900px) with the
-instructions, files and, for mentors, the upload form and an "Edit project"
-disclosure. Archiving uses `.button.reject` with `data-confirm`.
-
-### Connector dialogs
-
-"Add files from" in the composer's tools menu opens a modal `<dialog
-class="connector-dialog">`: a `.connector-head` with the title and a close
-`.icon-button`, then the body and `.form-actions`. The GitHub picker has
-`.connector-crumbs` (`.link-button`s, the current folder in bold) over a
-bordered `.connector-list` of 44px `.connector-entry` rows: folder or file
-icon, name, and a `.connector-meta` size on the right. Files that can't be
-added are disabled with the reason; added ones get `aria-pressed="true"` and
-the `--approved` colors. Picked files join the attached files as
-`.chosen-files` chips.
-
 ### Code sessions
 
-A Code session page lists the steps in order (`.code-steps`). The task and a
-mentor's follow-ups are `.code-step.note` boxes (`--frost`); Claude's words are
-plain prose; each tool call is a bordered `.code-step.tool` with a
-`.code-label` (quieter once done) and the reason. A step waiting for approval
-gets the `--pending-edge` border, its diff in `.code-diff` (added lines in the
-approved colors, removed in the rejected colors) or its command in
-`.code-command`, and `.code-review`: a primary approve button and a decline
-form with an optional note. Output sits in a closed `<details
-class="code-output">`. The `.code-status` row shows the status pill and Stop;
-while Claude works the steps redraw every few seconds.
+The session page (`code_session.html`) is a scrolling transcript (`.code-scroll`, one `.code-column`) over a fixed
+follow-up form (`.code-composer`). Steps are in order (`.code-step`). The task and follow-ups are `.note` boxes
+(`--frost`); Claude's words are plain prose; each tool call is a bordered `.code-step.tool` with a `.code-label`
+(quieter once done) and the reason. Helper agents are indented (`.code-agent`), task lists are `.code-todo` with a
+`.todo-mark` per item, and a plan is `.code-step.plan`. A step or plan waiting for approval gets the `--pending-edge`
+border and `.code-review`: a primary approve button and a decline form with an optional note. Commands are in
+`.code-command`, output in a closed `<details class="code-output">`. The header row shows the status pill, the cost
+against the cap, and Stop. The page refreshes itself but never replaces a half-typed follow-up. Students see only
+file names and line counts for edits until a mentor releases the changes.
 
-### Share links
+### Changes panel
 
-The chat header's Share button (`.button.small` with the share icon) opens the
-Share page. Each link is a `.share-link` box (1px `--rule` border, 10px
-corners) with who it's for, a status `.pill` (`ok` working, `pending` waiting,
-`bad` not approved, `unknown` expired or revoked), the read-only URL in a mono
-`.share-url` field with a Copy button (`data-copy-value`), a `.fine` line of
-who asked and when, and `.share-actions`. The mentor queue lists waiting links
-the same way in its own `#shares` panel. The page a link opens has no sidebar
-and its own notice saying it's a read-only copy reviewed by mentors; people
-show as "Student" or "Mentor" with an initial instead of a name or photo.
+`.panel.code-changes`: the session's patch drawn on the page, one `.diff-file` per file with `.diff-name` (mono),
+`.diff-kind` and `.diff-count`, and the lines in `.diff-body` (added lines in the approved colours, removed in the
+rejected colours, with words as well as colour). Long files are cut with a `.diff-cut` note. A mentor's **Release to
+student** and the **Download patch** link sit above it; a student sees the panel only after release.
 
-### Composer
+### Composer boxes
 
-- On a chat page it sits under the scrolling messages (`.thread-scroll`), so
-  it never covers them and needs no fade.
-- One `.composer-box` (14px radius, `--field-edge` border, `--sheet` fill)
-  holds the borderless textarea, the chosen files as removable chips, and the
-  `.composer-bar`. The focus ring goes around the whole box.
-- The bar: on the left, the attach button (plus icon), the tools menu and
-  `.tool-chip`s naming the tools that are on; on the right,
-  the model (a picker for mentors, the model's name for students) and the
-  Send button. Students' Send button says "Send for review". There is no
-  explainer switch: Claude makes an interactive explainer when asked in words
-  or when one would clearly help.
-- Under the box: errors, then the AI reminder note, centered.
-- Attached videos show as a native `<video controls>` (`.file-video`) with the file name under it. The still frames sent to Claude are never shown.
-- The start page uses `.composer.big`: a taller box, not sticky, under a
-  greeting ("Good evening, Ava") and a one-line lede. Nothing else goes below
-  it; keep the page as bare as claude.ai's.
+One `.composer-box` (14px radius, `--field-edge` border, `--sheet` fill) holds the borderless textarea and the
+`.composer-bar`. The focus ring goes around the whole box. It is used for the Code start form and the follow-up form.
+The bar has Plan first and other ticks on the left (`.composer-left`), and the model picker and Send button on the
+right. Under the box: errors, then hints.
 
 ### Notices and banners
 
-- The AI notice above `main` must appear on every page. Don't remove or
-  shrink it below .85rem. It lives in `_notice.html`. On chat pages at 900px
-  and below it moves to the top of the scrolling messages
-  (`.notice-in-thread`, a rounded card) so it scrolls away and leaves room
-  for the chat; above 900px the usual band (`.notice-fixed`) stays on top.
+- The AI notice above `main` lives in `_notice.html`. Don't shrink it below .85rem where it shows (the pages that
+  show Claude's work).
+- The sign-in warning on the Settings Code tab ("Team subscription is for testing only...") uses the pending pair,
+  sits directly under the sign-in choice, and has no close button.
 - The test-mode bar (`.devbar`) uses pending colors so it can't be missed.
 - Inline warnings (long chat) use the pending pair; private-chat notes use the
   held pair.
@@ -402,11 +320,14 @@ Admin pages built from forms (Settings, setup, recovery sign-in) use these:
 
 - `.panel`: a `--sheet` card (`--radius`, 1px `--rule`) for each box, with
   an `h2` and an `id` so links and saves can come back to it (`/settings#bridge`).
-- Settings sections: `.settings-layout` puts the `.settings-nav` menu (links to
+- Settings tabs (Overview, Code, AI and keys, Slack chat review, People, Slack, Site and server, History):
+  `.settings-layout` puts the `.settings-nav` menu (links to
   `#tab-<name>`, the open one marked `aria-current="true"` with the `--frost`
   fill used by the sidebar) beside the `.settings-tab` groups of panels. The
   script shows one group at a time and opens the group holding the box in the
-  address or the first field with a mistake. Without the script every group
+  address or the first field with a mistake. An unsaved-changes warning asks before leaving a tab with edits, one
+  restart banner shows above every tab, and rarely used fields sit in a folded `<details>` "Advanced" box. Without
+  the script every group
   shows in order. At 900px and below the menu is a sticky row of 44px tabs
   under the top bar that scrolls sideways.
 - `.field`: label, control, `.field-hint` and `.field-error`, stacked. Controls
@@ -421,10 +342,19 @@ Admin pages built from forms (Settings, setup, recovery sign-in) use these:
 - Secrets (API keys, tokens) use `type="password"` fields that start empty and
   are never filled back in. A saved one shows "Saved. Leave blank to keep it."
 
+### Files page tables
+
+`files.html` (mentors and admins). Totals per kind and the free disk space, a filter form (kind, owner, older than,
+sort), then one `table.audit.stack.files-table` inside a `.table-wrap`: tick box, name with a `.fine` detail, kind,
+owner, size, age, actions. On phones each cell shows its `data-label` above it. A row in use (a running session) has
+no tick box and says why in hidden text. Deleting goes to a confirm page (`files_confirm.html`) that names the count
+and size, and asks for the number typed when more than 20 items are chosen. The automatic clean-up rules are listed
+at the bottom.
+
 ### Empty states
 
 Every list has an empty state that says what's missing and what to do next
-("No chats yet. Start one with New chat.").
+("No sessions yet. Start one above.").
 
 ## 6. Writing on screen
 
@@ -448,7 +378,7 @@ Target: WCAG 2.2 level AA.
   on every page.
 - **Focus:** use the global `:focus-visible` ring (3px `--focus`, 2px offset).
   Never remove an outline without replacing it with something as visible.
-  Hidden inputs styled as buttons (Attach files) show the ring on the wrapper
+  Hidden inputs styled as buttons (file choosers) show the ring on the wrapper
   with `:focus-within`.
 - **Semantics:** use real elements first (`button`, `a`, `nav`, `main`,
   `label`, lists for lists). Use ARIA only to fill gaps: `aria-current="page"`
@@ -490,7 +420,7 @@ Target: WCAG 2.2 level AA.
 - **Above 900px:** sidebar and thread side by side.
 - **900px and below:** the sidebar hides. A slim `.mobile-bar` shows a menu
   button (44px, its `aria-label` switches between "Open menu" and "Close
-  menu"), the brand and a New chat button. The menu button opens the sidebar
+  menu"), the brand and a New session button. The menu button opens the sidebar
   as a full-screen panel under the bar; Escape closes it. Sidebar rows grow to
   44px tall.
 - **520px and below:** panels like sign-in lose their outer margin.
@@ -546,24 +476,15 @@ Each should be fixed in its own small PR.
 3. **Spacing and type sizes aren't tokens.** Sizes are written as literal
    `rem` values. Once the scale in sections 3 and 4 settles, turn them into
    `--space-*` and `--text-*` tokens.
-4. **Small touch targets.** The × that removes a chosen file is about
-   18×20px and fails the 24px minimum today; fix it first. The code Copy
-   button, explainer actions and `.button.small` pass 24px but are under 44px
+4. **Small touch targets.** The code Copy button and `.button.small` pass 24px but are under 44px
    on phones; enlarge them in the 900px breakpoint.
 5. ~~`100vh` on phones.~~ The shell and sidebar now use `100dvh` with a
    `100vh` fallback.
-6. ~~Tabs aren't full tabs.~~ Fixed: the Team/Mine switch on the Chats page
-   is a `nav` of links with `aria-current`.
+6. ~~Tabs aren't full tabs.~~ Fixed.
 7. ~~No icons.~~ Done: see [Icons](#icons).
 8. **Streaming replies aren't announced.** Screen-reader users get no signal
    that Claude has finished replying. Add a polite live region that says
    "Claude replied" when streaming ends.
-9. **Explainer iframe is always white.** In dark mode a white explainer is
-   bright. Acceptable for now; revisit if explainers learn to read the theme.
-10. **Team name and number are on screen.** `base.html` puts
-    `settings.team_number` in the top-bar brand mark, `login.html` shows
-    "FRC Team {number} {name}" above the title, and `about.html` says
-    "Team {number} students". Replace them with the app's initials in the
-    brand mark, drop the sign-in line, and say "students on the team". Also
-    reword the "team number set like a robot bumper number" comment in
-    `app.css`.
+9. ~~Explainer iframe is always white.~~ Gone with explainers in 0.11.
+10. ~~Team name and number are on screen.~~ Fixed in 0.11: the brand mark is "SZ" and no page shows the team's
+    name or number.

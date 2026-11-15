@@ -241,6 +241,12 @@ class AgentEngine:
         with self._lock:
             return sum(1 for run in self._runs.values() if run.idle and not run.closed and not run.driving)
 
+    def has_live_run(self, session_id: int) -> bool:
+        """True while the session still has a runner that isn't closed (even an idle one holding its sandbox)."""
+        with self._lock:
+            run = self._runs.get(session_id)
+        return run is not None and not run.closed
+
     def begin(self, session_id: int) -> None:
         """The repository is copied: start the first run, or queue it if all places are taken."""
         self._remember_loop()

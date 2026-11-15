@@ -109,16 +109,17 @@ powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Ins
 It creates the internal switch if it's missing, gives the host's adapter for it 10.77.0.1/24 with no gateway, turns
 IP forwarding and IPv6 off on it, sets its network profile to Public, puts it on the private VLAN 100 with 200 in
 promiscuous mode, and adds the firewall rules that block all
-inbound traffic to the sandboxes except the proxy port (`szsandbox-block-tcp-below`, `szsandbox-block-tcp-above`,
+inbound traffic to the sandboxes except the proxy port and the Code gateway port (`szsandbox-block-tcp-below`, `szsandbox-block-tcp-above`,
 `szsandbox-block-udp`, `szsandbox-block-icmp4`, `szsandbox-block-icmp6`, and `szsandbox-block-proto-2`, `-41`, `-47`,
-`-50`, `-51` for IGMP, IPv6 in IPv4, GRE, ESP and AH) and the one that allows the proxy port
-(`szsandbox-allow-proxy`). Other IP protocols are blocked by the default inbound action, which must be Block for the
+`-50`, `-51` for IGMP, IPv6 in IPv4, GRE, ESP and AH) and the two that allow the proxy port (`szsandbox-allow-proxy`) and the Code gateway port
+(`szsandbox-allow-gateway`, 3129 by default). Other IP protocols are blocked by the default inbound action, which must be Block for the
 Public profile; the check reads it. Existing allow rules on the host (File and Printer Sharing, Remote Desktop, games
 and so on) need no change: the blocks on the sandbox adapter take precedence over them. It changes nothing else: other
 adapters, switches, VMs and rules are never touched. The
 app never runs it. `-Action Check` lists anything missing, and `-Action Remove` deletes the sandbox rules and the switch
-(it refuses while a VM still uses the switch). If you change `SANDBOX_SWITCH` or `SANDBOX_PROXY_PORT`, run `-Action
-Install` again with the same `-Switch` and `-ProxyPort`.
+(it refuses while a VM still uses the switch). If you change `SANDBOX_SWITCH`, `SANDBOX_PROXY_PORT` or `SANDBOX_GATEWAY_PORT`, run `-Action
+Install` again with the same `-Switch`, `-ProxyPort` and `-GatewayPort`. **Updating from 0.10 needs this script run
+again**, because version 0.11 opens the gateway port; until then `-Action Check` reports `gateway-rule-wrong`.
 
 `SANDBOX_GUEST_SUDO` (off by default) gives the sandbox's user `sudo` without a password. Turn it on only if students
 need root inside a sandbox. It gives root inside that disposable virtual computer only, never on the mini PC, and it
@@ -132,7 +133,7 @@ A new session waits for a free sandbox, and a new sandbox is refused while the d
 A sandbox is deleted when its Code session finishes, after its time limit, and when no record of it is left. Every
 sandbox is written to the audit log (`sandbox_created`, `sandbox_destroyed`, `sandbox_reaped`, `sandbox_extended`).
 
-**Students' Code sessions (off by default).** With `CODE_STUDENT_ACCESS` on and a Hyper-V sandbox (or the fake one,
+**Students' Code sessions (on by default).** With `CODE_STUDENT_ACCESS` on and a Hyper-V sandbox (or the fake one,
 for tests), students can ask for a Code session. Nothing starts until a mentor approves the request. It shows on the
 Code page under Student requests, and a plain line goes to the approvals channel in Slack. Approving makes the
 session's sandbox and starts Claude. Declining stops the request, and the student sees the mentor's note. If the
@@ -181,12 +182,10 @@ audit log (`code_student_requested`, `code_student_approved`, `code_student_decl
 The page won't switch to the Anthropic API while a model setting uses another company or the Claude subscription
 is turned on. Change those first.
 
-**Mentors' model picker.** When a mentor starts a new chat, the New chat page has a model dropdown with the same list
-as the default-model dropdown above (only models that passed the safety check). Students can't pick a model: the
-chat uses the default model. A mentor can also switch an existing chat to any model on the list from the chat's
-Model menu. If a chat's model later stops being allowed (its key is removed, its company is turned off, or its
-safety check fails or goes out of date), the next reply uses the default model instead. That change is written to the audit log as
-"model_fallback", and the chat's Model menu shows the new model.
+**Models in Slack chats.** Chats in Slack use the default model. Mentors can't pick a model per chat any more, because
+the website no longer has chat pages. If a chat's model stops being allowed (its key is removed, its company is turned
+off, or its safety check fails or goes out of date), the next reply uses the default model instead. That change is
+written to the audit log as "model_fallback". The new Code engine only runs Claude models from the allowed list.
 
 ## API keys (config.env, secret)
 
@@ -270,7 +269,7 @@ The **Connected accounts** box shows Slack (workspace, live connection, Sign in 
 saved and its last four characters), the Claude subscription (signed in or not, with a Sign out button), GitHub and
 the Cloudflare Tunnel's address. **Run checks** runs the same checks as check-settings.cmd and shows the results.
 
-The **Claude subscription** box (under AI and keys) signs Claude Code in from the page. **Sign in** starts
+The **Claude subscription** box (under AI and keys) signs the Claude program in from the page. **Sign in** starts
 `claude auth login --claudeai` on the mini PC with the bridge's own config folder and shows the sign-in address it
 prints. Open it on any device, sign in, and paste the code Claude shows into the box; the page hands the code to the
 waiting program and never saves or logs it. A sign-in nobody finishes stops after 15 minutes. `python -m subzero_ai
@@ -285,12 +284,29 @@ claude-login` on the mini PC still works too. The Cloudflare Tunnel itself is ma
 | `DEV_LOGIN` | Test sign-in lets anyone on the mini PC sign in as anyone. |
 | `SESSION_SECRET` | Made automatically; changing it signs everyone out. |
 
+## Code gateway
+
+With the new Code engine, a sandbox never holds a real key. Its Claude requests go to the Code gateway
+(`subzero_ai/anthropic_gateway.py`) on the host address and `SANDBOX_GATEWAY_PORT` (3129), which checks the sandbox's
+own token, adds the real credential (the API key, or the subscription token), keeps to the allowed models, adds the
+team's safety rules, turns off web tools where they are off, counts the cost against the session's cap, and refuses
+what isn't allowed. It starts only when `CODE_SANDBOX` is `hyperv` and `CODE_ENGINE` is `agent`. The Overview health list
+shows whether it is running.
+
+## Settings that were removed in 0.11
+
+The website no longer has chat, projects, attachments, share links or explainers, so these settings are gone from the
+page. A leftover value in config.env or the database is ignored and never stops the app from starting:
+`MAX_TOKENS_EXPLAINER`, `MAX_TEXT_FILE_KB`, `SUBTEAMS`, `SHOW_PENDING_TO_TEAM`, `SHOW_REJECTED_TO_TEAM`,
+`CONNECTOR_DRIVE_LINKS`, `RESEARCH_FOR_STUDENTS`. The chat tools (web search, research, thinking, styles) are gone with
+the website chat. Slack chats are not affected.
+
 ## Notes added with the sandbox work
 
 - After a model-check suite update, the default and hard-problem models keep working even though their old check result
   is out of date; run the check again to refresh it. A current check that failed still blocks a model.
 - A Code session that has waited for a mentor, or run, for 3 days is stopped and cleaned up by the nightly job.
-- After this update, run `sandbox-network.ps1 -Action Install` once more, which puts the host's adapter on the private
+- After the sandbox update (0.9), run `sandbox-network.ps1 -Action Install` once more, which puts the host's adapter on the private
   VLAN. Until then `-Action Check` reports `host-vlan-missing`, and Create refuses.
 - An existing install that already saved `sandbox_switch` keeps that value: change it to `szsandbox-internal` on the
   Settings page.
@@ -332,3 +348,12 @@ minute) and compares it with that saved value.
 IPv6 inside the guest is not turned off by this step, and the app's cloud-init user-data does not turn it off either.
 The host side is the protection: the sandbox's virtual adapter rules deny all IPv6 (see `isolation_script` in
 `subzero_ai/sandbox.py`), and those rules are not yet tested on the mini PC.
+
+## Preparing the base image (0.11)
+
+The new Code engine needs Node.js, Java, Python, git and the runner inside the base disk. After the plain base disk
+exists (above), double-click **prepare-sandbox-image.cmd** in the SubZero AI folder, or run
+`python -m subzero_ai sandbox-provision` yourself. It stops SubZero AI while it runs (about 20 minutes), builds a new
+base disk next to the old one, checks it, and switches **Base disk for sandboxes** to it. The old disk is kept. A
+session that starts on an image that is too old gets a plain message saying to run this again. Details, and every
+assumption it makes, are in `docs/SANDBOX_IMAGE.md`.

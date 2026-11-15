@@ -1,6 +1,6 @@
 # Sandbox image: the Code tools
 
-Status: built 2026-11, tested offline only (fake PowerShell, fake SSH). It has not been run on a real PC. Read "Not yet
+Status: built 2026-11 (version 0.11.0), tested offline only (fake PowerShell, fake SSH). It has not been run on a real PC. Read "Not yet
 proven on a real PC" before the first run.
 
 The Code engine starts `node /opt/subzero-runner/runner.mjs` inside each sandbox. Installing Node.js, Java and the
@@ -34,7 +34,7 @@ Build` has made the plain base disk and the sandbox network is set up. It calls 
 5. Checks inside the VM: `node --version` (the pinned version), `java -version` (17), `git --version`, `python3
    --version`, and the runner's `--version` (the expected runner and Agent SDK versions) plus `TOOLS_VERSION`.
 6. Runs `provision.sh finish` (removes the builder's sudo rule, cleans apt, runs `cloud-init clean`, removes the SSH host
-   keys, empties `/etc/machine-id`, schedules a power-off), waits until the VM is Off, then `Convert-VHD` turns its
+   keys and every `.ssh` folder, empties `/etc/machine-id`, empties the logs, schedules a power-off), waits until the VM is Off, then `Convert-VHD` turns its
    differencing disk into a standalone dynamic disk next to the old base: `sandbox-base-<TOOLS_VERSION>.vhdx` (a rebuild with
    `--force` adds `-r2`, `-r3`). The disk is made read-only and given the permissions of the old base (SYSTEM and
    Administrators full control, the app's service and `NT VIRTUAL MACHINE\Virtual Machines` read), its SHA-256 goes in

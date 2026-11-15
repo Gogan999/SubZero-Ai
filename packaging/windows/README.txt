@@ -30,6 +30,9 @@ Where things are after installing
   C:\Program Files\cloudflared      the Cloudflare Tunnel connector
 
 Code sandboxes (optional, needs Hyper-V)
+  Updating from 0.10: run scripts\sandbox-network.ps1 -Action Install once more in an administrator
+  PowerShell here (it opens the Code gateway port 3129), then prepare-sandbox-image.cmd. The steps are in
+  README.md under "Updating from 0.10".
   Once the plain base disk is built, double-click prepare-sandbox-image.cmd once. It adds
   Node.js, Java, git and Python to a new base disk and switches the setting to it. Run it again after an update
   only if it says the tools are out of date. The old disk is kept. Details: docs\SANDBOX_IMAGE.md on GitHub.

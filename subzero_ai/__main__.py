@@ -4,7 +4,7 @@
     python -m subzero_ai --test-mode   start with sample sign-ins (and a pretend Claude if there's no API key)
     python -m subzero_ai check         check config.env, Slack, and the Claude API key
     python -m subzero_ai check --model provider/id   run only the model safety check on one model
-    python -m subzero_ai claude-login  sign in the Claude subscription (Claude Code) that claude-bridge/ models use
+    python -m subzero_ai claude-login  sign in the Claude subscription (the Claude program) that claude-bridge/ models use
     python -m subzero_ai backup [LABEL] back up the database, attached files, and prompts now
     python -m subzero_ai backups       list the backups
     python -m subzero_ai restore NAME  put a backup back (stop the app first; "latest" picks the newest)
@@ -189,7 +189,7 @@ def claude_login_tool(settings: Settings, run=None) -> int:
     from .pi_client import bridge_logged_in, claude_cli_path, settings_bridge_env
     cli = claude_cli_path(settings.pi_gateway_script or None)
     if cli is None:
-        print("Couldn't find the Claude Code program in pi_gateway/node_modules. "
+        print("Couldn't find the Claude program in pi_gateway/node_modules. "
               "Install the AI helper's files (npm ci --ignore-scripts in the pi_gateway folder) and try again.")
         return 1
     env = login_env(settings.data_dir)
@@ -198,7 +198,7 @@ def claude_login_tool(settings: Settings, run=None) -> int:
     try:
         code = (run or subprocess.run)([str(cli), "auth", "login", "--claudeai"], env=env).returncode
     except OSError as exc:
-        print(f"Couldn't start Claude Code: {exc}")
+        print(f"Couldn't start the Claude program: {exc}")
         return 1
     if code != 0 or not bridge_logged_in(settings.data_dir):
         print("")
