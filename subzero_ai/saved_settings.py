@@ -265,7 +265,7 @@ class _FormView:
 
 def model_choices_form(form: Mapping[str, Any], section: str) -> Mapping[str, Any]:
     """Model dropdowns post the chosen model, or OTHER_MODEL plus the typed id in `<name>_other`. Returns the form
-    with the typed id in place of OTHER_MODEL, so validate() checks it exactly as a typed box."""
+    with the typed id in place of OTHER_MODEL."""
     overrides = {}
     for f in SECTIONS[section][1]:
         if f.kind == "model" and form.get(f.name) == OTHER_MODEL:
@@ -342,9 +342,9 @@ CHECKED_MODEL_SETTINGS = {"model_default": False, "model_hard": False, "model_sc
 def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
              settings: Settings | None = None, db: Database | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """Check one section's form. Returns (values, errors), keyed by setting name.
-    Pass the current settings so models are checked against the providers that are on and the AI backend.
-    Pass the database to also require the Model safety check for a changed default, hard-problem or screener
-    model (a value that isn't changing is left alone)."""
+    With settings, models are checked against the providers that are on and the AI backend. With the database, a
+    changed default, hard-problem or screener model also needs a passing Model safety check (a value that isn't
+    changing is left alone)."""
     values: dict[str, Any] = {}
     errors: dict[str, str] = {}
     fields = SECTIONS[section][1]

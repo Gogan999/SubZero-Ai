@@ -228,7 +228,7 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_code_steps ON code_steps(session_id, id);
     """,
-    # Version 11: model ids are provider/model, so bare claude-... ids become anthropic/claude-...
+    # Version 11: bare claude-... model ids become anthropic/claude-...
     """
     UPDATE conversations SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
     UPDATE messages SET model = 'anthropic/' || model WHERE model LIKE 'claude-%';
@@ -252,7 +252,7 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_model_checks_model ON model_checks (model, checked_at);
     """,
     # Version 13: messages sent to the bot in Slack. Each Slack thread is one chat; each Slack message is
-    # remembered so a repeated delivery isn't submitted twice.
+    # remembered, and a repeated delivery is ignored.
     """
     CREATE TABLE slack_threads (
         conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
@@ -271,7 +271,7 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_slack_dm_messages_message ON slack_dm_messages (message_id);
     """,
     # Version 14: the sandbox each Code session's commands run in (sandbox.py). A row is kept after the sandbox is
-    # deleted, so there is a record of when it was made and why it went.
+    # deleted, with when it was made and why it went.
     """
     CREATE TABLE sandbox_sessions (
         id INTEGER PRIMARY KEY,

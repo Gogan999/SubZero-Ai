@@ -137,8 +137,8 @@ def load_system_prompt(settings: Settings) -> str:
 
 def build_context(rows, up_to_id: int, files: dict[int, list[dict]] | None = None) -> list[dict]:
     """Messages Claude should see: approved student messages (with their attachments, given as content
-    blocks in files) and finished replies, in order. Consecutive messages from the same side are merged
-    so the turns alternate."""
+    blocks in files) and finished replies, in order. Consecutive messages from the same side are merged into one
+    turn."""
     files = files or {}
     out: list[dict] = []
     for m in rows:

@@ -42,7 +42,7 @@ Reply with one line: SAFE, or REVIEW: reason."""
 def screen_body(text: str) -> str:
     """The message as the screener is shown it, cut to length and wrapped in its tag."""
     body = text if len(text) <= MAX_SCREEN_CHARS else text[:MAX_SCREEN_CHARS] + "\n[message cut off here]"
-    body = body.replace("<", "&lt;")  # escapes < so the text can't close the <message> tag
+    body = body.replace("<", "&lt;")  # escapes <
     return f"<message>\n{body}\n</message>"
 
 

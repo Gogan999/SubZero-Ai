@@ -112,10 +112,10 @@ class SandboxImageScriptTest(unittest.TestCase):
         body = function_body(script_text(), "New-BootMenu")
         self.assertIn("'for k in /vmlinuz-*; do set sandbox_kernel=$k; done'", body)
         self.assertIn("'for i in /initrd.img-*; do set sandbox_initrd=$i; done'", body)
-        # The variables are cleared first, so an empty glob leaves nothing from an earlier run in them
+        # The variables are cleared first
         self.assertIn('"set sandbox_kernel="', body)
         self.assertIn('"set sandbox_initrd="', body)
-        # The search line comes first, so the root is set before the glob runs
+        # The search line comes before the glob
         self.assertLess(body.index("$SearchLine,"), body.index("for k in /vmlinuz-*"))
         self.assertLess(body.index("for k in /vmlinuz-*"), body.index("menuentry 'sandbox'"))
         # No double-quoted line holds one of GRUB's $variables
@@ -307,7 +307,7 @@ class SandboxImageDocsTest(unittest.TestCase):
     def test_the_block_is_honest_about_ipv6(self):
         block = self.block()
         self.assertIn("IPv6", block)
-        # The app's cloud-init user-data does not disable IPv6 today; the block must not claim it does
+        # The app's cloud-init user-data does not disable IPv6 today, and the block doesn't claim it does
         self.assertNotIn("user-data disables", block)
         self.assertIn("does not", block)
 

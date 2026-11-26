@@ -1,6 +1,6 @@
 """Connectors: add files to a message from the team's GitHub repository or from a Google Drive link.
 
-The files are fetched on the mini PC when the message is sent and stored like any attachment, so they show on the
+The files are fetched on the mini PC when the message is sent and stored like any attachment: they show on the
 review card and reach Claude only after the message is approved.
 
 GitHub: an admin names one repository (and, for a private one, a read-only token) in Settings, and everyone can

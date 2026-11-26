@@ -139,8 +139,8 @@ KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google
 
 def settings_context(s: Services, errors: dict[str, str] | None = None,
                      submitted: dict[str, str] | None = None, env_section: str = "") -> dict[str, Any]:
-    """Everything the Settings page shows. `env_section` names a config.env section whose save failed, so
-    `errors` and `submitted` belong to it instead of the database sections."""
+    """Everything the Settings page shows. `env_section` names a config.env section whose save failed; `errors` and
+    `submitted` then belong to it instead of the database sections."""
     db_errors, db_submitted = (None, None) if env_section else (errors, submitted)
     sections = []
     for key, (title, fields) in saved_settings.SECTIONS.items():
@@ -365,7 +365,7 @@ def refresh_model_names(s: Services) -> None:
 
 
 def use_new_keys(s: Services) -> None:
-    """Hand the saved API keys to the running AI client, so they work without a restart."""
+    """Hand the saved API keys to the running AI client."""
     set_keys = getattr(s.claude, "set_keys", None)
     if set_keys is not None:
         set_keys(provider_keys(s.settings))
@@ -584,7 +584,7 @@ async def save_env_section(request: Request, viewer: Viewer) -> Response:
 
 @page(require="admin")
 async def restart_app(request: Request, viewer: Viewer) -> Response:
-    """Restart the app so config.env changes take effect. The Windows service starts it again in a few seconds."""
+    """Restart the app to apply config.env changes. The Windows service starts it again in a few seconds."""
     s = services(request)
     restart = request.app.state.request_restart
     if restart is None:

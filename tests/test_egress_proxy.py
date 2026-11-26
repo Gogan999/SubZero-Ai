@@ -1,6 +1,6 @@
 """The sandboxes' egress proxy (subzero_ai/egress_proxy.py), with real sockets on 127.0.0.1. The DNS lookup and the
 connection to the internet are replaced by fakes: the proxy is told a public address and is connected to a local
-upstream instead, so nothing leaves this computer. The tests check what the proxy allows, refuses, logs and audits."""
+upstream instead. The tests check what the proxy allows, refuses, logs and audits."""
 
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ class ProxyCase(unittest.IsolatedAsyncioTestCase):
         return await asyncio.open_connection("127.0.0.1", self.upstream_port)
 
     async def start_proxy(self, **overrides) -> EgressProxy:
-        # The test client connects from 127.0.0.1, so every sandbox name is told it belongs to 127.0.0.1
+        # Every sandbox name belongs to 127.0.0.1, where the test client connects from
         options = dict(tokens=self.tokens, db=self.db, host="127.0.0.1", port=0, allowed_hosts=ALLOWED,
                        allowed_ports=(443,), resolver=self._resolve, connector=self._connect,
                        local_addresses=LOCAL_ADDRESSES, head_seconds=2, resolve_seconds=2, connect_seconds=2,
@@ -652,8 +652,8 @@ class FakePeerWriter:
 
 
 class SandboxAddressTest(ProxyCase):
-    """A login belongs to one sandbox, so the connection must come from that sandbox's own address. A connection from
-    any other address is refused with 403 before anything is looked up or connected."""
+    """A connection must come from its sandbox's own address. A connection from any other address is refused with
+    403 before anything is looked up or connected."""
 
     async def test_a_connection_from_another_address_is_refused_before_any_lookup(self):
         await self.start_proxy(address_for=lambda name: "10.77.0.11")

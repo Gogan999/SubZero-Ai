@@ -453,8 +453,9 @@ class FakeSandbox:
 
 def proxy_env(name: str, token: str, host: str, port: int) -> dict[str, str]:
     """The environment that lets a command in a sandbox reach the internet through the egress proxy
-    (egress_proxy.py). It holds the token, so the result is never logged, audited or shown. Java and Gradle get their
-    proxy settings as JVM options, with an empty Basic-scheme override so Java sends the login for the HTTPS tunnel."""
+    (egress_proxy.py). It holds the token; the result is never logged, audited or shown. Java and Gradle get their
+    proxy settings as JVM options, including an empty Basic-scheme override that lets Java send the login for the
+    HTTPS tunnel."""
     url = f"http://{name}:{token}@{host}:{port}"
     java = (f"-Dhttps.proxyHost={host} -Dhttps.proxyPort={port} -Dhttps.proxyUser={name} "
             f"-Dhttps.proxyPassword={token} -Djdk.http.auth.tunneling.disabledSchemes=")
@@ -1481,14 +1482,14 @@ class HyperVSandbox:
     def _make(self, name: str, slot: int) -> SandboxHandle:
         try:
             child, seed = self._child(name), self._seed(name)
-            self.disks_dir.mkdir(parents=True, exist_ok=True)  # made by the app itself
+            self.disks_dir.mkdir(parents=True, exist_ok=True)
             self.vm_dir.mkdir(parents=True, exist_ok=True)
             self._stage_seed(name, slot)
             self._ps(new_vhd_script(child, self.base_image, self.disk_gb))
             self._ps(new_vm_script(name, child, self.switch, self.memory_mb, self.cpus, self.vm_dir))
             self._ps(isolation_script(name, slot))
             check_adapters(self._ps(adapters_script(name)), self.switch)
-            check_vm_vlan(self._ps(vm_vlan_script(name)))  # checks the VLAN before the start; a wrong VLAN destroys the VM unstarted
+            check_vm_vlan(self._ps(vm_vlan_script(name)))  # before the start: a wrong VLAN destroys the VM unstarted
             self._ps(seed_disk_script(seed, self._staging(name)))
             self._ps(attach_seed_script(name, seed))
             self._ps(start_script(name))
@@ -1694,8 +1695,8 @@ class SandboxManager:
         return self.settings.code_sandbox.strip().lower() not in OFF_VALUES
 
     def backend(self, kind: str) -> SandboxBackend:
-        """The one backend of this kind that everyone shares. It is rebuilt only when the settings it is built from, or the
-        factory, change."""
+        """The one backend of this kind that everyone shares. It is rebuilt only when the settings it is built from, or
+        the factory, change."""
         key = (self.backend_factory, backend_fingerprint(self.settings, kind))
         with self._state_lock:
             cached = self._backends.get(kind)

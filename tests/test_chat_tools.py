@@ -33,7 +33,7 @@ class ScrollingChatTest(ChatTest):
         self.assertRegex(page, r'<body class="[^"]*\bchat-page\b')
         scroller = page.index("data-scroller")
         self.assertLess(scroller, page.index("data-thread"))
-        # The composer sits outside the scrolling box, so it stays at the bottom of the window
+        # The composer sits outside the scrolling box
         self.assertGreater(page.index("data-composer"), page.index("</ol>"))
         # The AI notice is in both places; CSS shows the fixed one on wide screens and the in-thread one on phones
         self.assertEqual(page.count("You're chatting with an AI, not a person."), 2)

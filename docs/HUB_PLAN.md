@@ -219,8 +219,12 @@ Default permissions:
   - "Clock-in opens at 3:15" outside the window
 - **The QR code** links to `/timeclock/k/<kiosk>/<code>`. The code is an HMAC of the kiosk's secret and the
   current 30-second slot, and the current and previous slots are accepted. A photo of the code stops
-  working within a minute. The phone needs to be signed in to the Hub (it stays signed in). The page then
-  clocks the person in, or out if they're already in, and shows a big confirmation.
+  working within a minute. The page clocks the person in, or out if they're already in, and shows a big
+  confirmation.
+- **Sign-in for scans:** a Camera scan always opens in Safari, so the person must be signed in to the Hub in
+  Safari. A Hub icon added to the home screen keeps its own, separate sign-in. Sign-ins last 14 days and renew on
+  every visit (the existing session cookie). If someone isn't signed in, the scan goes through Sign in with Slack and
+  then finishes clocking them in.
 - **The QR image** is made in the browser with a small pinned JavaScript library, or on the server with
   `segno`, which is pure Python. Either is pinned by SHA-256 like everything else in the Windows build.
 - **Laptop setup:** Edge or Chrome in kiosk mode, started when Windows starts, with sleep turned off. Any

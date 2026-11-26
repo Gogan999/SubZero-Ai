@@ -420,7 +420,7 @@ _RUNNING_LOCK = threading.Lock()
 
 
 class _RunningCommand:
-    """A command that is running now, so a mentor's Stop can find and kill it."""
+    """A command that is running now, looked up by a mentor's Stop."""
 
     def __init__(self, proc: subprocess.Popen):
         self.proc = proc
@@ -709,8 +709,8 @@ class CodeRunner:
                             "finish one first.")
 
     def _check_daily_limit(self, user_id: int) -> None:
-        """Students' requests (new sessions and follow-ups) in the last 24 hours, counted from the audit log, so a
-        declined request still counts."""
+        """Students' requests (new sessions and follow-ups) in the last 24 hours, counted from the audit log, declined
+        ones included."""
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")
         used = self.db.one("SELECT COUNT(*) AS n FROM audit_log WHERE actor_id = ? AND created_at >= ? AND action IN "
                            "('code_student_requested', 'code_student_followup_requested')", (user_id, cutoff))["n"]
@@ -998,7 +998,7 @@ class CodeRunner:
                     status = "done"
                 except ToolProblem as exc:
                     output, status, error = str(exc), "error", True
-                # Keeps the status of a step a Stop already marked stopped.
+                # Leaves a step that a Stop already marked stopped as it is.
                 stopped = not self.db.execute(
                     "UPDATE code_steps SET status = ?, output = ?, finished_at = ? WHERE id = ? AND status = 'running'",
                     (status, output, utcnow(), step["id"])).rowcount
@@ -1062,8 +1062,7 @@ class CodeRunner:
         is made with a fresh copy of the host's repository, which already has every approved change."""
         if self.get(session_id)["status"] == "stopped":
             raise SandboxError("The session was stopped.")
-        # One session at a time here (so two commands can't each make a sandbox); the manager's lock is not held
-        # while the VM boots.
+        # One session at a time here; the manager's lock is not held while the VM boots.
         with self.sandboxes.session_lock(session_id):
             row = self.sandboxes.live_for_session(session_id)
             if row is not None:
@@ -1301,8 +1300,8 @@ def build_system_prompt(*, student: bool, sandboxed: bool, free_rein: bool, comm
 
 def prune_workspaces(db: Database, data_dir: Path, days: int = KEEP_COPIES_DAYS) -> int:
     """Delete the repository copies of sessions that finished more than `days` ago (two copies of the repository
-    each, plus build output). The steps and transcript stay, so the session can still be read. Sessions left
-    waiting, running or preparing for STUCK_SESSION_DAYS are stopped first. Returns how many copies were deleted."""
+    each, plus build output). The steps and transcript stay. Sessions left waiting, running or preparing for
+    STUCK_SESSION_DAYS are stopped first. Returns how many copies were deleted."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
     removed = prune_stuck_workspaces(db, data_dir)
     for row in db.all("SELECT id FROM code_sessions WHERE status IN ('done', 'stopped', 'failed') "
@@ -1320,7 +1319,7 @@ def prune_workspaces(db: Database, data_dir: Path, days: int = KEEP_COPIES_DAYS)
 
 def prune_stuck_workspaces(db: Database, data_dir: Path, days: int = STUCK_SESSION_DAYS) -> int:
     """Stop sessions that have sat waiting, running or preparing for `days` days, and delete their copies.
-    The database rows stay, so the session can still be read."""
+    The database rows stay."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
     removed = 0
     for row in db.all("SELECT id FROM code_sessions WHERE status IN ('awaiting_approval', 'preparing', 'running', "

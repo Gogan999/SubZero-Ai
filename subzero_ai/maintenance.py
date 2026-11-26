@@ -149,7 +149,7 @@ class Nightly:
             except Exception as exc:
                 log.exception("Backup failed")
                 self.db.set_kv("last_backup_error", f"{utcnow()} {exc}")
-                # Records the failed attempt, so the next try is tomorrow.
+                # Records the failed attempt; the next try is tomorrow.
                 self.db.set_kv("last_backup_at", utcnow())
                 self.db.set_kv("last_backup_ok", "0")
                 self.db.audit("backup_failed", actor_id=None, details={"error": str(exc)})

@@ -255,7 +255,7 @@ class FakeKeygen:
 
 class FakeHost:
     """Stands in for PowerShell and SSH. Records every script and command, in order, in `events`; never runs anything.
-    The seed's files are copied out of the staging folder when the seed script runs, so tests can read them."""
+    The seed's files are copied out of the staging folder into `seed_files` when the seed script runs."""
 
     def __init__(self, adapters: str = GOOD_ADAPTERS, vms: str = "[]", ssh_codes: dict[str, int] | None = None,
                  ssh_fail_first: int = 0, network: str | Exception = PASSING_NETWORK, vlan: str = GOOD_VLAN,

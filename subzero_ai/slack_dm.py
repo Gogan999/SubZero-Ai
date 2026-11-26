@@ -132,7 +132,7 @@ def _inline(line: str) -> str:
             return _SENTINEL.format(len(links) - 1)
 
         piece = escape(_LINK.sub(keep_link, piece))
-        # bold first (set aside so its stars aren't taken for italics), then italics, then bold in Slack's form
+        # bold first (set aside with markers), then italics, then bold in Slack's form
         piece = _BOLD.sub(lambda m: "\x01" + (m.group(1) or m.group(2)) + "\x02", piece)
         piece = _ITALIC.sub(r"_\1_", piece).replace("\x01", "*").replace("\x02", "*")
         for number, value in enumerate(links):
@@ -310,7 +310,7 @@ class SlackDMs:
                                                    "reply in a thread) to start a new chat.")
                     return
         except Exception:
-            # Nothing was submitted: forgets the message so Slack's retry is handled.
+            # Nothing was submitted: forgets the message, and Slack's retry is processed as new.
             log.exception("Couldn't check a Slack direct message")
             self.store.release_dm_event(channel, ts)
             await self._say(channel, root, "Something went wrong on my side. Try again in a minute.")

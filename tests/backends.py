@@ -1,8 +1,8 @@
-"""Run the same tests against each AI backend. The approval flow must not care which engine answers.
+"""Run the same tests against each AI backend.
 
 Backends: "fake" (FakeClaude directly, today's behavior), "anthropic" (the real ClaudeClient over a fake
 requests.Session) and "pi" (the real PiClient over tests/fake_pi_gateway.py in its "claude" mode). In the last two,
-every reply is still FakeClaude's own scripted logic, carried over that backend's wire format, so one set of magic
+every reply is still FakeClaude's own scripted logic, carried over that backend's wire format, and one set of magic
 words (ALERT-TEST, SCREEN-FLAG, ...) drives all three.
 
 Use `add_variants(globals(), SomeTest, ...)` at the end of a test module. It adds `SomeTestAnthropic` and
@@ -199,8 +199,7 @@ class BackendVariant:
 
 def add_variants(namespace: dict, *classes: type, fake_only: dict[str, set[str]] | None = None) -> None:
     """Add an Anthropic and a Pi copy of each class to the module. `fake_only` lists, by class name, tests that
-    build their own FakeClaude subclass to inject behavior; those make no sense on another backend, so the copies
-    leave them out."""
+    build their own FakeClaude subclass to inject behavior; the copies leave those out."""
     for cls in classes:
         for suffix, backend in VARIANTS.items():
             skipped = {name: None for name in (fake_only or {}).get(cls.__name__, ())}

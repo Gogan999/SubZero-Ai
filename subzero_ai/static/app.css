@@ -255,7 +255,7 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .artifact-card:hover { background: var(--frost); }
 .artifact-mark { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: var(--muted-bg); color: var(--brand); }
 .artifact-title { font-weight: 650; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
-/* The title link covers the whole card; the chat link sits above it so both can be clicked */
+/* The title link covers the whole card; the chat link sits above it */
 .artifact-title::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
 .artifact-title:focus-visible { outline: none; }
 .artifact-card:has(.artifact-title:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
