@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Phone setup · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  {% include "timeclock/_nav.html" %}
+  <h1>Phone setup</h1>
+  <p class="lede">With a Shortcut on your iPhone or iPad, you're clocked out when you leave the building, and an NFC sticker by the door (iPhone only) can clock you in or out with a tap.</p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+
+  <section class="panel" aria-labelledby="key-title">
+    <h2 id="key-title">1. Make a key for this phone</h2>
+    {% if new_key %}
+    <div class="flash" id="new-key" role="status">
+      <p><strong>Your key.</strong> Copy it into the Shortcut now. It isn't shown again.</p>
+      <p class="mono copyable">{{ new_key }}</p>
+    </div>
+    {% endif %}
+    <form class="inline-role" method="post" action="/timeclock/phone/keys">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="visually-hidden" for="label">Which device</label>
+      <input id="label" name="label" maxlength="60" placeholder="My iPhone">
+      <button class="button small primary" type="submit">Make a key</button>
+    </form>
+    {% if keys %}
+    <ul class="who-in">{% for k in keys %}<li>{{ k.label }}<span class="fine">last used: {{ k.used }}</span>
+      <form method="post" action="/timeclock/phone/keys/{{ k.id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit" data-confirm="Turn off this key?">Turn off</button></form></li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="shortcut-title">
+    <h2 id="shortcut-title">2. Make the Shortcut</h2>
+    <ol class="steps">
+      <li>Open the <strong>Shortcuts</strong> app and tap <strong>+</strong>. Name it <strong>Time Clock</strong>.</li>
+      <li>Add the action <strong>Get Contents of URL</strong> and set the URL to <span class="mono copyable">{{ api_url }}</span></li>
+      <li>Tap the arrow on the action. Set <strong>Method</strong> to <strong>POST</strong>.</li>
+      <li>Under <strong>Headers</strong>, add <span class="mono">Authorization</span> with the value <span class="mono">Bearer</span>, a space, then your key.</li>
+      <li>Under <strong>Request Body</strong>, choose <strong>JSON</strong> and add a text field <span class="mono">event</span> with the value <span class="mono">leave</span>.</li>
+    </ol>
+  </section>
+
+  <section class="panel" aria-labelledby="auto-title">
+    <h2 id="auto-title">3. Run it when you leave</h2>
+    <ol class="steps">
+      <li>In Shortcuts, open <strong>Automation</strong> and tap <strong>+</strong>.</li>
+      <li>Choose <strong>Leave</strong>, pick the school's location, and choose <strong>Run Immediately</strong>.</li>
+      <li>Pick the <strong>Time Clock</strong> shortcut.</li>
+    </ol>
+    <p class="field-hint">You're clocked out at the time you left, a few minutes after your phone notices. Scanning the kiosk in that time keeps you clocked in. Leaving school earlier in the day does nothing if you aren't clocked in.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="nfc-title">
+    <h2 id="nfc-title">Optional: an NFC sticker (iPhone)</h2>
+    <p>Duplicate the shortcut, change <span class="mono">leave</span> to <span class="mono">nfc</span>, and add an <strong>NFC</strong> automation that scans the sticker by the door and runs it with <strong>Run Immediately</strong>. Each tap clocks you in or out. A home-screen button works the same way with <span class="mono">toggle</span>.</p>
+  </section>
+</section>
+{% endblock %}

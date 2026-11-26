@@ -203,6 +203,7 @@ class Services:
     slack_factory: Callable[[str], Any] = SlackWebApi
     claude_factory: Callable[[str], Any] = ClaudeClient
     sandboxes: SandboxManager | None = None  # where Code sessions' commands run (sandbox.py)
+    slack_router: Any = None  # hub.router.SlackRouter: DMs, buttons and the Home tab for every module
 
     def capabilities(self, model: str) -> Capabilities:
         """What this model can do with the backend in use: the one place templates and routes ask."""
@@ -253,7 +254,9 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
         interactions.dms = svc.dms = dms
         runner.on_reply, runner.on_reply_done = dms.on_reply, dms.on_reply_done
         approvals.on_decided = dms.on_decided
-        interactions.router = SlackRouter(svc)
+    svc.slack_router = SlackRouter(svc)
+    if slack is not None:
+        interactions.router = svc.slack_router
     return svc
 
 
@@ -624,7 +627,9 @@ async def home(request: Request) -> Response:
     tools = hub_modules.tools_for(viewer)
     if len(tools) <= 1:
         return RedirectResponse(tools[0].href if tools else "/chats", status_code=303)
-    return render(request, "hub_home.html", viewer, tools=tools)
+    s = services(request)
+    cards = [card for module in hub_modules.installed() if (card := module.home_card(s, viewer))]
+    return render(request, "hub_home.html", viewer, tools=tools, cards=cards)
 
 
 async def login_page(request: Request) -> Response:
@@ -1693,6 +1698,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
             loops.append(asyncio.create_task(_every(86400, s.approvals.check_accounts, stop, first_delay=600)))
             loops.append(asyncio.create_task(_every(60, s.health.check, stop, first_delay=30)))
             loops.append(asyncio.create_task(_every(60, s.nightly.tick, stop, first_delay=20)))
+            loops.append(asyncio.create_task(_every(60, lambda: hub_modules.tick_all(s), stop, first_delay=15)))
             loops.append(asyncio.create_task(_every(86400, lambda: check_for_update(settings, s.db), stop,
                                                     first_delay=120)))
             if settings.socket_mode_enabled and isinstance(s.slack, SlackWebApi | FakeSlack):
@@ -1774,6 +1780,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/audit", audit_page),
         *admin_routes,
         *people_routes,
+        *hub_modules.all_routes(),
         *code_routes,
         Route("/about", about_page),
         Route("/healthz", health),

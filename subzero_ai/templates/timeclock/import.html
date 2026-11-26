@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Import time · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page">
+  {% include "timeclock/_nav.html" %}
+  <h1>Import time</h1>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if not preview %}
+  <form class="panel" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="field">
+      <label for="file">CSV file</label>
+      <input id="file" name="file" type="file" accept=".csv,text/csv" required aria-describedby="file-hint">
+      <p class="field-hint" id="file-hint">The first row needs headings: one for the person (Slack ID, Email or Name), one for Clock in and one for Clock out. A separate Date column works too. People are matched to everyone who has signed in to {{ settings.app_name }}.</p>
+    </div>
+    <div class="form-actions"><button class="button primary" type="submit">Preview</button></div>
+  </form>
+  {% else %}
+  <p class="lede">{{ preview.ready }} of {{ preview.rows|length }} rows are ready to import. Columns used: {{ preview.columns.person }}, {{ preview.columns['in'] }}, {{ preview.columns.out }}{% if preview.columns.date %}, {{ preview.columns.date }}{% endif %}.</p>
+  {% if preview.unmatched %}<p class="form-error">Not matched (ask them to sign in once, then import again): {{ preview.unmatched|join(', ') }}</p>{% endif %}
+  <div class="form-actions">
+    <form method="post" action="/timeclock/import/confirm"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button primary" type="submit" {% if not preview.ready %}disabled{% endif %}>Import {{ preview.ready }} entries</button></form>
+    <form method="post" action="/timeclock/import/cancel"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button quiet" type="submit">Start over</button></form>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th scope="col">In the file</th><th scope="col">Person</th><th scope="col">Time</th><th scope="col" class="num">Hours</th></tr></thead>
+      <tbody>
+        {% for r in preview.rows[:500] %}
+        <tr{% if r.problem %} class="flagged"{% endif %}><td>{{ r.who }}</td><td>{{ r.name or '—' }}</td><td>{{ r.shown or r.problem }}</td><td class="num">{{ r.hours or '' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if preview.rows|length > 500 %}<p class="fine">Showing the first 500 rows.</p>{% endif %}
+  {% endif %}
+</section>
+{% endblock %}

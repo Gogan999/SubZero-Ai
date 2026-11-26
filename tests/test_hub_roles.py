@@ -11,7 +11,7 @@ from pathlib import Path
 from subzero_ai.config import load_settings
 from subzero_ai.db import Database
 from subzero_ai.hub.modules import Module, migrate_modules
-from subzero_ai.hub.permissions import Grants, PermissionChangeError, default_permissions, role_label
+from subzero_ai.hub.permissions import Grants, PermissionChangeError, all_permissions, default_permissions, role_label
 from subzero_ai.roles import Directory
 from subzero_ai.slack_api import FakeSlack
 from subzero_ai.store import Viewer
@@ -91,10 +91,12 @@ class GrantsTest(TempDbTest):
         self.grants = Grants(self.db)
 
     def test_defaults(self):
-        self.assertEqual(self.grants.for_role("admin"), frozenset({"hub.manage", "ai.mentor"}))
-        self.assertEqual(self.grants.for_role("mentor"), frozenset({"ai.mentor"}))
-        self.assertEqual(self.grants.for_role("lead"), frozenset())
-        self.assertEqual(self.grants.for_role("student"), frozenset())
+        everyone = {"timeclock.use", "timeclock.edit_own", "calendar.view"}
+        self.assertEqual(self.grants.for_role("admin"), frozenset(p.key for p in all_permissions()))
+        self.assertEqual(self.grants.for_role("mentor"), frozenset(
+            everyone | {"ai.mentor", "timeclock.view_all", "timeclock.edit_others", "calendar.manage"}))
+        self.assertEqual(self.grants.for_role("lead"), frozenset(everyone | {"timeclock.view_all"}))
+        self.assertEqual(self.grants.for_role("student"), frozenset(everyone))
         self.assertEqual(self.grants.for_role("nobody"), frozenset())
 
     def test_changes_are_saved_and_a_return_to_the_default_removes_the_row(self):
@@ -127,7 +129,8 @@ class ViewerTest(unittest.TestCase):
         self.assertFalse(Viewer(1, "U1", "Kim", "mentor").is_admin)
         self.assertTrue(Viewer(1, "U1", "Coach", "admin").can("anything.at.all"))
         self.assertFalse(Viewer(1, "U1", "Lee", "lead").is_mentor)
-        self.assertEqual(default_permissions("student"), frozenset())
+        self.assertEqual(default_permissions("student"), frozenset({"timeclock.use", "timeclock.edit_own",
+                                                                     "calendar.view"}))
 
     def test_given_permissions_win(self):
         lead = Viewer(1, "U1", "Lee", "lead", permissions=frozenset({"ai.mentor"}))

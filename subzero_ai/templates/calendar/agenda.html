@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Calendar · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  {% include "calendar/_nav.html" %}
+  <h1>Calendar</h1>
+  {% for g in groups %}
+  <section class="agenda-day{% if g.day == today %} today{% endif %}">
+    <h2>{{ g.label }}</h2>
+    {% for e in g.events %}
+    <article class="event{% if e.opens_clock %} opens-clock{% endif %}">
+      <span class="event-time">{{ e.time }}</span>
+      <div>
+        <p class="event-title">{{ e.title }}</p>
+        <p class="event-meta">{% if e.location %}{{ e.location }} · {% endif %}{{ e.calendar }}{% if e.opens_clock %} · opens the time clock{% endif %}</p>
+        {% if e.description %}<details><summary class="fine">Details</summary><p class="plain-text">{{ e.description }}</p></details>{% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </section>
+  {% else %}
+  <p class="lede">{% if has_sources %}Nothing on the calendar in the next 60 days.{% else %}No calendars yet.{% if can_manage %} <a href="/calendar/manage">Add one</a>.{% endif %}{% endif %}</p>
+  {% endfor %}
+</section>
+{% endblock %}

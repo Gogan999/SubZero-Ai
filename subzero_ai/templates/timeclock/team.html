@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Team time · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page">
+  {% include "timeclock/_nav.html" %}
+  <h1>Team</h1>
+  <h2>In now <span class="count-chip">{{ inside|length }}</span></h2>
+  {% if inside %}
+  <ul class="who-in">
+    {% for p in inside %}<li>{% if can_edit %}<a href="/timeclock?user={{ p.id }}">{{ p.name }}</a>{% else %}{{ p.name }}{% endif %}<span class="fine">since {{ p.since }} · {{ p['for'] }}</span></li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="fine">Nobody is clocked in.</p>
+  {% endif %}
+
+  <div class="section-head">
+    <h2>Hours</h2>
+    <form class="range" method="get">
+      <label>From <input type="date" name="start" value="{{ start }}"></label>
+      <label>To <input type="date" name="end" value="{{ end }}"></label>
+      <button class="button small" type="submit">Show</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th scope="col">Name</th><th scope="col" class="num">Hours</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr><td>{% if can_edit %}<a href="/timeclock?user={{ r.id }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td><td class="num">{{ r.hours }}</td></tr>
+        {% else %}
+        <tr><td colspan="2">No time between these dates.</td></tr>
+        {% endfor %}
+      </tbody>
+      {% if rows %}<tfoot><tr><th scope="row">Everyone</th><td class="num">{{ total }}</td></tr></tfoot>{% endif %}
+    </table>
+  </div>
+  {% if can_edit %}
+  <p class="fine"><a href="/timeclock/export.csv?start={{ start }}&amp;end={{ end }}">Download entries (CSV)</a> · <a href="/timeclock/export.csv?kind=totals&amp;start={{ start }}&amp;end={{ end }}">Download totals (CSV)</a></p>
+  {% endif %}
+</section>
+{% endblock %}

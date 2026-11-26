@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Time Clock · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page narrow scan-result">
+  <p class="scan-mark {{ outcome.action or ('blocked' if not outcome.ok else 'same') }}" aria-hidden="true">{{ {'in': 'IN', 'out': 'OUT'}.get(outcome.action, '·') }}</p>
+  <h1>{{ {'in': "You're clocked in", 'out': "You're clocked out"}.get(outcome.action, 'Nothing changed') }}</h1>
+  <p class="lede">{{ outcome.message }}</p>
+  <p><a class="button" href="/timeclock">My time</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ 'My time' if own else person.name }} · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page">
+  {% include "timeclock/_nav.html" %}
+  <h1>{{ 'My time' if own else person.name ~ "'s time" }}</h1>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+
+  <div class="clock-card {{ 'in' if current else 'out' }}">
+    <div class="clock-state">
+      <span class="pill {{ 'approved' if current else 'plain' }}">{{ 'Clocked in' if current else 'Clocked out' }}</span>
+      {% if current %}
+      <p class="clock-big">{{ running }}</p>
+      <p class="fine">Since {{ since }}</p>
+      {% elif own and not open %}
+      <p class="fine">{{ closed_message }}</p>
+      {% endif %}
+    </div>
+    {% if own %}
+    <form method="post" action="/timeclock/toggle">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button primary clock-button" type="submit" {% if not current and not open %}disabled{% endif %}>{{ 'Clock out' if current else 'Clock in' }}</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <ul class="stats" aria-label="Hours">
+    <li><span class="stat-value">{{ summary.week }}</span><span class="stat-label">This week</span></li>
+    <li><span class="stat-value">{{ summary.month }}</span><span class="stat-label">Last 30 days</span></li>
+    <li><span class="stat-value">{{ summary.season }}</span><span class="stat-label">This season</span></li>
+  </ul>
+
+  <div class="section-head">
+    <h2>Last 60 days</h2>
+    {% if editable %}<a class="button small" href="/timeclock/entries/new{{ '' if own else '?user=' ~ person.id }}">Add time</a>{% endif %}
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th scope="col">Day</th><th scope="col">In</th><th scope="col">Out</th><th scope="col">Time</th><th scope="col">How</th>{% if editable %}<th scope="col"><span class="visually-hidden">Edit</span></th>{% endif %}</tr></thead>
+      <tbody>
+        {% for e in entries %}
+        <tr{% if e.flag %} class="flagged"{% endif %}>
+          <td>{{ e.day }}</td>
+          <td>{{ e.start }}</td>
+          <td>{% if e.open %}<span class="pill approved">Now</span>{% else %}{{ e.end }}{% endif %}</td>
+          <td>{{ e.duration }}</td>
+          <td class="fine">{{ e.how }}{% if e.how_out and e.how_out != e.how %} · {{ e.how_out }}{% endif %}
+            {% if e.flag %}<span class="pill held">Check the time</span>{% endif %}
+            {% if e.edited %}<span class="pill plain">Edited</span>{% endif %}
+            {% if e.note %}<span class="note">{{ e.note }}</span>{% endif %}</td>
+          {% if editable %}<td><a href="/timeclock/entries/{{ e.id }}">Edit</a></td>{% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ 6 if editable else 5 }}">No time in the last 60 days.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

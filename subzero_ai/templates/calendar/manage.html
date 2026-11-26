@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Calendars · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  {% include "calendar/_nav.html" %}
+  <h1>Calendars</h1>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if sources %}
+  <ul class="who-in">
+    {% for c in sources %}
+    <li>
+      <span><strong>{{ c.name }}</strong><span class="fine"> · {{ c.events }} events · {{ 'syncs every 15 minutes, last ' ~ c.synced if c.kind == 'url' else 'uploaded file' }}</span>
+        {% if c.opens_clock %}<span class="pill approved">Opens the time clock</span>{% endif %}
+        {% if c.error %}<span class="form-error">{{ c.error }}</span>{% endif %}</span>
+      <span class="row-actions">
+        <form method="post" action="/calendar/manage/{{ c.id }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="button small quiet" type="submit" name="action" value="{{ 'closes' if c.opens_clock else 'opens' }}">{{ "Don't open the clock" if c.opens_clock else 'Open the clock' }}</button>
+          {% if c.kind == 'url' %}<button class="button small quiet" type="submit" name="action" value="sync">Sync now</button>{% endif %}
+          <button class="button small quiet" type="submit" name="action" value="remove" data-confirm="Remove {{ c.name }} and its events?">Remove</button>
+        </form>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <form class="panel" method="post" action="/calendar/manage" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <h2>Add a calendar</h2>
+    <div class="fields">
+      <div class="field">
+        <label for="cal-name">Name</label>
+        <input id="cal-name" name="name" maxlength="80" placeholder="Practices and meetings">
+      </div>
+      <div class="field">
+        <label for="cal-url">Google Calendar's secret address in iCal format</label>
+        <input id="cal-url" name="url" type="url" inputmode="url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" aria-describedby="cal-url-hint">
+        <p class="field-hint" id="cal-url-hint">In Google Calendar, open the calendar's Settings and sharing, then copy "Secret address in iCal format". Outlook and Apple published calendar addresses work too. It syncs every 15 minutes.</p>
+      </div>
+      <div class="field">
+        <label for="cal-file">Or upload a .ics file</label>
+        <input id="cal-file" name="file" type="file" accept=".ics,text/calendar" aria-describedby="cal-file-hint">
+        <p class="field-hint" id="cal-file-hint">A one-time import from any calendar app. Upload it again to update it.</p>
+      </div>
+      <div class="field check">
+        <input type="checkbox" id="cal-opens" name="opens_clock" value="1" aria-describedby="cal-opens-hint">
+        <label for="cal-opens">Its events open the time clock</label>
+        <p class="field-hint" id="cal-opens-hint">Clock-in opens shortly before each event starts, even outside the practice window.</p>
+      </div>
+    </div>
+    <div class="form-actions"><button class="button primary" type="submit">Add calendar</button></div>
+  </form>
+</section>
+{% endblock %}

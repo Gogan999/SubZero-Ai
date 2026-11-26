@@ -6,11 +6,14 @@ database migrations, applied in order and recorded per module in hub_module_migr
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .permissions import Permission
+
+log = logging.getLogger("subzero.hub")
 
 if TYPE_CHECKING:
     from starlette.routing import BaseRoute
@@ -30,6 +33,7 @@ class Module:
     name: str = ""
     permissions: tuple[Permission, ...] = ()
     migrations: tuple[str, ...] = ()
+    commands: tuple[str, ...] = ()  # Slack slash commands it answers, like "/clock"
 
     def routes(self) -> list[BaseRoute]:
         """The module's pages, mounted under /<key>."""
@@ -47,9 +51,17 @@ class Module:
         """A Slack button tap whose action_id starts with "<key>:". Returns True if handled."""
         return False
 
+    async def on_command(self, services: Any, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """One of its slash commands. Returns the reply Slack shows (it must come within 3 seconds)."""
+        return None
+
     def slack_home_blocks(self, services: Any, viewer: Viewer) -> list[dict[str, Any]]:
         """The module's section of the Slack Home tab, as Block Kit blocks."""
         return []
+
+    def home_card(self, services: Any, viewer: Viewer) -> dict[str, Any] | None:
+        """A card on the Hub home page: {"template": ..., plus that template's values}, or None."""
+        return None
 
     async def tick(self, services: Any) -> None:
         """Called every minute."""
@@ -64,6 +76,19 @@ def installed() -> list[Module]:
 def tools_for(viewer: Viewer) -> list[NavItem]:
     """Every module's tool switcher entries for this viewer, in menu order."""
     return [item for module in installed() for item in module.nav(viewer)]
+
+
+def all_routes() -> list[BaseRoute]:
+    return [route for module in installed() for route in module.routes()]
+
+
+async def tick_all(services: Any) -> None:
+    """Runs every module's minute job. A failing module is logged and the rest still run."""
+    for module in installed():
+        try:
+            await module.tick(services)
+        except Exception:
+            log.exception("The %s module's minute job failed", module.key)
 
 
 def module_versions(conn: sqlite3.Connection) -> dict[str, int]:

@@ -1,0 +1,10 @@
+{% from "_icons.html" import icon %}
+<section class="panel home-card">
+  <h2>{{ icon('calendar') }} Today</h2>
+  {% for e in card.events %}
+  <p><span class="event-time">{{ e.time }}</span> <strong>{{ e.title }}</strong>{% if e.location %} <span class="fine">· {{ e.location }}</span>{% endif %}</p>
+  {% else %}
+  <p class="fine">Nothing on the calendar today.</p>
+  {% endfor %}
+  <p><a class="button quiet" href="/calendar">Calendar</a></p>
+</section>

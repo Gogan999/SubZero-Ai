@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit time' if row else 'Add time' }} · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page narrow">
+  {% include "timeclock/_nav.html" %}
+  <h1>{{ 'Edit time' if row else 'Add time' }}{% if person.id != viewer.id %} for {{ person.name }}{% endif %}</h1>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <form class="panel" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="fields">
+      <div class="field">
+        <label for="start">Clocked in</label>
+        <input id="start" name="start" type="datetime-local" required value="{{ values.start }}">
+      </div>
+      <div class="field">
+        <label for="end">Clocked out</label>
+        <input id="end" name="end" type="datetime-local" {% if not row or row.clock_out %}required{% endif %} value="{{ values.end }}" aria-describedby="end-hint">
+        {% if row and not row.clock_out %}<p class="field-hint" id="end-hint">Leave empty to stay clocked in.</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="note">Note <span class="fine">(optional)</span></label>
+        <input id="note" name="note" maxlength="300" value="{{ values.note }}" placeholder="Forgot to clock out after the build session">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="button primary" type="submit">Save</button>
+      <a class="button quiet" href="{{ back }}">Cancel</a>
+    </div>
+  </form>
+  {% if row %}
+  <form method="post" action="/timeclock/entries/{{ row.id }}/delete" class="danger-zone">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="button small reject" type="submit" data-confirm="Delete this entry? It stays in the edit log.">Delete entry</button>
+  </form>
+  {% if history %}
+  <h2>Changes</h2>
+  <ul class="history">{% for h in history %}<li>{{ h.who }}: {{ h.what }}, {{ h.when }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -890,4 +890,29 @@
     // Opens the address's section again after the page has loaded
     window.addEventListener("load", () => setTimeout(fromAddress, 0), { once: true });
   }
+
+  // Kiosk: fetches a fresh QR code and the list of who's in every 10 seconds
+  const kiosk = document.querySelector("[data-kiosk]");
+  if (kiosk) {
+    const qr = kiosk.querySelector("[data-kiosk-qr]");
+    const closed = kiosk.querySelector("[data-kiosk-closed]");
+    const names = kiosk.querySelector("[data-kiosk-names]");
+    const count = kiosk.querySelector("[data-kiosk-count]");
+    const refresh = async () => {
+      try {
+        const res = await fetch("/timeclock/kiosk/code", { credentials: "same-origin", cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        qr.innerHTML = data.svg;
+        qr.hidden = !data.open;
+        closed.hidden = data.open;
+        closed.textContent = data.closed_message;
+        names.replaceChildren(...data.inside.map((name) => Object.assign(document.createElement("li"), { textContent: name })));
+        count.textContent = String(data.inside.length);
+      } catch {
+        /* the next round tries again */
+      }
+    };
+    setInterval(refresh, 10000);
+  }
 })();

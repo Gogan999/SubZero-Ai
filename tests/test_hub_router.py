@@ -133,6 +133,7 @@ class HomePageTest(unittest.TestCase):
         self.h.close()
 
     def test_with_one_tool_home_goes_straight_to_the_chat(self):
+        modules.installed = lambda: [m for m in self.original() if m.key in ("hub", "ai")]
         resp = self.ava.get("/", follow_redirects=False)
         self.assertEqual(resp.headers["location"], "/chats")
         self.assertNotIn('<nav aria-label="Tools">', self.ava.get("/chats").text)

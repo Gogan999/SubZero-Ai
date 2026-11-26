@@ -1,0 +1,12 @@
+{% from "_icons.html" import icon %}
+<section class="panel home-card">
+  <h2>{{ icon('clock') }} Time Clock</h2>
+  <p>{% if card.current %}<span class="pill approved">Clocked in</span> since {{ card.since }}{% else %}<span class="pill plain">Clocked out</span>{% if not card.open %} <span class="fine">{{ card.closed_message }}</span>{% endif %}{% endif %}</p>
+  <p class="fine">This week: {{ card.week }}</p>
+  <form method="post" action="/timeclock/toggle">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="next" value="/">
+    <button class="button {{ 'primary' if card.current or card.open else '' }}" type="submit" {% if not card.current and not card.open %}disabled{% endif %}>{{ 'Clock out' if card.current else 'Clock in' }}</button>
+    <a class="button quiet" href="/timeclock">My time</a>
+  </form>
+</section>

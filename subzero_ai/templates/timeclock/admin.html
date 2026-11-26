@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Time Clock admin · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
+{% block main %}
+<section class="page">
+  {% include "timeclock/_nav.html" %}
+  <h1>Time Clock admin</h1>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+
+  <section class="panel" aria-labelledby="person-title">
+    <h2 id="person-title">Someone's time</h2>
+    <form class="inline-role" method="get" action="/timeclock">
+      <label class="visually-hidden" for="person">Person</label>
+      <select id="person" name="user">{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+      <button class="button small" type="submit">Open</button>
+    </form>
+  </section>
+
+  <section class="panel" aria-labelledby="flag-title">
+    <h2 id="flag-title">Check these <span class="count-chip">{{ flagged|length }}</span></h2>
+    <p class="field-hint">Entries the nightly clock-out closed. Each one ends at the last time the person was seen; edit it to clear the flag.</p>
+    {% if flagged %}
+    <ul class="who-in">{% for f in flagged %}<li><a href="/timeclock/entries/{{ f.id }}">{{ f.name }}</a><span class="fine">{{ f.day }}, {{ f.start }} to {{ f.end }}</span></li>{% endfor %}</ul>
+    {% else %}<p class="fine">Nothing to check.</p>{% endif %}
+  </section>
+
+  <section class="panel" id="export" aria-labelledby="export-title">
+    <h2 id="export-title">Export</h2>
+    <form class="range" method="get" action="/timeclock/export.csv">
+      <label>From <input type="date" name="start" value="{{ season }}"></label>
+      <label>To <input type="date" name="end" value="{{ today }}"></label>
+      <select name="kind" aria-label="What to export"><option value="">Every entry</option><option value="totals">Hours per person</option></select>
+      <button class="button small" type="submit">Download CSV</button>
+    </form>
+  </section>
+
+  <section class="panel" id="import" aria-labelledby="import-title">
+    <h2 id="import-title">Import</h2>
+    <p class="field-hint">Bring in time from another app's CSV export, such as Attendance Bot. You see a preview first.</p>
+    <p><a class="button small" href="/timeclock/import">Import a CSV</a></p>
+    {% if batches %}
+    <ul class="who-in">{% for b in batches %}<li>{{ b.n }} entries, {{ b.at[:10] }}
+      <form method="post" action="/timeclock/import/{{ b.import_batch }}/undo"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit" data-confirm="Remove all {{ b.n }} entries from this import?">Undo</button></form></li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+
+  <section class="panel" id="kiosks" aria-labelledby="kiosk-title">
+    <h2 id="kiosk-title">Kiosks</h2>
+    <p class="field-hint">A kiosk is a screen by the door that shows a QR code. People scan it with their phone's camera to clock in or out. The code changes every 30 seconds.</p>
+    {% if pairing %}
+    <div class="flash" role="status">
+      <p><strong>Open this link on the kiosk's screen</strong> within 30 minutes. It works once.</p>
+      <p class="mono copyable">{{ pairing.url }}</p>
+    </div>
+    {% endif %}
+    {% if kiosks %}
+    <ul class="who-in">{% for k in kiosks %}<li>{{ k.name }}<span class="fine">last seen {{ k.seen }}</span>
+      <span class="row-actions">
+      <form method="post" action="/timeclock/admin/kiosks/{{ k.id }}/pair"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit">New pairing link</button></form>
+      <form method="post" action="/timeclock/admin/kiosks/{{ k.id }}/remove"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit" data-confirm="Remove {{ k.name }}? Its screen stops working.">Remove</button></form>
+      </span></li>{% endfor %}</ul>
+    {% endif %}
+    <form class="inline-role" method="post" action="/timeclock/admin/kiosks">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="visually-hidden" for="kiosk-name">Kiosk name</label>
+      <input id="kiosk-name" name="name" maxlength="60" placeholder="Shop door">
+      <button class="button small" type="submit">Add a kiosk</button>
+    </form>
+  </section>
+
+  <section class="panel" id="settings" aria-labelledby="settings-title">
+    <h2 id="settings-title">Settings</h2>
+    {% if errors %}<ul class="form-error" role="alert">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+    <form method="post" action="/timeclock/admin/settings">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <fieldset class="field">
+        <legend>Practice window: clock-in opens at</legend>
+        <p class="field-hint">Open until midnight. Leave a day empty to keep it closed. Calendar events that open the time clock also open it, {{ settings.event_lead_minutes }} minutes before they start.</p>
+        <div class="week-grid">
+          {% for day in days %}<label>{{ day[:3] }}<input name="open_{{ loop.index0 }}" value="{{ settings.open_from[loop.index0] }}" placeholder="closed" inputmode="numeric" pattern="[0-9]{1,2}:[0-9]{2}"></label>{% endfor %}
+        </div>
+      </fieldset>
+      <div class="fields two">
+        <div class="field"><label for="reminder">"Still here?" message after (hours)</label><input id="reminder" name="reminder_hours" value="{{ settings.reminder_hours }}" inputmode="decimal"></div>
+        <div class="field"><label for="repeat">Ask again every (hours)</label><input id="repeat" name="reminder_repeat_hours" value="{{ settings.reminder_repeat_hours }}" inputmode="decimal"></div>
+        <div class="field"><label for="close">Nightly clock-out at</label><input id="close" name="auto_close" value="{{ settings.auto_close }}" pattern="[0-9]{1,2}:[0-9]{2}"></div>
+        <div class="field"><label for="grace">Wait after a phone leaves (minutes)</label><input id="grace" name="leave_grace_minutes" value="{{ settings.leave_grace_minutes }}" inputmode="numeric"></div>
+        <div class="field"><label for="lead">Open before a calendar event (minutes)</label><input id="lead" name="event_lead_minutes" value="{{ settings.event_lead_minutes }}" inputmode="numeric"></div>
+        <div class="field"><label for="season">Season starts</label><input id="season" name="season_start" type="date" value="{{ settings.season_start or season }}"></div>
+      </div>
+      <div class="form-actions"><button class="button primary" type="submit">Save settings</button></div>
+    </form>
+  </section>
+</section>
+{% endblock %}

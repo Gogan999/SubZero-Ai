@@ -1,0 +1,3 @@
+<nav class="subnav" aria-label="Time Clock">
+  {% for href, label in tools %}<a href="{{ href }}" {% if path == href %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
+</nav>

@@ -45,6 +45,18 @@ class SlackRouter:
         except Exception:
             log.exception("The %s module failed on Slack action %s", key, action_id)
 
+    async def command(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """A slash command, answered by the module that lists it."""
+        name = payload.get("command", "")
+        module = next((m for m in modules.installed() if name in m.commands), None)
+        if module is None:
+            return None
+        try:
+            return await module.on_command(self.services, payload)
+        except Exception:
+            log.exception("The %s module failed on %s", module.key, name)
+            return {"response_type": "ephemeral", "text": "Something went wrong. Try again in a minute."}
+
     async def viewer(self, slack_user_id: str):
         """The app account for a Slack member who may use the Hub, or None."""
         s = self.services

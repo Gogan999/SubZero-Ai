@@ -1,0 +1,5 @@
+<nav class="subnav" aria-label="Calendar">
+  <a href="/calendar" {% if view == 'agenda' %}aria-current="page"{% endif %}>Agenda</a>
+  <a href="/calendar/month" {% if view == 'month' %}aria-current="page"{% endif %}>Month</a>
+  {% if can_manage %}<a href="/calendar/manage" {% if view == 'manage' %}aria-current="page"{% endif %}>Calendars</a>{% endif %}
+</nav>

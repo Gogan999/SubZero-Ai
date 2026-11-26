@@ -59,6 +59,10 @@ class SlackInteractions:
             elif event.get("type") == "app_home_opened" and event.get("tab") == "home" and self.router is not None:
                 self.tasks.spawn(self.router.publish_home(event.get("user", "")), name="slack-home")
             return None
+        if envelope.get("type") == "slash_commands":
+            if self.router is None:
+                return None
+            return await self.router.command(envelope.get("payload") or {})
         if envelope.get("type") != "interactive":
             return None
         payload = envelope.get("payload") or {}

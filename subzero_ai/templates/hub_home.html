@@ -1,10 +1,16 @@
 {% extends "base.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Home · {{ settings.app_name }}{% endblock %}
+{% block notice %}{% endblock %}
 {% block main %}
 <section class="page">
   <h1>Hi, {{ viewer.name.split(' ')[0] }}</h1>
-  <p class="lede">The team's tools.</p>
+  {% if cards %}
+  <div class="home-cards">
+    {% for card in cards %}{% include card.template %}{% endfor %}
+  </div>
+  {% endif %}
+  <h2>Tools</h2>
   <ul class="tool-tiles">
     {% for t in tools %}
     <li><a class="tool-tile" href="{{ t.href }}">{{ icon(t.icon) }}<span>{{ t.label }}</span></a></li>

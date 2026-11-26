@@ -3,7 +3,7 @@
 {% set tools = hub_tools() %}
 <aside class="sidebar" id="sidebar" aria-label="Sidebar">
   <div class="side-top">
-    <a class="brand" href="/chats">
+    <a class="brand" href="/">
       <span class="brand-mark" aria-hidden="true">SZ</span>
       <span class="brand-name">{{ settings.app_name }}</span>
     </a>
@@ -12,7 +12,7 @@
     {% if tools|length > 1 %}
     <nav aria-label="Tools">
       <ul class="side-nav tools">
-        <li><a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ icon('star') }} Home</a></li>
+        <li><a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ icon('home') }} Home</a></li>
         {% for t in tools %}
         <li><a href="{{ t.href }}" {% if path.startswith(t.href) %}aria-current="page"{% endif %}>{{ icon(t.icon) }} {{ t.label }}</a></li>
         {% endfor %}
