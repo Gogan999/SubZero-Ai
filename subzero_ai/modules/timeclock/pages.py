@@ -510,8 +510,8 @@ async def scan(request: Request) -> Response:
         if kiosk is None or not clock.kiosk_code_ok(kiosk, code):
             return error_page(request, await current_viewer(request), 410, "That code has expired",
                               "Scan the code on the screen again. It changes every 30 seconds.")
-        request.session["tc_scan"] = {"kiosk": kiosk["id"], "at": clock.now().timestamp()}
-    pending = request.session.get("tc_scan") or {}
+        request.session["carry_tc_scan"] = {"kiosk": kiosk["id"], "at": clock.now().timestamp()}
+    pending = request.session.get("carry_tc_scan") or {}
     if kiosk is None or pending.get("kiosk") != kiosk["id"] or clock.now().timestamp() - pending.get("at", 0) > 300:
         return error_page(request, await current_viewer(request), 410, "That code has expired",
                           "Scan the code on the screen again.")
@@ -519,7 +519,7 @@ async def scan(request: Request) -> Response:
     if viewer is None:
         request.session["next"] = f"/timeclock/k/{kiosk['id']}/done"
         return RedirectResponse("/login", status_code=303)
-    request.session.pop("tc_scan", None)
+    request.session.pop("carry_tc_scan", None)
     if not viewer.can(USE):
         return error_page(request, viewer, 403, "Not allowed", "Your account can't use the time clock.")
     outcome = clock.toggle(viewer.id, "kiosk", any_time=viewer.can(EDIT_OTHERS))

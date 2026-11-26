@@ -153,7 +153,7 @@ def short_text(text: str, limit: int = 60) -> str:
     return cut.rstrip(" ,.;:-") + "…"
 
 
-SAFE_NEXT = re.compile(r"/(?:chats|recents|artifacts(?:/\d+/\d+)?|projects(?:/\d+)?|code(?:/\d+)?|profile|queue|audit|settings|about|c/\d+)")
+SAFE_NEXT = re.compile(r"/(?:[A-Za-z0-9][\w.-]*(?:/(?!\.\.?(?:/|$))[\w.-]+)*)?")  # a path on this site
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
        "img-src 'self' data: https://*.slack-edge.com https://secure.gravatar.com; "
@@ -718,7 +718,9 @@ async def auth_callback(request: Request) -> Response:
 
 def _finish_login(request: Request, s: Services, user) -> Response:
     target = request.session.pop("next", None) or "/chats"
+    carried = {k: v for k, v in request.session.items() if k.startswith("carry_")}
     request.session.clear()
+    request.session.update(carried)
     request.session["uid"] = user["id"]
     request.session["csrf"] = secrets.token_urlsafe(24)
     s.db.audit("signed_in", actor_id=user["id"], target_type="user", target_id=user["id"])
