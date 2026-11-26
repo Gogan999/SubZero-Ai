@@ -1,7 +1,7 @@
 """Markdown to safe HTML. Raw HTML in messages is never passed through.
 
-Interactive explainers are the exception that proves the rule: a fenced block tagged `explainer` holds a
-whole web page, which is shown only inside a sandboxed frame served with its own locked-down policy."""
+The exception is interactive explainers: a fenced block tagged `explainer` holds a whole web page, which is
+shown only inside a sandboxed frame served with its own locked-down policy."""
 
 from __future__ import annotations
 
@@ -19,9 +19,8 @@ _FORMATTER = HtmlFormatter(nowrap=True)
 EXPLAINER_TAG = "explainer"
 EXPLAINER_MAX_BYTES = 500 * 1024
 
-# What an explainer page may do: run its own scripts and styles, and load libraries from two CDNs.
-# No requests to anywhere else (connect-src 'none'), and the sandbox gives it an origin of its own,
-# so it can't read the app's cookies or act as the student, even when opened in its own tab.
+# What an explainer page may do: run its own scripts and styles, and load libraries from two CDNs. It can't make
+# requests anywhere else (connect-src 'none'), and the sandbox gives it an origin of its own.
 EXPLAINER_CDNS = "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net"
 EXPLAINER_POLICY = (
     "default-src 'none'; "
@@ -100,7 +99,7 @@ def _render_link_open(self, tokens, idx, options, env) -> str:
 
 
 def _render_image(self, tokens, idx, options, env) -> str:
-    # Show images as links so a reply can't load outside images into a student's browser.
+    # Shows images as links.
     token = tokens[idx]
     src = html.escape(token.attrGet("src") or "", quote=True)
     alt = html.escape(self.renderInlineAsText(token.children or [], options, env) or "image")
@@ -137,8 +136,8 @@ _TAG_RE = re.compile(r"<[^>]+>")
 
 
 def explainer_title(page: str) -> str:
-    """A name for an explainer in the Artifacts gallery: its <title>, else its first heading. Plain text,
-    so the template escapes it like any other text. Empty when the page has neither."""
+    """A name for an explainer in the Artifacts gallery: its <title>, else its first heading, as plain text. Empty
+    when the page has neither."""
     for pattern in (_TITLE_RE, _H1_RE):
         match = pattern.search(page or "")
         if match:
@@ -154,8 +153,7 @@ def explainer_figure(page: str, url: str) -> str:
 
 
 def explainer_download(page: str) -> str:
-    """A downloaded explainer opens straight from the computer, where the frame's policy doesn't apply,
-    so the copy carries the same limits in a meta tag."""
+    """A downloadable copy of an explainer, with the frame's limits in a meta tag."""
     meta = f'<meta http-equiv="Content-Security-Policy" content="{html.escape(EXPLAINER_POLICY, quote=True)}">'
     for pattern in (r"<head(?:\s[^>]*)?>", r"<html(?:\s[^>]*)?>", r"<!doctype[^>]*>"):
         match = re.search(pattern, page, re.IGNORECASE)
@@ -169,8 +167,8 @@ def plain_html(text: str) -> str:
 
 
 def pygments_css() -> str:
-    """Light colors, then dark ones for a dark device (unless the person picked Light) or a picked Dark,
-    the same way app.css switches its tokens."""
+    """Light colors, then dark ones for a dark device (unless the person picked Light) or a picked Dark, matching
+    app.css."""
     light = HtmlFormatter(style="default").get_style_defs(".code pre")
     dark_device = HtmlFormatter(style="monokai").get_style_defs(':root:not([data-theme="light"]) .code pre')
     dark_picked = HtmlFormatter(style="monokai").get_style_defs(':root[data-theme="dark"] .code pre')

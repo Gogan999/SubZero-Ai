@@ -64,7 +64,6 @@ from .generation import STYLES, ReplyRunner, clean_options, load_options, option
 from .health import Health
 from .live import Broker, Tasks
 from .maintenance import Nightly, check_for_update
-# MODEL_LABELS and model_label stay importable from here (tests and older code use them)
 from .model_choices import model_block, model_label, option_label, selectable_models
 from .pricing import cost_usd, usage_line
 from .projects import MAX_PROJECT_FILES, ProjectError, Projects
@@ -109,12 +108,12 @@ HERE = Path(__file__).parent
 RECENTS = 25
 
 # claude.ai features with a place in the sidebar but not built yet (none right now). Each gets a "Coming soon"
-# page that says what it will do, so students aren't left guessing. docs/FEATURES_TODO.md tracks them.
+# page. docs/FEATURES_TODO.md tracks them.
 COMING_SOON: dict[str, dict] = {}
 
 
 async def _load_model_names(s: Services) -> None:
-    """Ask the Pi gateway once for model names to label the models with. Best effort: never blocks startup."""
+    """Ask the Pi gateway once for model names to label the models with. Errors are ignored."""
     list_models = getattr(s.claude, "list_models", None)
     if list_models is None:
         return
@@ -183,7 +182,7 @@ class Services:
     code: CodeRunner
     # A Claude subscription sign-in started on the Settings page, waiting for its code
     bridge_login: BridgeLogin = field(default_factory=BridgeLogin)
-    # Explainer titles and sizes per finished reply, for the Artifacts gallery (a finished reply never changes)
+    # Explainer titles and sizes per finished reply, for the Artifacts gallery
     artifact_index: dict[int, list[tuple[int, str, int]]] = field(default_factory=dict)
     # Model names from the Pi gateway, by provider/model id, for labels (filled once at startup, may stay empty)
     model_names: dict[str, str] = field(default_factory=dict)
@@ -212,7 +211,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     db = Database(settings.db_path)
     saved_settings.load_into(settings, db)
     if not setup_flow.setup_complete(db) and setup_flow.config_is_complete(settings):
-        # Set up by hand in config.env (versions before 0.4 did this): lock the setup page.
+        # Locks the setup page when config.env was set up by hand.
         setup_flow.mark_setup_complete(db, actor="config.env was already complete")
     store = Store(db, timezone_name=settings.timezone, show_pending_to_team=settings.show_pending_to_team,
                   show_rejected_to_team=settings.show_rejected_to_team)
@@ -359,7 +358,7 @@ async def read_uploads(form, settings: Settings) -> list[Prepared]:
 
 async def connector_files(s: Services, form, already: int) -> list[Prepared]:
     """Files picked from the team's GitHub repository or pasted as Google Drive links, fetched now and stored
-    like attachments, so mentors see them on the review card. Raises AttachmentError."""
+    like attachments. Raises AttachmentError."""
     paths = [str(p) for p in form.getlist("github") if str(p).strip()]
     links = [str(link) for link in form.getlist("drive") if str(link).strip()]
     if not paths and not links:
@@ -399,7 +398,7 @@ async def _with_frames(form, prepared: list[Prepared]) -> list[Prepared]:
         try:
             frames.setdefault(video_name, []).append(await asyncio.to_thread(prepare_frame, video_name, at, data))
         except AttachmentError:
-            continue  # a bad frame just means Claude sees one fewer still
+            continue  # a bad frame is skipped
     out = []
     for item in prepared:
         out.append(item)
@@ -498,7 +497,7 @@ def error_page(request: Request, viewer: Viewer | None, code: int, title: str, d
 
 def file_views(s: Services, message_id: int, rows=None) -> list[dict[str, Any]]:
     rows = s.attachments.for_message(message_id) if rows is None else rows
-    # Video stills are only for Claude; the page shows the video itself
+    # Video stills are left out of the page.
     rows = [f for f in rows if f["kind"] != "frame"]
     return [{"id": f["id"], "name": f["name"], "size": size_label(f["size"]), "kind": f["kind"],
              "url": f"/files/{f['id']}"} for f in rows]
@@ -532,7 +531,7 @@ def message_view(s: Services, viewer: Viewer, conv, m, last_id: int | None = Non
             pass
         view["can_retry"] = (m["status"] == ERROR and m["id"] == last_id
                              and (viewer.is_mentor or conv["owner_id"] == viewer.id))
-        # Mentors see what each finished reply used and roughly cost (see pricing.py for the price list)
+        # Mentors see what each finished reply used and roughly cost (pricing.py)
         tokens = sum(int(m[k] or 0)
                      for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"))
         if viewer.is_mentor and m["status"] in (COMPLETE, ERROR) and tokens:
@@ -684,7 +683,7 @@ async def auth_callback(request: Request) -> Response:
         except Exception:
             log.warning("Couldn't look up the Slack account %s", profile["slack_user_id"], exc_info=True)
             if not s.settings.allow_slack_guests:
-                # Fail closed: without the account details we can't tell a guest from a member.
+                # Refuses sign-in when the account details can't be fetched.
                 request.session["login_error"] = "Couldn't reach Slack to finish signing in. Try again in a minute."
                 return RedirectResponse("/login", status_code=303)
     if is_excluded_account(info, s.settings) and profile["slack_user_id"] not in s.settings.admin_slack_ids:
@@ -708,7 +707,7 @@ def _finish_login(request: Request, s: Services, user) -> Response:
     request.session["uid"] = user["id"]
     request.session["csrf"] = secrets.token_urlsafe(24)
     s.db.audit("signed_in", actor_id=user["id"], target_type="user", target_id=user["id"])
-    # Only return to the app's own pages ("/\evil.example" would otherwise leave the site in some browsers).
+    # Only returns to the app's own pages.
     if not SAFE_NEXT.fullmatch(target):
         target = "/chats"
     return RedirectResponse(target, status_code=303)
@@ -745,7 +744,7 @@ def greeting(s: Services, viewer: Viewer) -> str:
 async def chats(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     if any(key in request.query_params for key in ("q", "scope", "subteam", "owner")):
-        # The chat list and its filters moved to the Chats page; keep old links working
+        # Old chat list links go to the Recents page.
         return RedirectResponse(f"/recents?{request.url.query}", status_code=303)
     model_options = ([(o["id"], option_label(o)) for o in selectable_models(s, purpose="chat")]
                      if viewer.is_mentor else [])
@@ -782,8 +781,8 @@ def _explainer_index(s: Services, message_id: int) -> list[tuple[int, str, int]]
 
 
 def artifact_list(s: Services, viewer: Viewer, scope: str, query: str) -> list[dict[str, Any]]:
-    """Every interactive explainer the viewer can see, newest first. An explainer is only as visible as the
-    reply it's in, so private chats stay private and other students' chats show once something was approved."""
+    """Every interactive explainer the viewer can see, newest first. An explainer is as visible as the reply
+    it's in."""
     convs: dict[int, Any] = {}
     items: list[dict[str, Any]] = []
     needle = query.lower()
@@ -799,7 +798,7 @@ def artifact_list(s: Services, viewer: Viewer, scope: str, query: str) -> list[d
         chat_title = conv["title"] or "New chat"
         for index, page_title, size in _explainer_index(s, row["id"]):
             if size > EXPLAINER_MAX_BYTES:
-                continue  # the chat shows these as code, not as a working explainer
+                continue  # the chat shows these as code
             title = page_title or f"Explainer from {chat_title}"
             if needle and needle not in title.lower() and needle not in chat_title.lower():
                 continue
@@ -1009,7 +1008,7 @@ async def conversation_page(request: Request, viewer: Viewer) -> Response:
     waiting = own and needs_review and s.store.conversation_has_pending(conv["id"])
     replying = s.store.conversation_is_replying(conv["id"])
     if needs_review and own and not waiting and s.approvals.window_applies(viewer, conv["id"]):
-        needs_review = False  # a mentor approved this chat a few minutes ago, so the next message goes straight on
+        needs_review = False  # inside the approval window
     if waiting:
         hint = "Waiting for a mentor to review your last message"
     elif replying:
@@ -1069,7 +1068,7 @@ async def delete_chat(request: Request, viewer: Viewer) -> Response:
     deleted it and what it was called, and any review cards still waiting in Slack lose their buttons."""
     s = services(request)
     cid = request.path_params["cid"]
-    # Review cards for messages still waiting; read them before the delete takes them away
+    # Review cards for messages still waiting, read before the delete.
     cards = s.db.all("SELECT sc.channel, sc.ts, u.name AS author_name FROM slack_cards sc "
                      "JOIN messages m ON m.id = sc.message_id LEFT JOIN users u ON u.id = m.author_id "
                      "WHERE m.conversation_id = ? AND m.status = 'pending'", (cid,))
@@ -1104,7 +1103,7 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
     form = await request.form()
     subteam = form.get("subteam") if form.get("subteam") in s.settings.subteams else None
     if subteam is None:
-        # The new-chat page has no subteam picker; the person's default from Profile and preferences fills it in
+        # A new chat gets the person's default subteam from Profile and preferences.
         default = s.store.user(viewer.id)["default_subteam"]
         subteam = default if default in s.settings.subteams else None
     project_id = None
@@ -1120,7 +1119,7 @@ async def new_chat(request: Request, viewer: Viewer) -> Response:
         files += await connector_files(s, form, len(files))
     except AttachmentError as exc:
         return JSONResponse({"ok": False, "error": str(exc), "code": "invalid"}, status_code=400)
-    # Only mentors pick the model. A student's "model" field is ignored: the chat gets the default model.
+    # Only mentors pick the model. A student's chat gets the default model.
     chat_model, note = s.settings.model_default, ""
     if viewer.is_mentor:
         chat_model, note = mentor_chat_model(s, form.get("model"))
@@ -1166,7 +1165,7 @@ def _review_action(kind: str):
         mid = request.path_params["mid"]
         form = await request.form()
         if kind in ("approve", "reject", "hold"):
-            # Re-check mentor status with Slack, so someone just removed from #claude-approvals can't act.
+            # Re-checks mentor status with Slack.
             role = await s.directory.role_for(viewer.slack_user_id, force=True)
             if role != viewer.role:
                 s.store.set_user_role(viewer.id, role)
@@ -1453,12 +1452,12 @@ async def attachment_file(request: Request, viewer: Viewer) -> Response:
     disposition = "attachment" if request.query_params.get("download") else "inline"
     ascii_name = row["name"].encode("ascii", "replace").decode().replace('"', "'").replace("?", "_")
     headers = {
-        # A file is only ever shown, never run, even if someone opens it directly.
+        # Files are only shown, never run.
         "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
         "Content-Disposition": f'{disposition}; filename="{ascii_name}"',
         "Cache-Control": "private, max-age=3600",
     }
-    # FileResponse answers range requests, which browsers (Safari above all) need to play and seek a video
+    # FileResponse answers range requests, for playing and seeking a video.
     return FileResponse(path, media_type=media_type, headers=headers)
 
 
@@ -1571,7 +1570,7 @@ class SecurityHeaders:
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                # Explainer pages and attachments set their own policy; explainers are framed by the chat page.
+                # Adds the app's policy unless the page set its own (explainer pages and attachments do).
                 own_policy = any(name.lower() == b"content-security-policy" for name, _ in headers)
                 if not own_policy:
                     headers.append((b"content-security-policy", CSP.encode()))
@@ -1579,7 +1578,7 @@ class SecurityHeaders:
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"SAMEORIGIN" if own_policy else b"DENY"),
                 ]
-                # Share links send no referrer at all, so the link never leaks to a site a reply links to
+                # Uses same-origin referrers unless the page set its own policy (share links send none).
                 if not any(name.lower() == b"referrer-policy" for name, _ in headers):
                     headers.append((b"referrer-policy", b"same-origin"))
                 if self.https:
@@ -1591,7 +1590,7 @@ class SecurityHeaders:
 
 
 class LimitBody:
-    """Refuse request bodies bigger than any real message with attachments, before reading them all."""
+    """Refuse request bodies bigger than any real message with attachments, before reading them."""
 
     def __init__(self, app, max_bytes: int):
         self.app = app
@@ -1659,7 +1658,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
-        # Each streaming reply holds a worker thread, so allow plenty of them.
+        # A pool of 32 worker threads; each streaming reply holds one.
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="io"))
         s.db.execute("UPDATE messages SET status = 'error', error = 'The server restarted before Claude finished.' "
                      "WHERE status = 'streaming'")
@@ -1669,7 +1668,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                      "working. Send a follow-up to carry on.' WHERE status IN ('preparing', 'running')")
         await ensure_team_id(s)
         if settings.code_sandbox == "hyperv" and s.egress is not None:
-            await s.egress.start()  # a failure is kept as a plain message: sandboxes then refuse to start
+            await s.egress.start()  # a failure is kept as a plain message, and sandboxes then refuse to start
         try:
             await asyncio.to_thread(reap_sandboxes, s)  # sandboxes left by the last run, before any session starts
         except Exception:
@@ -1770,7 +1769,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
     ]
     middleware = [
         Middleware(SecurityHeaders, https=settings.https),
-        # The files, plus the video stills the browser adds (each a small JPEG)
+        # The files, plus the video stills the browser adds
         Middleware(LimitBody, max_bytes=MAX_MESSAGE_BYTES + 10 * 1024 * 1024),
         Middleware(SessionMiddleware, secret_key=settings.session_secret, session_cookie="subzero_session",
                    max_age=14 * 24 * 3600, same_site="lax", https_only=settings.https),

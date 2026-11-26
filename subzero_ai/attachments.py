@@ -22,17 +22,16 @@ TEXT_ACCEPT = ",".join(sorted(TEXT_EXTENSIONS))  # for models that can't read im
 
 MAX_FILES = 5
 MAX_FILE_BYTES = 50 * 1024 * 1024
-# Cloudflare's free plan refuses uploads over 100 MB in one request, so one message stays under that
+# Largest total upload for one message.
 MAX_MESSAGE_BYTES = 90 * 1024 * 1024
-# Claude can't watch video. The browser takes this many still frames from each video and sends them along.
+# How many still frames the browser takes from each video for Claude.
 MAX_FRAMES_PER_VIDEO = 8
 FRAME_MAX_BYTES = 5 * 1024 * 1024
-# Claude reads images best at up to about 1568 pixels on the long edge; bigger ones cost more and gain nothing.
+# Longest edge for images sent to Claude, in pixels.
 IMAGE_MAX_EDGE = 1568
-# Refuse images that would take a lot of memory to open (a phone photo is about 12 million pixels).
-# A tiny PNG can claim huge dimensions, so this is checked from the header before any pixels are decoded.
+# Largest image size accepted, checked from the header before any pixels are decoded.
 MAX_IMAGE_PIXELS = 50_000_000
-Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS  # Pillow's own backstop (it only refuses above twice this)
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS  # Pillow's own limit
 
 
 class AttachmentError(Exception):
@@ -95,8 +94,7 @@ def prepare(filename: str | None, data: bytes, *, max_text_bytes: int) -> Prepar
 
 
 def _prepare_video(name: str, ext: str, data: bytes) -> Prepared:
-    """Videos are stored as sent (re-encoding needs tools the mini PC doesn't have), after checking that the
-    file really is the kind of video its name says, so nothing else can be served as a video."""
+    """Videos are stored as sent, after checking that the file really is the kind of video its name says."""
     is_mp4 = data[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip")
     is_webm = data[:4] == b"\x1a\x45\xdf\xa3"
     if not (is_webm if ext == ".webm" else is_mp4):
@@ -128,8 +126,8 @@ def _prepare_text(name: str, data: bytes, max_text_bytes: int) -> Prepared:
 
 
 def _prepare_image(name: str, data: bytes) -> Prepared:
-    """Re-encode the image: this drops hidden details such as a phone photo's GPS location,
-    applies the camera's rotation, and shrinks big photos to the size Claude actually uses."""
+    """Re-encode the image: drops hidden details such as a phone photo's GPS location, applies the camera's
+    rotation, and shrinks big photos to IMAGE_MAX_EDGE."""
     try:
         with Image.open(io.BytesIO(data)) as img:
             if img.format not in ("PNG", "JPEG"):

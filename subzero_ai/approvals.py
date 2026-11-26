@@ -65,7 +65,7 @@ class ApprovalService:
                  tasks: Tasks, runner: ReplyRunner, attachments: Attachments, screener: Screener | None = None):
         self.settings = settings
         self.screener = screener or Screener(settings, runner.claude)
-        # One send at a time per chat, so two quick sends can't both slip through the approval window
+        # One send at a time per chat
         self._chat_locks: dict[int, asyncio.Lock] = {}
         self.attachments = attachments
         self.db = db
@@ -74,8 +74,7 @@ class ApprovalService:
         self.broker = broker
         self.tasks = tasks
         self.runner = runner
-        # Posts a decision for a message that came in through a Slack DM and returns True if it did, so the usual
-        # DM isn't sent as well. Slack DMs register this.
+        # Posts a decision for a message that came in through a Slack DM, and returns True if it did. Set by Slack DMs.
         self.on_decided: Callable[[int], Awaitable[bool]] | None = None
 
     # ------------------------------------------------------------------ helpers
@@ -111,7 +110,7 @@ class ApprovalService:
         before anything else happens to it (the reply starting, the Slack card). `model` (mentors' picks) is used
         only when this message starts a new chat; the default model is used otherwise."""
         text = clean_text(text)
-        # There's no explainer switch any more: asking for one in words is how a student requests it
+        # A request for an explainer in words turns explainers on.
         explainer = explainer or asks_for_explainer(text)
         if not text:
             if files:
@@ -132,7 +131,7 @@ class ApprovalService:
 
     def window_applies(self, viewer: Viewer, conversation_id: int | None, files=()) -> bool:
         """Whether this message can skip review because a mentor approved the chat a few minutes ago.
-        Messages with files always wait: a mentor hasn't seen the file."""
+        Messages with files always wait."""
         return (conversation_id is not None and not files
                 and viewer.slack_user_id not in self.settings.always_review_slack_ids
                 and self.store.window_open(conversation_id, self.settings.approval_window_minutes))
@@ -168,7 +167,7 @@ class ApprovalService:
         status = PENDING if needs_review else AUTO
         screen = None  # "passed", "off", or the reason the screener flagged it
         screen_note = None
-        # Web searches cost money per search, so a message asking for them always waits for a mentor
+        # A message that asks for web searches always waits for a mentor.
         if needs_review and not searching and self.window_applies(viewer, conversation_id, files):
             if self.settings.screener_enabled:
                 verdict = await self.screener.check(text)
@@ -221,7 +220,7 @@ class ApprovalService:
         if on_saved is not None:
             try:
                 on_saved(conversation_id, message_id)
-            except Exception:  # the message is saved; a failing caller hook must not stop review or the reply
+            except Exception:  # errors from the caller's hook are logged and ignored
                 log.exception("A submit hook failed for message %s", message_id)
         self._publish(conversation_id, {"type": "changed", "id": message_id})
         if status == PENDING:

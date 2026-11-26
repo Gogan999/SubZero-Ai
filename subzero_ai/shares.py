@@ -1,11 +1,10 @@
 """Share links: a read-only copy of a chat for someone outside the team, such as a parent.
 
-A link shows the chat as it was when it was shared, and only what the team could already see: approved
-student messages and Claude's finished replies, with no names (people show as "Student" or "Mentor"), no
-attached files and nothing that's waiting, rejected or handled privately. The chat's student or a mentor
-asks for a link and says who it's for; a mentor approves it before it works (a mentor's own link works
-straight away). Links expire after SHARE_DAYS days and can be revoked at any time, and a chat a mentor
-makes private stops being shared."""
+A link shows the chat as it was when it was shared: approved student messages and Claude's finished replies,
+with no names (people show as "Student" or "Mentor"), no attached files and nothing that's waiting, rejected or
+handled privately. The chat's student or a mentor asks for a link and says who it's for, and a mentor approves
+it before it works (a mentor's own link works straight away). Links expire after SHARE_DAYS days, can be revoked
+at any time, and stop working when a mentor makes the chat private."""
 
 from __future__ import annotations
 

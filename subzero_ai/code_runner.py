@@ -2,20 +2,18 @@
 
 A mentor gives Claude a task. Claude can look around the copy on its own (list, read and search files), but
 every change to a file and every command waits for a mentor to approve it, with the exact change or command on
-screen. Commands must start with a program an admin allowed in Settings (gradlew by default), run in the copy's
-folder with a time limit and without the app's API keys or tokens in their environment variables. Nothing is
-pushed to GitHub: when the work is done, a mentor downloads the changes as a patch and applies it themselves.
+screen. Commands must start with a program an admin allowed in Settings (gradlew by default), and run in the
+copy's folder with a time limit and without the app's API keys or tokens in their environment variables. Nothing
+is pushed to GitHub: when the work is done, a mentor downloads the changes as a patch.
 
-A command still runs as the app's own account, so it could read files the app can read, such as config.env.
-That's why Claude can't change build files (anything a build runs before the code itself) and why the approval
-card for a command lists the files Claude changed: tests and the robot code run during a build too.
+Claude can't change build files, and the approval card for a command lists the files Claude changed.
 
 Code is for mentors, and for students once a mentor approves each request (M6, see docs/CODE_SANDBOX_PLAN.md).
-Each session's copy lives in DATA_DIR/code/<session id>: "base" is the repository as
-downloaded and "work" is Claude's copy, so the changes are the difference between the two.
+Each session's copy lives in DATA_DIR/code/<session id>: "base" is the repository as downloaded and "work" is
+Claude's copy, and the changes are the difference between the two.
 
-When sandboxes are on (Settings, code_sandbox), commands run inside the session's sandbox (sandbox.py) instead, against
-a copy of "work"; approved edits are written to both copies, and the patch still comes from the host copy."""
+When sandboxes are on (Settings, code_sandbox), commands run inside the session's sandbox (sandbox.py) instead,
+against a copy of "work"; approved edits are written to both copies, and the patch still comes from the host copy."""
 
 from __future__ import annotations
 
@@ -53,7 +51,7 @@ from .store import Viewer
 log = logging.getLogger("subzero.code")
 _OutputTail = OutputTail  # the output tail used by run_program and the tests
 
-MAX_TURNS = 40  # Claude replies per run, so a confused session can't spend without limit
+MAX_TURNS = 40  # Claude replies per run
 MAX_REPO_ZIP = 100 * 1024 * 1024
 MAX_REPO_FILES = 20_000
 MAX_REPO_BYTES = 400 * 1024 * 1024
@@ -62,11 +60,11 @@ MAX_WRITE_BYTES = 500 * 1024
 MAX_TASK_CHARS = 8000
 MAX_TOKENS = 16000
 KEEP_COPIES_DAYS = 14  # finished sessions' repository copies are deleted after this
-MAX_RUNNING_COMMANDS = 2  # across the whole app: a second build slows the first one down
+MAX_RUNNING_COMMANDS = 2  # commands running at once across the whole app
 COMMAND_WAIT_SECONDS = 60  # how long a command waits for a free slot before it is refused
 MAX_OPEN_SESSIONS = 5  # per mentor: sessions waiting or running at the same time
 STUCK_SESSION_DAYS = 3  # waiting, running or preparing this long with no activity: stopped, copy deleted
-REAP_SECONDS = 5  # after a command exits, how long its output may stay open (a background child process)
+REAP_SECONDS = 5  # after a command exits, how long its output may stay open
 SKIP_DIRS = {".git", ".gradle", "build", "bin", "node_modules", "__pycache__", ".idea", ".vscode"}
 FINISHED = ("done", "stopped", "failed")  # a session in one of these states has no more commands to run
 AWAITING = "awaiting_approval"  # a student's request that a mentor hasn't answered yet
@@ -77,9 +75,9 @@ STUDENTS_OFF = "Code isn't open to students yet. A mentor or admin can turn it o
 STUDENT_NEEDS_SANDBOX = ("Code for students needs the sandbox turned on. An admin can turn on Hyper-V in Settings, "
                          "Code.")
 SANDBOX_OFF_STOPPED = "The sandbox is off, so this session can't go on. An admin can turn it back on in Settings"
-# What a command in a sandbox gets: a fixed, Linux-style environment (the host's Windows variables don't apply)
+# What a command in a sandbox gets: a fixed, Linux-style environment
 SANDBOX_ENV = {"PATH": GUEST_PATH, "HOME": GUEST_HOME, "LANG": "C.UTF-8", "GRADLE_OPTS": GUEST_GRADLE_OPTS}
-# Only what a build needs from the app's environment. API keys, tokens and the rest stay out.
+# Only what a build needs from the app's environment.
 SAFE_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME",
             "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
             "JAVA_HOME", "GRADLE_USER_HOME", "LANG", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE")
@@ -138,9 +136,7 @@ class ToolProblem(Exception):
 
 
 # --------------------------------------------------------------------------- workspace
-# Files a build runs or that decide what a build downloads. A command runs as the app's own account, so a
-# changed build script could read the app's keys from disk. Claude can't change these; it can suggest changes
-# in its summary for a mentor to make by hand.
+# Build files and scripts, which Claude can't change.
 BUILD_DIRS = ("gradle", "buildsrc", ".gradle", ".wpilib", "vendordeps", ".mvn")  # folders at the repository root
 BUILD_NAMES = ("gradlew", "gradlew.bat", "gradle.properties")  # at any depth
 BUILD_SUFFIXES = (".groovy", ".gradle", ".kts", ".bat", ".cmd", ".ps1", ".sh", ".exe", ".jar")
@@ -148,8 +144,7 @@ BUILD_SUFFIXES = (".groovy", ".gradle", ".kts", ".bat", ".cmd", ".ps1", ".sh", "
 
 def is_build_file(name: str) -> bool:
     """True for a build file or script. Judged on a normalized path: case, slash style, and trailing dots and
-    spaces don't matter (Windows drops them, so `gradlew.bat.` is gradlew.bat). `..` and Windows stream
-    names (`file:stream`) are refused outright."""
+    spaces don't matter (`gradlew.bat.` is gradlew.bat). `..` and Windows stream names (`file:stream`) are refused."""
     raw = name.replace("\\", "/").split("/")
     if any(part not in ("", ".") and not part.rstrip(". ") for part in raw) or any(":" in part for part in raw):
         return True
@@ -194,7 +189,7 @@ class Workspace:
                 with archive.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 if info.external_attr >> 16 & 0o100:
-                    target.chmod(0o755)  # keep gradlew runnable on Linux and macOS
+                    target.chmod(0o755)  # makes gradlew runnable on Linux and macOS
         shutil.copytree(self.base, self.work)
         return count
 
@@ -476,7 +471,7 @@ def run_program(args: list[str], cwd: Path, timeout: int, session_id: int | None
 
 def _run_in_slot(args: list[str], cwd: Path, timeout: int, session_id: int | None) -> str:
     env = {key: os.environ[key] for key in SAFE_ENV if key in os.environ}
-    # No Gradle daemon: it would outlive the command (for hours) and hold memory on the mini PC
+    # No Gradle daemon
     env["GRADLE_OPTS"] = "-Dorg.gradle.daemon=false"
     kwargs: dict[str, Any] = {}
     if os.name == "nt":
@@ -492,7 +487,7 @@ def _run_in_slot(args: list[str], cwd: Path, timeout: int, session_id: int | Non
     if session_id is not None:
         with _RUNNING_LOCK:
             _RUNNING[session_id] = running
-    tail = OutputTail(MAX_OUTPUT_CHARS * 4)  # 4 bytes is the most a character takes in UTF-8
+    tail = OutputTail(MAX_OUTPUT_CHARS * 4)  # room for MAX_OUTPUT_CHARS of 4-byte UTF-8 characters
     reader = threading.Thread(target=read_output, args=(proc.stdout, tail, None), daemon=True)
     reader.start()
     timed_out = False
@@ -508,7 +503,7 @@ def _run_in_slot(args: list[str], cwd: Path, timeout: int, session_id: int | Non
                 if _RUNNING.get(session_id) is running:
                     del _RUNNING[session_id]
     reader.join(REAP_SECONDS)
-    if reader.is_alive():  # a child process still holds the output open: stop everything it started
+    if reader.is_alive():  # a child process still holds the output open: stops everything it started
         kill_process_tree(proc)
         reader.join(REAP_SECONDS)
     if not reader.is_alive():
@@ -764,8 +759,8 @@ class CodeRunner:
         text = self._clean_follow_up(row, text)
         self._check_open_limit(row["created_by"], student=bool(row["owner_is_student"]))
         if json.loads(row["transcript"])[-1]["role"] == "assistant":
-            # A run that ended between Claude's tool calls and their results. Answer them without running
-            # anything here: commands run only in the background, never while a page request waits.
+            # A run that ended between Claude's tool calls and their results: answers them as declined, without running
+            # anything.
             self.db.execute("UPDATE code_steps SET status = 'declined', review_note = 'The session ended before "
                             "this ran. Ask for it again if it is still needed.' WHERE session_id = ? "
                             "AND status IN ('approved', 'pending')", (session_id,))
@@ -871,13 +866,13 @@ class CodeRunner:
                           conn=conn)
         self._set(session_id, status="stopped")
         if row["status"] == "waiting":
-            self._answer_turn(session_id)  # so the transcript stays valid for a follow-up
+            self._answer_turn(session_id)  # answers Claude's open tool calls
         if self.sandboxes is not None:
             self.tasks.spawn(self._end_sandbox(session_id), name=f"code-{session_id}")
 
     def delete(self, viewer: Viewer, session_id: int) -> None:
         """Mentors only, any time: stop the session, delete its sandbox and copies, then its record. Runs in a worker
-        thread (the sandbox is deleted here, which can take a moment)."""
+        thread."""
         if not viewer.is_mentor:
             raise CodeError("Only mentors can delete a session.")
         row = self.get(session_id)
@@ -975,7 +970,7 @@ class CodeRunner:
 
     async def _resume(self, session_id: int) -> None:
         """Do the approved steps of the last turn, give Claude every result, and carry on."""
-        # In a worker thread: an approved build can take minutes, and the app must keep answering meanwhile
+        # Runs the approved steps in a worker thread.
         if await asyncio.to_thread(self._answer_turn, session_id) and self.get(session_id)["status"] == "running":
             await self._run(session_id)
 
@@ -1003,7 +998,7 @@ class CodeRunner:
                     status = "done"
                 except ToolProblem as exc:
                     output, status, error = str(exc), "error", True
-                # A Stop during the run has already marked this step stopped; keep that
+                # Keeps the status of a step a Stop already marked stopped.
                 stopped = not self.db.execute(
                     "UPDATE code_steps SET status = ?, output = ?, finished_at = ? WHERE id = ? AND status = 'running'",
                     (status, output, utcnow(), step["id"])).rowcount
@@ -1052,7 +1047,7 @@ class CodeRunner:
             if sandboxed:
                 return self._run_in_sandbox(session_id, workspace, str(args.get("command", "")))
             if session_id is not None and self._is_student(session_id):
-                # A student's commands never run on the mini PC, even if the sandbox was turned off meanwhile
+                # A student's commands never run on the mini PC.
                 raise ToolProblem("Commands can't run on the computer for students. A mentor can turn the sandbox "
                                   "back on in Settings.")
             command = parse_command(str(args.get("command", "")), self.settings.code_commands, workspace.work)
@@ -1086,7 +1081,7 @@ class CodeRunner:
         return handle
 
     def _mirror_edit(self, session_id: int, workspace: Workspace, path: str) -> None:
-        """Copy an approved edit into the sandbox. A sandbox made just now already has it, so it is copied again."""
+        """Copy an approved edit into the sandbox, including one made just now."""
         handle = self._sandbox_for(session_id, workspace)
         target = workspace.path(path)
         try:
@@ -1102,11 +1097,11 @@ class CodeRunner:
         workspace.check_room()
         try:
             self.sandboxes.check_room()
-        except SandboxError as exc:  # SandboxRefused is one
+        except SandboxError as exc:  # includes SandboxRefused
             raise ToolProblem(str(exc)) from exc
         handle = self._sandbox_for(session_id, workspace)
         backend = self.sandboxes.backend(handle.backend)
-        env = {**SANDBOX_ENV, **self.sandboxes.command_env(handle)}  # includes the proxy login: never shown as is
+        env = {**SANDBOX_ENV, **self.sandboxes.command_env(handle)}  # includes the proxy login
         # A program in the repository (the Gradle wrapper) runs from there; anything else is found on the sandbox's PATH
         program = f"./{name}" if (workspace.work / name).is_file() else name
         timeout = self._timeout(session_id)
@@ -1155,7 +1150,7 @@ class CodeRunner:
         """Keep a copy of the sandbox's repository on the host, and say which files commands changed there.
         The patch still comes from the host copy, which only holds approved edits."""
         data = self.sandboxes.backend(handle.backend).get_archive(handle, src="work", exclude=COPY_SKIP)
-        if len(data) > MAX_SESSION_BYTES:  # each backend already refuses this; checked again before anything is written
+        if len(data) > MAX_SESSION_BYTES:  # checked again before anything is written
             raise SandboxError("The sandbox's files are too big to save, so they weren't kept.")
         (workspace.root / "sandbox-export.zip").write_bytes(data)
         drift = changed_in_archive(data, workspace.work, COPY_SKIP)
@@ -1166,10 +1161,10 @@ class CodeRunner:
                        "The patch only has changes made through approved edits, so check these by hand.")
 
     def system_prompt(self, row) -> str:
-        from .generation import load_safety_prompt  # imported here: generation pulls in much of the app
+        from .generation import load_safety_prompt
         text = build_system_prompt(student=bool(row["owner_is_student"]), sandboxed=self.sandboxed,
                                    free_rein=bool(row["free_rein"]), commands=self.command_programs())
-        # The chat safety rules apply to Code too (they come first, and the Code rules below only narrow them)
+        # The chat safety rules come first, followed by the Code rules.
         return f"{load_safety_prompt(self.settings)}\n\n---\n\n{text}"
 
     async def _run(self, session_id: int) -> None:
@@ -1178,7 +1173,7 @@ class CodeRunner:
         self._busy.add(session_id)
         try:
             await self._loop(session_id)
-        except Exception as exc:  # keep the session readable whatever went wrong
+        except Exception as exc:  # records the failure on the session
             log.exception("Code session %s failed", session_id)
             self._set(session_id, status="failed", error=f"Something went wrong ({type(exc).__name__}).")
         finally:
@@ -1197,7 +1192,7 @@ class CodeRunner:
             if row is None or row["status"] != "running":
                 return
             if (row["owner_is_student"] or row["free_rein"]) and not self.sandboxed:
-                # Free rein and students need the sandbox. Without it, nothing may run on the computer, so stop here.
+                # Free rein and students need the sandbox; without it the session fails here.
                 self._set(session_id, status="failed", error=SANDBOX_OFF_STOPPED)
                 return
             transcript = json.loads(row["transcript"])
@@ -1268,7 +1263,7 @@ class CodeRunner:
 
 def build_system_prompt(*, student: bool, sandboxed: bool, free_rein: bool, commands: tuple[str, ...]) -> str:
     """The instructions for one Code session's Claude. A sandbox is a disposable Linux computer of its own, and with
-    free rein its changes and commands run without a click, so the sandbox is the only limit then."""
+    free rein its changes and commands run without a click."""
     who = "a high school robotics student on the team" if student else "a mentor of a high school robotics team"
     if sandboxed:
         place = ("You're in a copy of the team's repository, inside a sandbox: a disposable Linux virtual computer "

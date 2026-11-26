@@ -111,8 +111,7 @@ def visible(viewer: Viewer, row) -> bool:
 
 
 def gate(request: Request, viewer: Viewer) -> Response | None:
-    """Students get Code only while a mentor or admin has turned on code_student_access. The sidebar hides it the same
-    way. Mentors are never blocked here."""
+    """Students get Code only while a mentor or admin has turned on code_student_access. Mentors always get it."""
     if viewer.is_mentor or services(request).settings.code_student_access:
         return None
     if request.method != "GET":
@@ -191,7 +190,7 @@ def _session_context(s: Services, row, viewer: Viewer) -> dict[str, Any]:
     all_changes = workspace.changes() if ready else []
     changes = all_changes if mentor or released else []
     if any(step["status"] == "pending" and step["command"] for step in steps):
-        # A build or test run executes the code Claude changed, with the app's own permissions
+        # Lists the changed files on each pending command step.
         changed = [c["name"] for c in (changes or workspace.changes())]
         for step in steps:
             if step["status"] == "pending" and step["command"]:
@@ -329,7 +328,7 @@ async def _extend(request, viewer, s: Services, form) -> str:
 
 async def _delete(request, viewer, s: Services, form) -> str:
     sid = request.path_params["sid"]
-    # Deleting the sandbox takes a moment, so it runs in a worker thread and the app keeps answering meanwhile
+    # Deletes the sandbox in a worker thread.
     await asyncio.to_thread(s.code.delete, viewer, sid)
     return "/code"
 

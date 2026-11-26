@@ -70,8 +70,8 @@ def resolve_backend(settings: Settings) -> str:
 
 
 class UnavailableClient:
-    """Stands in when the chosen backend can't run, so the service stays up. Students and mentors get a short
-    `message`; the admin-facing `detail` (what to fix in config.env) goes to the log once and to `check`."""
+    """Stands in when the chosen backend can't run. Students and mentors get a short `message`; the admin-facing
+    `detail` (what to fix in config.env) goes to the log once and to `check`."""
 
     def __init__(self, detail: str, message: str = UNAVAILABLE_MESSAGE):
         self.detail = detail
@@ -101,7 +101,7 @@ def unavailable_message(backend: str) -> str:
 
 
 def make_client(settings: Settings, *, max_retries: int | None = None) -> AIBackend:
-    """Build the AI client for the configured backend. Bad settings give an UnavailableClient, never a crash."""
+    """Build the AI client for the configured backend. Bad settings give an UnavailableClient."""
     backend = resolve_backend(settings)
     if backend == "fake":
         return FakeClaude()

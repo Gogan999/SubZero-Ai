@@ -1,8 +1,7 @@
 """The first-run setup page's logic: which steps are done, the Create Slack app link, and the recovery code.
 
-Setup answers only on the mini PC itself and locks once it's finished. The recovery code lets an admin sign in
-on the mini PC if Slack sign-in ever breaks.
-"""
+Setup answers only on the mini PC itself and locks once it's finished. The recovery code signs an admin in on
+the mini PC."""
 
 from __future__ import annotations
 
@@ -15,7 +14,7 @@ from urllib.parse import quote, urlparse
 from .config import Settings
 from .db import Database, utcnow
 
-RECOVERY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I, which are easy to misread
+RECOVERY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I
 RECOVERY_ITERATIONS = 200_000
 PLACEHOLDER_HOSTS = ("yourdomain.org", "example.org", "example.com")
 

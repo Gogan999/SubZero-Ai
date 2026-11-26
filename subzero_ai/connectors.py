@@ -1,12 +1,11 @@
-"""Connectors: add files to a message from the team's GitHub repository or from a Google Drive link, instead of
-downloading and attaching them.
+"""Connectors: add files to a message from the team's GitHub repository or from a Google Drive link.
 
-The files are fetched on the mini PC when the message is sent and stored like any attachment, so mentors see
-them on the review card and nothing reaches Claude before the message is approved.
+The files are fetched on the mini PC when the message is sent and stored like any attachment, so they show on the
+review card and reach Claude only after the message is approved.
 
-GitHub: an admin names one repository (and, for a private one, a read-only token) in Settings. Everyone can
+GitHub: an admin names one repository (and, for a private one, a read-only token) in Settings, and everyone can
 browse it from the composer. Google Drive: anyone can paste a link to a Doc, Sheet, Slides deck or file that's
-shared as "Anyone with the link". There's no Google sign-in, so a file has to be shared that way to work."""
+shared as "Anyone with the link"."""
 
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ from .config import Settings
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 BRANCH_RE = re.compile(r"[A-Za-z0-9._/-]{1,100}")
 DRIVE_ID_RE = re.compile(r"[A-Za-z0-9_-]{15,200}")
-SUPPORTED = TEXT_EXTENSIONS | IMAGE_EXTENSIONS  # no videos: Claude only sees stills taken in the browser
+SUPPORTED = TEXT_EXTENSIONS | IMAGE_EXTENSIONS  # no videos
 MAX_FETCH_BYTES = 10 * 1024 * 1024
 TIMEOUT = 20
 GOOGLE_HOSTS = (".google.com", ".googleusercontent.com")
@@ -108,7 +107,7 @@ class GitHub:
         self._get("", repo=repo, branch=branch, token=token)
 
     def download_zip(self, limit: int) -> bytes:
-        """The whole repository at the configured branch, as GitHub's zip archive (no git needed)."""
+        """The whole repository at the configured branch, as GitHub's zip archive."""
         url = f"{self.API}/repos/{self.settings.connector_github_repo}/zipball/{quote(self.settings.connector_github_branch, safe='/')}"
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                    "User-Agent": "SubZero-AI"}
@@ -194,7 +193,7 @@ class Drive:
         not_shared = ConnectorError(f"That {label} isn't shared as \"Anyone with the link\", so it can't be added. "
                                     "Change its sharing in Drive, or download it and attach it instead.")
         session = self.session_factory()
-        # Follow redirects one at a time, so every hop is checked to be Google's
+        # Follows redirects one at a time and checks that every hop is Google's.
         for _ in range(6):
             host = (urlparse(url).hostname or "").lower()
             if urlparse(url).scheme != "https" or not _google(host):

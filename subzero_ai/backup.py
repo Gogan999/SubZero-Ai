@@ -1,9 +1,7 @@
 """Backups of the database, attached files, and changed prompts, and putting one back.
 
 A backup is one zip file in the backups folder, named for when it was made, like subzero-20261025-020000.zip.
-config.env is left out on purpose: it holds the API key and Slack tokens, and the backups folder may be synced
-to OneDrive or Google Drive. Keep a copy of config.env somewhere safe instead.
-"""
+config.env is not included."""
 
 from __future__ import annotations
 
@@ -29,8 +27,7 @@ NAME_RE = re.compile(r"subzero-(\d{8})-(\d{6})(?:-([a-z0-9-]+))?\.zip")
 MANIFEST = "backup.json"
 DB_NAME = "subzero.db"
 FOLDERS = ("files", "prompts")  # folders under DATA_DIR that go in each backup
-# Videos (up to 50 MB each) are left out: every backup is a full copy, so 30 days of backups would hold 30 copies
-# of every clip. The stills Claude saw are small and stay in. A restore keeps the videos already on disk.
+# Video files are left out of backups. A restore keeps the videos already on disk.
 VIDEO_SUFFIXES = (".mp4", ".m4v", ".mov", ".webm")
 
 
@@ -51,7 +48,7 @@ class BackupInfo:
 
 
 def make_backup(settings: Settings, *, label: str = "", now: datetime | None = None) -> Path:
-    """Copy the database (safely, even while the app is running), attached files, and prompts into a new zip."""
+    """Copy the database (safe while the app is running), attached files, and prompts into a new zip."""
     if not settings.db_path.exists():
         raise BackupError(f"There's no database at {settings.db_path} to back up.")
     now = now or datetime.now()
@@ -206,7 +203,7 @@ def _safe_member(name: str) -> PurePosixPath:
 
 def restore_backup(settings: Settings, path: Path, *, now: datetime | None = None) -> dict:
     """Put a backup back: the database, attached files, and prompts. The app must be stopped first.
-    The current data is backed up first (labelled before-restore), so a restore can be undone."""
+    The current data is backed up first, labelled before-restore."""
     manifest = check_backup(path)
     now = now or datetime.now()
     safety = None
@@ -251,7 +248,7 @@ def restore_backup(settings: Settings, path: Path, *, now: datetime | None = Non
 
 
 def _keep_videos(old: Path, current: Path) -> None:
-    """Backups leave videos out, so carry the ones on disk over into the restored files folder."""
+    """Carries the videos on disk over into the restored files folder."""
     for path in old.rglob("*"):
         if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES:
             target = current / path.relative_to(old)

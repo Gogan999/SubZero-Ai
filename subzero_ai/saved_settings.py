@@ -30,7 +30,7 @@ SANDBOX_CHOICES = (("off", "Off: commands run on the computer (as before)"),
                    ("hyperv", "Hyper-V: each session gets its own virtual computer"),
                    ) + ((("fake", "Fake: this computer, no isolation (testing only)"),) if fake_sandbox_allowed() else ())
 SWITCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}")
-# The dropdown value that means "type the model id under Other"; never a real model id
+# The dropdown value that means "type the model id under Other"
 OTHER_MODEL = "__other__"
 # provider/model. The model part can hold more slashes (OpenRouter ids look like meta-llama/llama-4).
 MODEL_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,30})/([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})")
@@ -44,7 +44,7 @@ PROVIDER_HELP = {
                       "Needs AI_BACKEND=pi."),
 }
 SLACK_ID_RE = re.compile(r"[UW][A-Z0-9]{2,}")
-# These cost more and need 30-day data retention at Anthropic, so the plan keeps them off.
+# Models that are never allowed.
 BLOCKED_MODEL_WORDS = ("fable", "mythos")
 
 
@@ -282,14 +282,14 @@ def form_text(form: Mapping[str, Any], name: str) -> str:
 
 
 def check_path(raw: str) -> bool:
-    """An absolute Windows or POSIX path with no control characters or quotes that could break a script."""
+    """An absolute Windows or POSIX path with no control characters or quotes."""
     if len(raw) > 260 or any(ord(ch) < 32 or ch in "\"`$;'" for ch in raw):
         return False
     return PureWindowsPath(raw).is_absolute() or PurePosixPath(raw).is_absolute()
 
 
 def _private_ipv4(raw: str) -> bool:
-    """A private IPv4 address, such as the sandbox switch's. Never 0.0.0.0, which would listen on every network."""
+    """A private IPv4 address, such as the sandbox switch's. Never 0.0.0.0."""
     try:
         address = ipaddress.IPv4Address(raw)
     except ValueError:
@@ -330,7 +330,7 @@ def check_model(raw: str, providers, backend: str) -> tuple[str, str]:
 
 
 def judge_ok(model: str) -> bool:
-    """The safety check's judge decides which models students can use, so it must be a Claude model."""
+    """The safety check's judge must be a Claude model."""
     provider, _, name = normalize_model_id(model).partition("/")
     return provider in ("anthropic", "claude-bridge") and name.startswith("claude-")
 
@@ -378,7 +378,7 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
             values[f.name] = number
         elif f.kind == "model":
             if f.name == "model_check_judge" and f.name not in form:
-                continue  # added in 0.7: a form from before then leaves it alone
+                continue  # missing from the form: left as it is
             model, problem = check_model(raw, providers, backend)
             if not problem and db is not None and f.name in CHECKED_MODEL_SETTINGS:
                 unchanged = settings is not None and model == normalize_model_id(getattr(settings, f.name))
@@ -442,18 +442,18 @@ def validate(section: str, form: Mapping[str, Any], *, actor_slack_id: str = "",
             else:
                 values[f.name] = frozenset(items)
     if section == "code" and values.get("code_student_access"):
-        # Students' sessions need a sandbox. Checked on the form's own sandbox value, so both can be saved together.
+        # Students' sessions need a sandbox, checked against the form's own sandbox value.
         kind = str(values.get("code_sandbox", settings.code_sandbox if settings is not None else "off"))
         if kind.strip().lower() not in student_sandboxes():
             errors["code_student_access"] = ("Turn on Hyper-V sandboxes first (Run Code commands in a sandbox), "
                                              "then let students start Code sessions.")
             del values["code_student_access"]
     if "ai_providers" in values and settings is not None:
-        # A provider can't be turned off while a model setting still uses it
+        # A provider can't be turned off while a model setting still uses it.
         in_form = {f.name for f in fields}
         for name in MODEL_ID_SETTINGS:
             if name in in_form:
-                model = values.get(name, "")  # empty when it failed its own check, which is reported already
+                model = values.get(name, "")  # empty when it failed its own check
             else:
                 model = getattr(settings, name)
             provider = model.split("/", 1)[0] if "/" in model else ""

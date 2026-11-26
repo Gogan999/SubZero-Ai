@@ -1,9 +1,8 @@
-"""Keeps track of whether Slack and the Claude API are working, for the admin page and /healthz,
-and sends admins a Slack DM when either has been failing for 15 minutes (and again when it recovers).
+"""Tracks whether Slack and the Claude API are working, for the admin page and /healthz, and DMs admins when
+either has been failing for 15 minutes and again when it recovers.
 
-Slack is probed every few minutes, which is free. Claude is judged by real replies, and only while a call
-has just failed is it probed with a one-token request, so one stray error clears itself within minutes
-instead of looking like an outage until the next student asks something."""
+Slack is probed every few minutes. Claude is judged by real replies, and while its last call failed it is probed
+with a one-token request."""
 
 from __future__ import annotations
 
@@ -20,8 +19,7 @@ log = logging.getLogger("subzero.health")
 ALERT_AFTER_SECONDS = 15 * 60
 SLACK_PROBE_SECONDS = 5 * 60
 CLAUDE_PROBE_SECONDS = 5 * 60
-# How many failures in a row count as "not working": one Slack probe, but two Claude calls, since a single
-# busy (529) or empty reply happens now and then.
+# How many failures in a row count as "not working": one Slack probe, or two Claude calls.
 FAILURES_NEEDED = {"slack": 1, "claude": 2}
 NAMES = {"slack": "Slack", "claude": "the Claude API"}
 
@@ -69,7 +67,7 @@ class Health:
                 status.failing_since = now
 
     async def check(self) -> None:
-        """Called every minute: probe Slack now and then (it's free), then send any alerts that are due."""
+        """Called every minute: probes Slack when due, then sends any alerts that are due."""
         now = self.clock()
         if self.slack is not None and (self._probed_at is None or now - self._probed_at >= SLACK_PROBE_SECONDS
                                        or self.status["slack"].failing_since is not None):
@@ -87,8 +85,7 @@ class Health:
         await self._send_alerts()
 
     async def _probe_claude(self, now: float) -> None:
-        """While Claude's last call failed, check it now and then with a one-token request (a tiny fraction
-        of a cent), so it can recover, or be confirmed down, without waiting for a student."""
+        """While Claude's last call failed, checks it now and then with a one-token request."""
         if self.claude is None or self.status["claude"].failing_since is None:
             return
         if self._claude_probed_at is not None and now - self._claude_probed_at < CLAUDE_PROBE_SECONDS:

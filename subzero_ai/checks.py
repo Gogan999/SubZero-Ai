@@ -1,5 +1,5 @@
-"""`python -m subzero_ai check`: confirms config.env, Slack, and the Claude API key work
-before anyone depends on them. Each Claude check is a tiny request that costs a fraction of a cent."""
+"""`python -m subzero_ai check`: confirms config.env, Slack, and the Claude API key work. Each Claude check is a
+tiny request."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
     _check_safety_results(settings, add)
     if settings.code_sandbox == "hyperv":
         await _check_sandbox_network(settings, add, sandbox_runner)
-        if egress is not None:  # the running proxy is only known inside the app, so the CLI check leaves this out
+        if egress is not None:
             _check_egress(egress, add)
 
     # ------------------------------------------------------------------- Slack
@@ -152,8 +152,8 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
 
 
 def _check_safety_results(settings: Settings, add) -> None:
-    """Warn about each model in use that hasn't passed the Model safety check (models set before the check
-    existed are allowed to keep working, so this is a warning, not a failure)."""
+    """Warn about each model in use that hasn't passed the Model safety check. Models set before the check existed
+    give a warning, not a failure."""
     from .db import Database
     from .model_check import has_passed
     try:
@@ -171,9 +171,8 @@ def _check_safety_results(settings: Settings, add) -> None:
 
 
 async def _check_sandbox_network(settings: Settings, add, runner=None) -> None:
-    """The host's side of the sandbox network (sandbox.py host_network_check_script). It runs PowerShell, so it is
-    only run from the Settings page's background check and the check command, never while a page loads. `runner`
-    is injected in tests."""
+    """The host's side of the sandbox network (sandbox.py host_network_check_script). Runs PowerShell, from the
+    Settings page's background check and the check command. `runner` is injected in tests."""
     if runner is None and os.name != "nt":
         add(WARN, "The sandbox network can't be checked on this computer",
             "It can only be checked on the Windows mini PC, where the Hyper-V sandboxes run.")
@@ -270,7 +269,7 @@ def check_node_version(node: str, add, runner=None) -> None:
 
 
 def data_folder_open(path: str, icacls_output: str | None = None) -> str:
-    """On Windows, the data folder (with config.env and the chats) should be open only to administrators,
+    """On Windows, checks that the data folder (with config.env and the chats) is open only to administrators,
     SYSTEM, and the app's service account. Returns what's wrong, or an empty string."""
     if icacls_output is None:
         try:

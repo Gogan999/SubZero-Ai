@@ -21,7 +21,7 @@ API_VERSION = "2023-06-01"
 RETRY_STATUSES = {429, 500, 502, 503, 504, 529}
 
 
-# The server-side web search tool. Claude runs the searches on Anthropic's side and cites what it used.
+# The server-side web search tool: Claude runs the searches on Anthropic's side and cites what it used.
 WEB_SEARCH_TOOL = "web_search_20260209"
 
 
@@ -146,8 +146,7 @@ class ClaudeClient:
         body: dict[str, Any] = {
             "model": api_model(model),
             "max_tokens": max_tokens,
-            # Cache the system prompt: it's identical across requests, so repeats bill at the cache-read rate.
-            # system_extra goes after the cached part, so it doesn't spoil the cache for other requests.
+            # Caches the system prompt. system_extra goes after the cached part.
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             "messages": messages,
         }
@@ -329,10 +328,11 @@ SAMPLE_EXPLAINER = """<!doctype html>
 
 
 class FakeClaude:
-    """Streams a canned reply. Lets you try the whole app without an API key.
+    """Streams a canned reply, for using the app without an API key.
 
-    Include ALERT-TEST in a message to get a reply that starts with [MENTOR ALERT],
-    or ERROR-TEST to simulate a failed request. SCREEN-FLAG and SCREEN-ERROR do the same for the pre-screen. Ask for an interactive explainer to get a sample one."""
+    Include ALERT-TEST in a message to get a reply that starts with [MENTOR ALERT], or ERROR-TEST to simulate a
+    failed request. SCREEN-FLAG and SCREEN-ERROR do the same for the pre-screen. Ask for an interactive explainer to
+    get a sample one."""
 
     def __init__(self, delay: float = 0.02):
         self.delay = delay

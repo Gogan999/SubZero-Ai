@@ -180,7 +180,7 @@ class Store:
                 "(c.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM messages m3 WHERE m3.conversation_id = c.id AND "
                 "m3.content LIKE ? ESCAPE '\\' AND (m3.role = 'assistant' OR m3.status IN ('approved','edited','auto','grace') OR c.owner_id = ?)))"
             )
-            # Search for what was typed: % and _ are wildcards in LIKE, so escape them.
+            # Searches for the typed text, with LIKE's % and _ escaped.
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             like = f"%{escaped}%"
             params += [like, like, viewer.id]
@@ -295,9 +295,8 @@ class Store:
     def window_open(self, conversation_id: int, minutes: int) -> bool:
         """Whether a student's next message in this chat can skip review: the latest message they sent was
         approved by a mentor, or itself sent in the window, less than this many minutes ago. A rejected,
-        privately handled, flagged, or withdrawn message closes the window (so a student can't withdraw a
-        flagged message and reword it until the screener passes it), and so does a MENTOR ALERT (which makes the
-        chat private). The first message of every chat is always reviewed."""
+        privately handled, flagged, or withdrawn message closes the window, and so does a MENTOR ALERT. The first
+        message of every chat is always reviewed."""
         if minutes <= 0:
             return False
         conv = self.db.one("SELECT visibility FROM conversations WHERE id = ?", (conversation_id,))
@@ -394,13 +393,13 @@ class Store:
 
     # -------------------------------------------------------------- slack DMs
     def claim_dm_event(self, channel: str, ts: str) -> bool:
-        """Remember a Slack message. False when it was seen before (Slack delivered it twice)."""
+        """Remember a Slack message. False when it was seen before."""
         cur = self.db.execute("INSERT OR IGNORE INTO slack_dm_messages (channel, ts, created_at) VALUES (?, ?, ?)",
                               (channel, ts, utcnow()))
         return cur.rowcount > 0
 
     def release_dm_event(self, channel: str, ts: str) -> None:
-        """Forget a Slack message that couldn't be processed, so Slack's retry is handled."""
+        """Forget a Slack message that couldn't be processed."""
         self.db.execute("DELETE FROM slack_dm_messages WHERE channel = ? AND ts = ? AND message_id IS NULL",
                         (channel, ts))
 

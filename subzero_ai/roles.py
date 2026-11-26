@@ -37,8 +37,7 @@ def is_builtin_user(slack_user_id: str) -> bool:
 
 
 def is_excluded_account(info: dict, settings: Settings) -> bool:
-    """Slack accounts that can't use the app: deleted ones, bots, and (unless allowed) guests,
-    who might be parents, sponsors, alumni, or other teams' mentors."""
+    """Slack accounts that can't use the app: deleted ones, bots, and guests unless guests are allowed."""
     if info.get("deleted") or info.get("is_bot"):
         return True
     guest = info.get("is_restricted") or info.get("is_ultra_restricted")

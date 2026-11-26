@@ -1,8 +1,7 @@
 """Slack Socket Mode client.
 
-The app opens a WebSocket to Slack (so nothing needs to reach into the mini PC), receives
-button clicks and modal submissions as envelopes, and acknowledges each one.
-"""
+Opens a WebSocket to Slack, receives button clicks and modal submissions as envelopes, and
+acknowledges each one."""
 
 from __future__ import annotations
 
@@ -96,7 +95,7 @@ class SocketModeClient:
 
 
 class WebsocketsTransport:
-    """Adapter for the `websockets` package (installed on the server; version 13 or newer)."""
+    """Adapter for the `websockets` package (version 13 or newer)."""
 
     def __init__(self, ws: Any):
         self.ws = ws
@@ -104,7 +103,7 @@ class WebsocketsTransport:
     @classmethod
     async def connect(cls, url: str) -> WebsocketsTransport:
         from websockets.asyncio.client import (
-            connect,  # imported lazily so tests don't need it
+            connect,
         )
 
         ws = await connect(url, ping_interval=20, ping_timeout=20, max_size=8 * 1024 * 1024)

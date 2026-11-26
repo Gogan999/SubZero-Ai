@@ -306,17 +306,17 @@ def safety_context(s: Services) -> dict[str, Any]:
 
 
 async def learn_workspace(s: Services) -> None:
-    """Ask Slack for the workspace's name once, for the Connected accounts list. Never blocks the page long."""
+    """Ask Slack for the workspace's name once, for the Connected accounts list."""
     if s.slack_workspace or s.slack is None or not s.settings.slack_bot_token:
         return
     if time.monotonic() - s.slack_workspace_asked < 600:
-        return  # Slack didn't answer recently: don't slow every page load while it's down
+        return  # Slack didn't answer recently: skips asking
     s.slack_workspace_asked = time.monotonic()
     try:
         auth = await asyncio.wait_for(s.slack.auth_test(), timeout=3)
         s.slack_workspace = auth.get("team") or auth.get("team_id") or ""
     except Exception:
-        pass  # the health list already says when Slack isn't working
+        pass
 
 
 @page(require="admin")
@@ -356,7 +356,7 @@ _background: set = set()
 
 
 def refresh_model_names(s: Services) -> None:
-    """Re-read the gateway's model names in the background (providers or keys changed). Never blocks or fails."""
+    """Re-read the gateway's model names in the background (providers or keys changed)."""
     if getattr(s.claude, "list_models", None) is None:
         return
     task = asyncio.get_running_loop().create_task(_load_model_names(s))
@@ -392,7 +392,7 @@ def key_problem(provider: str, key: str) -> str:
 
 @page(require="admin")
 async def save_ai_keys(request: Request, viewer: Viewer) -> Response:
-    """Save API keys for the providers that are turned on. They go in config.env and are never shown again."""
+    """Save API keys for the providers that are turned on, in config.env."""
     s = services(request)
     form = await request.form()
     typed = {p: str(form.get(name, "") or "").strip() for p, name in KEY_SETTINGS.items()}
@@ -447,7 +447,7 @@ GITHUB_URL_RE = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/\s]+/[^/#?\
 @page(require="admin")
 async def save_connectors(request: Request, viewer: Viewer) -> Response:
     """The GitHub repository and Google Drive links for the composer's connectors. The token goes in config.env
-    with the other secrets and is never shown again."""
+    with the other secrets."""
     s = services(request)
     form = {k: str(v).strip() for k, v in (await request.form()).items() if isinstance(v, str)}
     repo, branch = form.get("connector_github_repo", ""), form.get("connector_github_branch", "")
@@ -617,7 +617,7 @@ async def _run_checks(s: Services, actor_id: int, actor_name: str) -> None:
 
 @page(require="admin")
 async def start_checks(request: Request, viewer: Viewer) -> Response:
-    """Run the same checks as check.cmd, in the background: they can take longer than the tunnel waits."""
+    """Run the same checks as check.cmd, in the background."""
     s = services(request)
     if s.checks_running:
         flash(request, "The checks are already running. Refresh in a minute.")
@@ -650,7 +650,7 @@ async def bridge_sign_in(request: Request, viewer: Viewer) -> Response:
 
 @page(require="admin")
 async def bridge_code(request: Request, viewer: Viewer) -> Response:
-    """Hand the pasted code to the waiting sign-in. The code itself is never logged, saved or shown again."""
+    """Hand the pasted code to the waiting sign-in. The code is never logged, saved or shown again."""
     s = services(request)
     form = await request.form()
     code = str(form.get("code") or "").strip()
@@ -694,7 +694,7 @@ async def bridge_sign_out(request: Request, viewer: Viewer) -> Response:
     else:
         try:
             path.unlink()
-        except OSError as exc:  # on Windows, the AI helper may have the file open
+        except OSError as exc:  # deleting can fail on Windows while the AI helper has the file open
             log.warning("Couldn't remove the Claude subscription login: %s", type(exc).__name__)
             flash(request, "Couldn't sign out right now because the AI helper is using the login. Try again in a "
                            "minute, or restart first.")
@@ -758,7 +758,7 @@ async def _run_safety_check(s: Services, model: str, actor_id: int, actor_name: 
 
 @page(require="admin")
 async def run_model_check(request: Request, viewer: Viewer) -> Response:
-    """Start the safety check as a background job: a full check takes longer than the tunnel waits."""
+    """Start the safety check as a background job."""
     s = services(request)
     form = await request.form()
     model, problem = saved_settings.check_model(str(form.get("model", "") or ""), s.settings.ai_providers,
@@ -839,7 +839,7 @@ async def setup_step(request: Request) -> Response:
     errors: dict[str, str] = {}
     notes: dict[str, str] = {}
     if any("\n" in value or "\r" in value for key, value in form.items() if key != "admins"):
-        # Tokens copied from a wrapped page sometimes pick up a line break; config.env can't hold one.
+        # Refuses tokens that contain a line break.
         errors[step] = "That value has a line break in it. Paste it again on one line."
         channels, problem = await _channel_choices(s)
         return render(request, "setup.html", None, status_code=400,
@@ -976,7 +976,7 @@ async def recovery_login(request: Request) -> Response:
         return render(request, "recovery.html", None, status_code=403,
                       error="Your session expired. Reload the page and try again.")
     form = await request.form()
-    await asyncio.sleep(0.5)  # slow down guessing
+    await asyncio.sleep(0.5)  # waits half a second before checking the code
     if not setup_flow.check_recovery_code(s.db, str(form.get("code", ""))):
         s.db.audit("recovery_sign_in_refused", actor_id=None)
         return render(request, "recovery.html", None, status_code=400,

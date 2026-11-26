@@ -1,9 +1,8 @@
 """Signing in the Claude subscription (Claude Code) from the Settings page.
 
 `claude auth login --claudeai` prints a sign-in address and then waits for a code on its input. The admin opens the
-address on their own computer or phone, signs in, copies the code Claude shows, and pastes it on the Settings page;
-we hand it to the waiting program. Nothing has to happen on the mini PC itself. The code is never logged or saved.
-"""
+address on their own computer or phone, signs in, and pastes the code Claude shows on the Settings page, which
+hands it to the waiting program. The code is never logged or saved."""
 from __future__ import annotations
 
 import os
@@ -19,7 +18,7 @@ from urllib.parse import urlsplit
 URL_WAIT = 30.0  # seconds to wait for Claude Code to print its sign-in address
 CODE_WAIT = 60.0  # seconds to wait for Claude Code to finish after it gets the code
 EXPIRES = 15 * 60  # a sign-in that nobody finished is stopped after this many seconds
-# Only addresses on Anthropic's own sites are shown as the sign-in link
+# Only addresses on Anthropic's own sites are shown as the sign-in link.
 SIGN_IN_HOSTS = ("claude.com", "claude.ai", "anthropic.com")
 _URL = re.compile(r"https://[^\s\"'<>]+")
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
@@ -27,7 +26,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
 
 def login_env(data_dir: Path) -> dict[str, str]:
     """What Claude Code gets when it signs in: only the system variables it needs, plus the bridge's own config
-    folder. Never an API key or token, which would make it bill the API (or skip the login) instead."""
+    folder. No API key or token."""
     from .pi_client import child_env
     config_dir = Path(data_dir) / "bridge" / "claude-config"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -66,7 +65,7 @@ def failure_text(output: str) -> str:
 
 def looks_like_code(code: str) -> bool:
     """True if a pasted code could be one: Claude shows it as <code>#<state>, one line of letters, digits and a few
-    symbols. A code missing its #<state> half was cut off when it was copied."""
+    symbols."""
     return bool(re.fullmatch(r"[A-Za-z0-9_\-.~=+/]{4,1024}#[A-Za-z0-9_\-.~=+/]{4,1024}", code))
 
 
@@ -100,7 +99,7 @@ class BridgeLogin:
         return "".join(self._output)
 
     def _read(self, proc: Any) -> None:
-        """Copy the program's output into memory as it comes, so its pipe never fills up."""
+        """Copy the program's output into memory as it comes."""
         stream = proc.stdout
         while True:
             try:
@@ -130,7 +129,7 @@ class BridgeLogin:
         """Start Claude Code's sign-in and return the address to open. Replaces a sign-in that was waiting."""
         self.cancel()
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        # BROWSER=none keeps Claude Code from opening a browser on the mini PC, where nobody is looking
+        # BROWSER=none keeps Claude Code from opening a browser on the mini PC.
         try:
             proc = self._popen([str(cli), "auth", "login", "--claudeai"], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env={**env, "BROWSER": "none"},
@@ -165,7 +164,7 @@ class BridgeLogin:
         except (OSError, ValueError) as exc:
             self.cancel()
             raise LoginError("Claude Code stopped before it got the code. Press Sign in again.") from exc
-        # Claude Code asks again, instead of stopping, when it can't read the code: don't wait the full minute then
+        # Stops waiting early when Claude Code asks for the code again.
         rejected = lambda: "Invalid code" in clean(self._text()[before:])  # noqa: E731
         done = self._wait_for(lambda: proc.poll() is not None or rejected(), CODE_WAIT)
         if rejected():
@@ -173,7 +172,7 @@ class BridgeLogin:
             raise LoginError("That code wasn't complete. Press Sign in again, and copy the whole code from the Claude "
                              "page, including the part after the #.")
         if done:
-            self._wait_for(lambda: False, 0.2)  # let the last of the output arrive
+            self._wait_for(lambda: False, 0.2)  # waits for the last of the output
         reason = failure_text(self._text()[before:])
         ok = done and proc.poll() == 0 and signed_in()
         self.cancel()

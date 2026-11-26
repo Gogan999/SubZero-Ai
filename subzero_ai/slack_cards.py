@@ -44,7 +44,7 @@ def card_body(text: str, link: str) -> str:
 
 
 def files_line(files: list[tuple[str, int]], link: str) -> str:
-    """Slack can't load files from behind the app's sign-in, so the card lists them and links to the chat."""
+    """The attached files as a list on the card, with a link to the chat."""
     names = ", ".join(f"{_mrkdwn_escape(name)} ({size_label(size)})" for name, size in files)
     word = "file" if len(files) == 1 else "files"
     return f":paperclip: {len(files)} {word}: {names}. <{link}|View in SubZero AI>"
@@ -138,7 +138,7 @@ def handled_card(*, student_name: str, subteam: str | None, title: str | None, t
 
 
 def deleted_card(*, student_name: str, title: str | None, admin_slack_id: str | None, deleted_at: str) -> list[dict]:
-    """A review card whose chat an admin deleted: no buttons, no message text, and no link (the chat is gone)."""
+    """A review card whose chat an admin deleted: no buttons, no message text, and no link."""
     line = OUTCOME_WORDS["deleted"]
     if admin_slack_id:
         line = f"Chat deleted by <@{admin_slack_id}>"

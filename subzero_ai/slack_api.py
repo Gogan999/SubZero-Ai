@@ -24,8 +24,8 @@ class SlackError(Exception):
 
 
 class SlackWebApi:
-    """Calls Slack over HTTPS with the bot token. Every request is form-encoded,
-    with nested values (blocks, views) sent as JSON strings, which Slack accepts for all methods."""
+    """Calls Slack over HTTPS with the bot token. Requests are form-encoded, with nested values (blocks, views)
+    sent as JSON strings."""
 
     def __init__(self, bot_token: str, *, base_url: str = "https://slack.com/api/",
                  session: requests.Session | None = None, timeout: float = 15):
@@ -68,7 +68,7 @@ class SlackWebApi:
         return {"channel": body["channel"], "ts": body["ts"]}
 
     async def update_message(self, channel: str, ts: str, text: str, blocks: list | None = None) -> None:
-        # blocks=None is left out of the request, so Slack keeps the message's blocks as they were
+        # blocks=None is left out of the request, which keeps the message's blocks as they were
         await self.call("chat.update", channel=channel, ts=ts, text=text, blocks=blocks)
 
     async def post_ephemeral(self, channel: str, user: str, text: str) -> None:
@@ -97,7 +97,7 @@ class SlackWebApi:
         return body["user"]
 
     async def private_channels(self) -> list[dict[str, str]]:
-        """Private channels the bot has been invited to, for picking the approvals channel."""
+        """Private channels the bot has been invited to."""
         channels: list[dict[str, str]] = []
         cursor = None
         while True:
@@ -118,7 +118,7 @@ class SlackWebApi:
 
 @dataclass
 class FakeSlack:
-    """Records what the app would have sent to Slack. Used by tests and by local runs without Slack."""
+    """Records what the app would have sent to Slack, for tests and local runs without Slack."""
 
     members: set[str] = field(default_factory=set)
     users: dict[str, dict[str, Any]] = field(default_factory=dict)

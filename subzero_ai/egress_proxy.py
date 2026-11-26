@@ -10,9 +10,7 @@ memory.
 
 Before anything is connected, the destination is checked: the name must be on the allow-list, it is resolved once, and
 every address it resolves to must be a public one (not loopback, private, link-local, the sandbox subnet, carrier-grade
-NAT, or this computer's own). The connection is made to an address that was checked, never to a second lookup, so a
-name can't be changed to point somewhere else between the check and the connection (DNS rebinding).
-"""
+NAT, or this computer's own). The connection is made only to an address that was checked, with no second lookup."""
 
 from __future__ import annotations
 
@@ -41,7 +39,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("subzero.egress")
 
 GUEST_NETWORK = ipaddress.ip_network("10.77.0.0/24")  # the sandboxes' subnet on the internal switch
-CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")  # carrier-grade NAT: not public, and not checked by is_global
+CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")  # carrier-grade NAT, which is_global doesn't cover
 REALM = "SubZero sandbox"
 MAX_HEAD_BYTES = 8 * 1024  # the request line and headers together
 HEAD_SECONDS = 30  # how long a client has to send its request
@@ -171,13 +169,13 @@ def _peer_address(writer: asyncio.StreamWriter) -> str | None:
 
 def _default_address_for(name: str) -> str | None:
     """The address a sandbox name belongs to (sandbox.py: its slot's static address on the internal switch)."""
-    from .sandbox import sandbox_address  # imported here: sandbox.py imports this module
+    from .sandbox import sandbox_address
 
     return sandbox_address(name)
 
 
 def this_computer_addresses(extra: Iterable[str] = ()) -> frozenset[str]:
-    """This computer's own addresses, so a name that resolves to one of them is refused."""
+    """This computer's own addresses."""
     found: set[str] = set()
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None)
@@ -201,8 +199,8 @@ class _Entry:
 
 
 class TokenStore:
-    """One proxy token per sandbox. Only a SHA-256 hash of each token is kept, in memory. A restart forgets them all;
-    the app then issues new ones for the sandboxes that are still running."""
+    """One proxy token per sandbox. Only a SHA-256 hash of each token is kept, in memory. A restart forgets them all,
+    and the app issues new ones for the sandboxes that are still running."""
 
     def __init__(self, clock: Callable[[], datetime] | None = None):
         self._clock = clock or (lambda: datetime.now(timezone.utc))
@@ -210,8 +208,7 @@ class TokenStore:
         self._entries: dict[str, _Entry] = {}
 
     def issue(self, name: str, expires_at: datetime) -> str:
-        """A new token for the sandbox. It replaces any earlier token for that name. Returns the token itself, which is
-        the only time it is ever available in plain text here."""
+        """A new token for the sandbox. It replaces any earlier token for that name. Returns the token itself."""
         token = secrets.token_urlsafe(32)
         with self._lock:
             self._entries[name] = _Entry(_digest(token), expires_at)
@@ -310,8 +307,8 @@ Connector = Callable[[str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.S
 class EgressProxy:
     """The HTTP CONNECT proxy. Start and stop it on the app's event loop. close_sandbox may be called from any thread.
 
-    resolver(name) and connector(address, port) are replaceable so the tests can use fake DNS and a local upstream;
-    the app uses the defaults. The defaults resolve with the loop's getaddrinfo and connect with open_connection."""
+    resolver(name) and connector(address, port) can be replaced (the tests use fake DNS and a local upstream). The
+    defaults resolve with the loop's getaddrinfo and connect with open_connection."""
 
     def __init__(self, *, tokens: TokenStore, db: Database | None, host: str, port: int,
                  allowed_hosts: Iterable[str] = (), allowed_ports: Iterable[int] = (443,),
@@ -327,8 +324,8 @@ class EgressProxy:
         self.db = db
         self.host = host
         self.port = port  # the port asked for; once started, the port actually bound
-        # The allow-list, ports and limits. With settings, they are read again for each request, so a change on the
-        # Settings page applies at once. The bind address and port apply after a restart.
+        # The allow-list, ports and limits. With settings, they are read again for each request. The bind address and
+        # port apply after a restart.
         self._settings = settings
         self._rules = tuple(allowed_hosts)
         self._ports = tuple(allowed_ports)
@@ -351,23 +348,21 @@ class EgressProxy:
         self._server: asyncio.Server | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._local: frozenset[str] = frozenset()
-        # The address a sandbox name belongs to. A connection must come from exactly that address; None (no address
-        # for the name) refuses it, so the proxy fails closed.
+        # The address a sandbox name belongs to. A connection must come from exactly that address; None refuses it.
         self._address_for = address_for or _default_address_for
         self._handlers: set[asyncio.Task[Any]] = set()
         self._tunnels: dict[str, set[_Tunnel]] = {}
         self._active: dict[str, int] = {}  # open tunnels per sandbox
         self._total = 0
-        # _usage and _blocked_at are read on the loop thread and also cut off from close_sandbox (any thread), so
-        # every access to either dict holds _state_lock. It is never held across an await.
+        # Guards _usage and _blocked_at, which close_sandbox changes from any thread. Never held across an await.
         self._state_lock = threading.Lock()
         self._usage: dict[str, _Usage] = {}
         self._blocked_at: dict[tuple[str, str], float] = {}
 
     @classmethod
     def from_settings(cls, settings: Settings, *, tokens: TokenStore, db: Database | None) -> EgressProxy:
-        """The proxy as Settings describe it. A bad allow-list or port list doesn't stop the app: the proxy then
-        refuses to start, and the Settings check says why."""
+        """The proxy as Settings describe it. A bad allow-list or port list makes the proxy refuse to start, and the
+        Settings check says why."""
         error = ""
         try:
             rules = parse_hosts(settings.sandbox_allowed_hosts)
@@ -411,7 +406,7 @@ class EgressProxy:
         self._loop = asyncio.get_running_loop()
         if self._local_fixed is not None:
             self._local = self._local_fixed
-        else:  # a name lookup, so it runs off the event loop
+        else:  # looks up the name off the event loop
             self._local = await asyncio.to_thread(this_computer_addresses, [self.host])
         self.error = ""
         self.running = True
@@ -441,7 +436,7 @@ class EgressProxy:
 
     def close_sandbox(self, name: str) -> None:
         """Cut off a sandbox's open tunnels and forget its byte count. Call after its token is revoked. Safe from any
-        thread; it does not wait for the tunnels to close."""
+        thread; doesn't wait for the tunnels to close."""
         loop = self._loop
         if loop is None or not self.running:
             self._forget_usage(name)
@@ -667,8 +662,8 @@ class EgressProxy:
         await self._reply(writer, status, text)
 
     def _from_sandbox(self, name: str, writer: asyncio.StreamWriter) -> bool:
-        """True only when the connection comes from the address that belongs to this sandbox name. Fails closed: no
-        address for the name, a name that isn't an address, or no peer address is a refusal."""
+        """True only when the connection comes from the address that belongs to this sandbox name. No address for the
+        name, a name that isn't an address, or no peer address is a refusal."""
         actual = _peer_address(writer)
         try:
             expected = self._address_for(name)
@@ -679,7 +674,7 @@ class EgressProxy:
         return actual is not None and wanted is not None and actual == wanted
 
     def _audit_blocked(self, name: str, host: str, reason: str) -> None:
-        """One audit row per sandbox and host each minute, so a loop of refused requests can't flood the log."""
+        """Writes at most one audit row per sandbox and host each minute."""
         clean = _clean_for_log(host)
         key = (name, clean)
         now = self.clock()

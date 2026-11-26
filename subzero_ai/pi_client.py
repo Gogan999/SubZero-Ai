@@ -46,7 +46,7 @@ _ALLOWED_UPPER = frozenset(name.upper() for name in _ALLOWED)
 _BRIDGE_VARS = ("SUBZERO_BRIDGE", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "PI_REQUEST_TIMEOUT")
 
 _DEAD = object()  # put in a request's queue when the process exits under it
-_SHUTDOWN = object()  # same, when we closed the process on purpose
+_SHUTDOWN = object()  # same, when the process was closed on purpose
 MAX_TIMEOUTS = 3  # a gateway that times out this many requests in a row (ignoring aborts) is replaced
 
 
@@ -81,9 +81,9 @@ def child_env(keys: dict[str, str], environ: dict[str, str] | None = None) -> di
 
 
 def bridge_env(data_dir: Path | str, request_timeout: float = 300) -> dict[str, str]:
-    """What turns on claude-bridge/ models in the gateway: the on switch and the two folders it keeps its files in
-    (the Claude Code login and session files, and the Pi agent folder), and how long a reply may take (the gateway's
-    cross-process lock uses it). Never contains ANTHROPIC_* variables."""
+    """What turns on claude-bridge/ models in the gateway: the on switch, the two folders it keeps its files in
+    (the Claude Code login and session files, and the Pi agent folder), and how long a reply may take. Never contains
+    ANTHROPIC_* variables."""
     base = Path(data_dir) / "bridge"
     return {"SUBZERO_BRIDGE": "1", "CLAUDE_CONFIG_DIR": str(base / "claude-config"),
             "PI_CODING_AGENT_DIR": str(base / "pi-agent"), "PI_REQUEST_TIMEOUT": str(max(1, int(request_timeout)))}
@@ -102,7 +102,7 @@ def bridge_credentials_path(data_dir: Path | str) -> Path:
 
 
 def bridge_logged_in(data_dir: Path | str) -> bool:
-    """True if a Claude Code login exists for the bridge. Only looks that the file is there; never reads it."""
+    """True if a Claude Code login exists for the bridge. Only checks that the file is there."""
     return bridge_credentials_path(data_dir).is_file()
 
 
@@ -390,7 +390,7 @@ class PiClient:
             with self._lock:
                 if proc.dead:
                     raise _Failure(DIED_MESSAGE)
-                if not proc.retired:  # set_keys retires under this lock, so it can't stop a process we register on
+                if not proc.retired:  # set_keys retires under this lock
                     proc.pending[rid] = pending
                     break
         finished = False
@@ -442,7 +442,7 @@ class PiClient:
                 if timed_out:
                     proc.timeouts += 1
                     if proc.timeouts >= MAX_TIMEOUTS and not proc.dead and not proc.closing:
-                        deaf = True  # it ignores aborts: stop it; the next request starts a fresh one
+                        deaf = True  # it ignores aborts: stops it, and the next request starts a fresh one
                         proc.retired = proc.closing = True
                         if self._proc is proc:
                             self._proc = None
@@ -523,7 +523,7 @@ class PiClient:
         pong: dict[str, Any] | None = None
         try:
             async with contextlib.aclosing(self._records({"op": "ping"}, total=min(self.request_timeout, 30))) as recs:
-                async for record in recs:  # read to done, so closing early doesn't send a needless abort
+                async for record in recs:  # reads to done
                     if record.get("kind") == "pong":
                         pong = record
         except _Failure as exc:

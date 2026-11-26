@@ -26,7 +26,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 # The AI providers an admin can turn on (the Pi backend reaches all of them; the Anthropic backend only the first).
-# claude-bridge is Claude through a Claude Code login (a Claude subscription): it needs no API key.
+# claude-bridge is Claude through a Claude Code login (a Claude subscription), with no API key.
 PROVIDERS = ("anthropic", "openai", "google", "openrouter", "claude-bridge")
 
 
@@ -88,10 +88,10 @@ class Settings:
     openrouter_api_key: str = field(default="", repr=False)
     ai_providers: tuple[str, ...] = ("anthropic",)  # providers admins turned on; the others' models are refused
     model_default: str = "anthropic/claude-sonnet-5-5"  # model ids are provider/model
-    model_hard: str = "anthropic/claude-opus-5-5"  # mentors can switch a conversation to this for hard problems
+    model_hard: str = "anthropic/claude-opus-5-5"  # the model mentors can switch a conversation to for hard problems
     model_titles: str = "anthropic/claude-haiku-5-5"
     effort_default: str = "medium"
-    effort_high: str = "high"  # for explainers and messages with files attached (usually code reviews)
+    effort_high: str = "high"  # for explainers and messages with files attached
     max_tokens_chat: int = 8000
     max_tokens_explainer: int = 16000
     long_chat_tokens: int = 150000  # past this, suggest starting a fresh chat
@@ -101,10 +101,10 @@ class Settings:
     pi_gateway_script: str = ""  # empty means pi_gateway/gateway.mjs next to the subzero_ai folder
     pi_request_timeout: int = 300  # seconds for a whole pi request
     pi_idle_timeout: int = 120  # longest quiet gap in a pi reply, in seconds
-    # Web search costs extra for each search, so the whole team shares a daily limit
+    # Web search, with a daily limit shared by the whole team
     web_search_enabled: bool = True
     web_search_daily_limit: int = 50
-    research_for_students: bool = False  # Research runs many searches, so it starts as mentors only
+    research_for_students: bool = False  # Research starts as mentors only
 
     # Slack
     slack_bot_token: str = field(default="", repr=False)
@@ -114,7 +114,7 @@ class Settings:
     slack_team_id: str = ""
     slack_approvals_channel: str = ""
     admin_slack_ids: frozenset[str] = frozenset()
-    allow_slack_guests: bool = False  # guest accounts may be parents, sponsors, alumni, or other teams
+    allow_slack_guests: bool = False  # guest accounts can sign in
     slack_dms_enabled: bool = True  # team members can message the bot in Slack (config.env key SLACK_DMS)
 
     # Approval rules
@@ -150,7 +150,7 @@ class Settings:
     sandbox_max_sessions: int = 3  # sandboxes alive at once; a new one waits for a slot
     sandbox_memory_mb: int = 2048
     sandbox_cpus: int = 2
-    sandbox_disk_gb: int = 31  # the biggest base disk allowed (the base image is 30 GB; a sandbox's own disk grows as used)
+    sandbox_disk_gb: int = 31  # the biggest base disk allowed (the base image is 30 GB)
     sandbox_disk_cap_gb: int = 8  # a running sandbox whose own disk grows past this is deleted (0: no limit)
     sandbox_min_free_gb: int = 20  # no new sandbox while the disk holding the base image has less free
     sandbox_base_image: str = ""  # the base disk (a .vhdx) that every sandbox is made from
@@ -167,7 +167,7 @@ class Settings:
     sandbox_proxy_mb_limit: int = 2048  # the most a sandbox may move through the proxy in its whole life, both ways
     sandbox_proxy_max_per_sandbox: int = 16  # open proxy connections at once for one sandbox
     sandbox_guest_sudo: bool = False  # the sandbox's user may use sudo: root inside that disposable VM only
-    # Students and Code (M6). A student's session is started only after a mentor approves the request, and needs a
+    # Students and Code (M6). A student's session starts only after a mentor approves the request, and needs a
     # sandbox. Inside a student's sandbox, file changes and commands run without a mentor's click (free rein).
     code_student_access: bool = False  # students may ask for Code sessions (off until a mentor or admin turns it on)
     code_student_free_rein: bool = True  # inside a student's sandbox, changes and commands run without a click
@@ -184,7 +184,7 @@ class Settings:
     subteams: tuple[str, ...] = ("Programming", "Fab and design", "Business and outreach")
 
     # Data kept on the mini PC
-    retention_days: int = 730  # delete chats with no activity for this long (two seasons); 0 keeps them forever
+    retention_days: int = 730  # delete chats with no activity for this long; 0 keeps them forever
     backup_dir: str = ""  # defaults to DATA_DIR/backups; point it at a synced OneDrive or Google Drive folder
     backup_hour: int = 2  # nightly backup at this hour, local time
     backup_keep_days: int = 14
@@ -193,7 +193,7 @@ class Settings:
     update_repo: str = "Gogan999/SubZero-Ai"
     check_for_updates: bool = True
 
-    # Local testing only. Never turn this on for the public site.
+    # Local testing only.
     dev_login: bool = False
 
     # ------------------------------------------------------------------ helpers
@@ -244,13 +244,13 @@ _CONVERTERS = {
 
 # Settings whose config.env key isn't just the upper-cased name
 ENV_NAMES = {"slack_dms_enabled": "SLACK_DMS"}
-# The code_sandbox values that can run student Code sessions (the fake one is for tests only)
+# The code_sandbox values that can run student Code sessions
 FAKE_SANDBOX_ENV = "SUBZERO_TESTING_FAKE_SANDBOX"
 
 
 def fake_sandbox_allowed() -> bool:
-    """The Fake sandbox runs commands on this computer with no isolation. It exists for the tests, which set this
-    environment variable (tests/__init__.py); a real install never does, so it can't be chosen there."""
+    """The Fake sandbox runs commands on this computer with no isolation. It can be chosen only while this
+    environment variable is set, which the tests do (tests/__init__.py)."""
     return os.environ.get(FAKE_SANDBOX_ENV) == "1"
 
 
@@ -273,7 +273,7 @@ def convert(name: str, raw: str):
 
 def update_env_file(path: Path, updates: dict[str, str]) -> None:
     """Set KEY=value lines in config.env, keeping its notes and order. Keys it doesn't have yet go at the end.
-    The file is replaced in one step, so a crash never leaves half a file."""
+    The file is replaced in one step."""
     lines = path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []
     remaining = dict(updates)
     for value in remaining.values():
@@ -294,7 +294,7 @@ def update_env_file(path: Path, updates: dict[str, str]) -> None:
     temp = path.with_name(path.name + ".tmp")
     temp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if os.name != "nt":
-        os.chmod(temp, 0o600)  # it holds API keys and tokens (on Windows the data folder's permissions cover it)
+        os.chmod(temp, 0o600)  # readable by its owner only
     os.replace(temp, path)
 
 
@@ -345,7 +345,7 @@ def load_settings(env_file: str | os.PathLike | None = None, *, search_cwd: bool
     try:
         settings.backups_path.mkdir(parents=True, exist_ok=True)
     except OSError:
-        pass  # a missing BACKUP_DIR drive shows up as a failed backup on the admin page, not a failed start
+        pass  # a missing BACKUP_DIR drive is ignored here and shows up as a failed backup
 
     if not settings.session_secret:
         secret_file = settings.data_dir / "data" / "session.secret"

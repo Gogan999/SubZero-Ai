@@ -1,9 +1,8 @@
 """Projects: a group of chats about one mechanism or subsystem, with instructions and reference files that
 Claude reads in every chat in the project.
 
-Mentors set projects up and everyone on the team can chat in them. Instructions and files go to Claude without
-a per-message review, so only mentors may change them; every change goes in the audit log, and the approval
-card for a student message names the project it's in."""
+Mentors set projects up and change them, and everyone on the team can chat in them. Every change goes in the
+audit log, and the approval card for a student message names the project it's in."""
 
 from __future__ import annotations
 
@@ -20,10 +19,7 @@ MAX_NAME_CHARS = 80
 MAX_DESCRIPTION_CHARS = 300
 MAX_INSTRUCTIONS_CHARS = 8000
 MAX_PROJECT_FILES = 20
-# Everything in a project is sent with every reply in it, so keep the total small enough to stay cheap.
 MAX_PROJECT_TEXT_BYTES = 400 * 1024
-# Images are sent with every reply too, alongside the chat's own pictures and video stills. The API refuses a
-# request over 100 images or 32 MB, so a project keeps a few, small enough to leave room for the chat's.
 MAX_PROJECT_IMAGES = 5
 MAX_PROJECT_IMAGE_BYTES = 8 * 1024 * 1024
 

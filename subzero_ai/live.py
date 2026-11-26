@@ -41,7 +41,7 @@ class Broker:
 
 
 class Tasks:
-    """Runs background jobs, keeps references so they aren't garbage-collected, and logs failures."""
+    """Runs background jobs, keeps a reference to each, and logs failures."""
 
     def __init__(self) -> None:
         self._tasks: set[asyncio.Task] = set()
@@ -58,7 +58,7 @@ class Tasks:
             log.error("Background job %s failed", task.get_name(), exc_info=task.exception())
 
     async def wait_idle(self, timeout: float = 10.0) -> None:
-        """Wait until no background jobs are running (used by tests)."""
+        """Waits until no background jobs are running."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while self._tasks:

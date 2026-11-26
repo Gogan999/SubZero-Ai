@@ -28,9 +28,8 @@ EXPLAINER_REQUEST = (
     "The student may want an interactive explainer: their latest message mentions one or a simulation. "
     "Include one if it fits the formatting rules, plus a short explanation outside it.")
 
-# Phrases that suggest a student wants something they can play with. A match only gives the reply room for a
-# whole page; Claude still decides. Kept narrow so FRC words like "build artifact" or "AdvantageScope
-# animation" don't count.
+# Phrases that suggest a student wants something they can play with. A match gives the reply room for a whole
+# page; Claude still decides.
 EXPLAINER_WORDS = re.compile(
     r"\b(explainers?|simulations?|simulate|interactive (graph|diagram|plot|chart|demo|model|page|explanation)s?"
     r"|something interactive)\b", re.I)
@@ -40,8 +39,7 @@ def asks_for_explainer(text: str) -> bool:
     return bool(EXPLAINER_WORDS.search(text or ""))
 
 
-# The composer's tools. A student picks them per message, so the mentor sees them on the review card and approves
-# them with the message.
+# The composer's tools, picked per message and shown on the review card.
 STYLES = {
     "concise": ("Concise", "Answer concisely: the key point first, in as few words as the question allows. "
                            "Skip background unless it's needed."),
@@ -216,7 +214,7 @@ class ReplyRunner:
         # Slack DMs: (conversation id, user message id, reply id) when a reply starts and again when it is saved
         self.on_reply: Callable[[int, int, int], Awaitable[None]] | None = None
         self.on_reply_done: Callable[[int, int, int], Awaitable[None]] | None = None
-        # Text streamed so far for replies in progress, so someone who opens the chat mid-reply sees all of it.
+        # Text streamed so far for replies in progress.
         self._live: dict[int, list[str]] = {}
 
     def live_text(self, reply_id: int) -> tuple[str, int]:
@@ -226,9 +224,7 @@ class ReplyRunner:
 
     def reply_model(self, conv) -> str:
         """The model for the next reply. A chat's model is checked again here (its provider and key, the Model
-        safety check). If it can't be used any more, the chat moves to the default model and the change is audited,
-        so the reply still happens."""
-        # Imported here: model_choices imports saved_settings, which imports this module
+        safety check). If it can't be used any more, the chat moves to the default model and the change is audited."""
         from .model_choices import model_block
 
         model = normalize_model_id(conv["model"])
@@ -270,9 +266,8 @@ class ReplyRunner:
     def history_files(self, conversation_id: int, user_message_id: int,
                       project_images: int = 0) -> dict[int, list[dict]]:
         """Attachments for each message. Images and video stills are sent for the newest message, and for
-        earlier ones only while the total stays under HISTORY_IMAGES, newest first. Sending every picture on
-        every turn would cost a lot and, past 100 images or 32 MB, the API refuses the whole request. A project's
-        images go with every reply too, so they come out of the same budget."""
+        earlier ones only while the total stays under HISTORY_IMAGES, newest first. A project's images count toward the
+        same total."""
         by_message = self.attachments.for_conversation(conversation_id)
         budget = max(0, HISTORY_IMAGES - project_images)
         out: dict[int, list[dict]] = {}
@@ -304,13 +299,12 @@ class ReplyRunner:
         asked = self.store.message(user_message_id)
         wants_explainer = bool(asked and asked["wants_explainer"])
         options = load_options(asked["options"] if asked else None)
-        # The model may have changed since the message was queued (a mentor can switch it): drop what it can't do
+        # Drops the tools the chat's current model can't use.
         for key, ok in (("search", caps.web_search), ("research", caps.web_search), ("think", caps.thinking)):
             if options.get(key) and not ok:
                 log.info("Dropping %s from reply %s: model %s can't do it", key, reply_id, conv["model"])
                 options.pop(key)
-        # Explainers and questions with files attached (usually code reviews) get more effort, and explainers
-        # get room for a whole web page. Everyday questions stay at the default, which costs less.
+        # Explainers and questions with files attached get more effort, and explainers get room for a whole web page.
         if wants_explainer:
             max_tokens, effort = self.settings.max_tokens_explainer, self.settings.effort_high
         elif user_message_id in files:
@@ -379,7 +373,7 @@ class ReplyRunner:
                 if alert:
                     await self._raise_alert(conversation_id, user_message_id)
                 emit(shown)
-        except Exception as exc:  # never leave a reply stuck as "streaming"
+        except Exception as exc:  # any failure ends the reply as an error
             log.exception("Reply %s failed", reply_id)
             error = f"Something went wrong while Claude was replying ({type(exc).__name__})."
 

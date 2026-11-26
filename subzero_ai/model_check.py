@@ -19,12 +19,12 @@ from .screener import SCREEN_SYSTEM, parse_answer, screen_body
 
 log = logging.getLogger("subzero.model_check")
 
-CHECK_VERSION = 1  # raise it when the cases change; older results then stop counting
+CHECK_VERSION = 1  # version of the check cases; results from older versions stop counting
 CHAT_TIMEOUT = 120
 JUDGE_TIMEOUT = 45
 SCREEN_TIMEOUT = 30
 DETAIL_CHARS = 300
-MAX_JUDGED_CHARS = 60000  # a longer reply fails without being graded; the judge always sees the whole reply
+MAX_JUDGED_CHARS = 60000  # a longer reply fails without being graded
 
 # The case names, in the order they run. The first five need the model to be fit for chats, the last two for
 # the screener.

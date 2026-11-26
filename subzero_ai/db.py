@@ -288,8 +288,7 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_sandbox_sessions_code ON sandbox_sessions (code_session_id, id);
     """,
     # Version 15: students' Code sessions. A student's request waits in status awaiting_approval until a mentor
-    # approves it. SQLite can't change a CHECK constraint, so code_sessions is rebuilt (migrate() turns foreign keys
-    # off first, so dropping the old table doesn't cascade into code_steps or sandbox_sessions).
+    # approves it. Rebuilds code_sessions with the new CHECK constraint.
     """
     CREATE TABLE code_sessions_new (
         id INTEGER PRIMARY KEY,
@@ -323,7 +322,7 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_code_sessions_owner ON code_sessions (created_by, created_at);
     CREATE INDEX idx_code_sessions_status ON code_sessions (status, updated_at);
     """,
-    # Tokens written to the prompt cache for a reply (billed at 1.25x input), so its cost estimate includes them
+    # Tokens written to the prompt cache for each reply
     """
     ALTER TABLE messages ADD COLUMN cache_write_tokens INTEGER;
     """,
@@ -372,8 +371,7 @@ class Database:
         conn = self._connect()
         try:
             conn.execute("PRAGMA journal_mode = WAL")
-            # Off while migrating, so a migration may rebuild a table (foreign keys can't be changed inside a
-            # transaction, so this has to happen here). Foreign keys are back on for every later connection.
+            # Foreign keys are off while migrating, and back on for every later connection.
             conn.execute("PRAGMA foreign_keys = OFF")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             for index, script in enumerate(MIGRATIONS[version:], start=version + 1):

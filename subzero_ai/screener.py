@@ -1,7 +1,7 @@
-"""The pre-screen: a small, cheap model reads a student's message before it skips review in the approval window.
+"""The pre-screen: a small model reads a student's message before it skips review in the approval window.
 
-It only ever lets a message through. Anything it flags, any answer it gives that isn't exactly SAFE, and any
-error or timeout sends the message to mentors as usual."""
+It only ever lets a message through. Anything it flags, any answer that isn't exactly SAFE, and any error or
+timeout sends the message to mentors as usual."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ Reply with one line: SAFE, or REVIEW: reason."""
 def screen_body(text: str) -> str:
     """The message as the screener is shown it, cut to length and wrapped in its tag."""
     body = text if len(text) <= MAX_SCREEN_CHARS else text[:MAX_SCREEN_CHARS] + "\n[message cut off here]"
-    body = body.replace("<", "&lt;")  # so the message can't close the <message> tag early
+    body = body.replace("<", "&lt;")  # escapes < so the text can't close the <message> tag
     return f"<message>\n{body}\n</message>"
 
 

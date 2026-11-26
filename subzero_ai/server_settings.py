@@ -1,13 +1,11 @@
 """Settings that live in config.env, changed from the Settings page.
 
-Most settings the Settings page changes are saved in the database (saved_settings.py). The ones here have to be in
-config.env: secrets (Slack tokens), and settings the app needs before it opens the database or that it builds its
-connections from at startup. Saving writes config.env in one step and never logs or shows a secret.
+These are the secrets (Slack tokens) and the settings the app reads before it opens the database or uses to
+build its connections at startup. Saving writes config.env in one step and never logs or shows a secret.
 
 Each field says whether it applies right away or after a restart. Restart-only changes wait in
-`Services.pending_restart` until the app restarts (the Restart button on the Settings page does that).
-An environment variable on the mini PC wins over config.env, so a field set that way is shown but locked.
-"""
+`Services.pending_restart` until the app restarts. A field set by an environment variable on the mini PC is
+shown but locked."""
 
 from __future__ import annotations
 
@@ -113,7 +111,7 @@ assert set(SECTION_NAMES) == set(ENV_SECTIONS)
 
 ENV_FIELDS: dict[str, EnvField] = {f.name: f for _, _, fields in ENV_SECTIONS.values() for f in fields}
 
-# Settings that stay in config.env only, and why. Shown on the Settings page so nothing is a mystery.
+# Settings that stay in config.env only, with the reason shown on the Settings page.
 FILE_ONLY = [
     ("DATA_DIR", "Where everything is kept. Moving it means moving the files, so it's done on the mini PC."),
     ("HOST and PORT", "The Cloudflare Tunnel points at 127.0.0.1:8787. Changing them here would cut off this page."),
@@ -123,7 +121,7 @@ FILE_ONLY = [
 
 
 def env_locked(field: EnvField) -> bool:
-    """An environment variable sets it, which wins over config.env, so a saved change would be ignored."""
+    """True when an environment variable sets it."""
     if field.name == "ai_backend" and "FAKE_CLAUDE" in os.environ:
         return True
     return field.env in os.environ
@@ -149,7 +147,7 @@ def shown_value(settings: Settings, pending: Mapping[str, str], name: str) -> st
 
 
 def secret_hint(value: str) -> str:
-    """The last four characters of a saved secret, so an admin can tell which one is saved."""
+    """The last four characters of a saved secret."""
     return f"ends in {value[-4:]}" if len(value) >= 12 else ""
 
 
@@ -245,7 +243,7 @@ def validate(section: str, form: Mapping[str, Any], settings: Settings,
             if not raw:
                 continue
         elif f.kind != "bool" and raw == shown_value(settings, pending, f.name):
-            continue  # unchanged, even if it wouldn't pass today's checks (like http://localhost in test mode)
+            continue  # unchanged values are kept as they are
         value, problem = check_field(f, raw, settings)
         if problem:
             errors[f.name] = problem

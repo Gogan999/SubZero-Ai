@@ -22,7 +22,7 @@ from .store import EDITED, ERROR, REJECTED, Store
 
 log = logging.getLogger("subzero.slack")
 
-CHUNK_LIMIT = 3500  # characters per Slack post; Slack allows more, but long posts get cut off in notifications
+CHUNK_LIMIT = 3500  # characters per Slack post
 UPDATE_SECONDS = 3.0  # least time between edits of the reply while it streams
 MAX_SOURCES = 5
 
@@ -48,8 +48,7 @@ _SLACK_MARKUP = re.compile(r"<([^<>]*)>")
 
 def from_slack(text: str) -> str:
     """Turn the text of an incoming Slack message back into what the person typed: links, mentions and channel
-    names become plain text, and Slack's &amp; &lt; &gt; become the characters again (code pasted into a DM
-    reaches the AI as written)."""
+    names become plain text, and Slack's &amp; &lt; &gt; become the characters again."""
     def plain(match: re.Match) -> str:
         inner = match.group(1)
         target, _, label = inner.partition("|")
@@ -143,7 +142,7 @@ def _inline(line: str) -> str:
 
 
 def _link_text(text: str) -> str:
-    """Link text for Slack's <url|text>: a bar would end the text early."""
+    """Link text for Slack's <url|text>, with bars swapped for ¦."""
     return escape(text).replace("|", "¦")
 
 
@@ -173,9 +172,8 @@ def _hard_split(text: str, limit: int) -> list[str]:
 def to_slack(markdown: str) -> list[str]:
     """Markdown from the AI as Slack posts of at most CHUNK_LIMIT characters, cut between lines.
 
-    Bold, headings, bullets and links become Slack's versions; & < > are escaped (Slack needs that everywhere).
-    Code blocks are kept as they are, without their language word, and are only split when one is too long
-    for a single post, in which case each part gets its own fences."""
+    Bold, headings, bullets and links become Slack's versions; & < > are escaped. Code blocks are kept as they are,
+    without their language word, and a code block too long for one post is split, with fences on each part."""
     units: list[str] = []
     for is_code, _info, body in _split_blocks(markdown or ""):
         if is_code:
@@ -312,7 +310,7 @@ class SlackDMs:
                                                    "reply in a thread) to start a new chat.")
                     return
         except Exception:
-            # Nothing was submitted: forget the message so Slack's retry is handled
+            # Nothing was submitted: forgets the message so Slack's retry is handled.
             log.exception("Couldn't check a Slack direct message")
             self.store.release_dm_event(channel, ts)
             await self._say(channel, root, "Something went wrong on my side. Try again in a minute.")
@@ -337,7 +335,7 @@ class SlackDMs:
 
     async def _viewer(self, slack_user_id: str):
         """The app account for this Slack member, or None if they can't use the bot."""
-        info = await self.slack.user_info(slack_user_id)  # a failure is temporary: the caller asks to try again
+        info = await self.slack.user_info(slack_user_id)
         is_admin = slack_user_id in self.settings.admin_slack_ids
         if is_excluded_account(info, self.settings) and not is_admin:
             return None
@@ -369,7 +367,7 @@ class SlackDMs:
             posted = await self.slack.post_message(state.channel, "Thinking…", thread_ts=state.thread_ts)
             state.ts = posted["ts"]
             if state.done:
-                # The answer was posted without waiting for this placeholder; it's left behind, so point to the answer
+                # Points the leftover placeholder to the answer below it.
                 await self.slack.update_message(state.channel, state.ts, "(The answer is below.)")
             else:
                 state.ticker = self.tasks.spawn(self._keep_updated(reply_id, state), name=f"slack-reply-{reply_id}")
@@ -452,8 +450,8 @@ class SlackDMs:
 
     # ----------------------------------------------------------- mentor decisions
     async def on_decided(self, message_id: int) -> bool:
-        """A mentor decided on a message. If it came in on Slack, tell the student in the thread (instead of the
-        usual DM) and return True. Only the student sees a DM thread, so a rejection reason stays with them."""
+        """A mentor decided on a message. If it came in on Slack, tell the student in the thread instead of the usual
+        DM, and return True."""
         if self.store.dm_message(message_id) is None:
             return False
         thread = self._thread_of(message_id)

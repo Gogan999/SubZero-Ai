@@ -25,7 +25,7 @@ USER_CLAIM = "https://slack.com/user_id"
 
 
 class LoginError(Exception):
-    """Shown to the person signing in, so the text is written for them."""
+    """Sign-in errors shown to the person signing in."""
 
 
 class SlackLogin:
@@ -89,7 +89,7 @@ class SlackLogin:
         if claims.get("nonce") != nonce:
             raise LoginError("That sign-in link expired. Try again.")
         if not self.settings.slack_team_id:
-            # Fail closed: without the team's workspace ID we can't tell team members from outsiders.
+            # Refuses sign-in when the team's workspace ID is unknown.
             raise LoginError("Sign-in isn't ready: the app couldn't confirm the team's Slack workspace. "
                              "Ask an admin to check the Slack bot token.")
         if claims.get(TEAM_CLAIM) != self.settings.slack_team_id:

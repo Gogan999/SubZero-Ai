@@ -67,8 +67,7 @@ def remove_files(files_dir: Path, paths: list[str]) -> None:
 
 def delete_chat(db: Database, files_dir: Path, conversation_id: int, *, actor_id: int) -> dict | None:
     """Delete one chat with its messages, shares, Slack links and attached files, and write who did it to the audit
-    log (with the title, owner and message count, since the chat itself is gone). Returns what was deleted, or None
-    when the chat doesn't exist."""
+    log with the title, owner and message count. Returns what was deleted, or None when the chat doesn't exist."""
     with db.transaction() as conn:
         conv = conn.execute("SELECT c.id, c.title, c.owner_id, u.name AS owner_name FROM conversations c "
                             "JOIN users u ON u.id = c.owner_id WHERE c.id = ?", (conversation_id,)).fetchone()
@@ -89,7 +88,7 @@ def delete_chat(db: Database, files_dir: Path, conversation_id: int, *, actor_id
 
 
 def prune_dm_messages(db: Database, days: int = 7, *, now: datetime | None = None) -> int:
-    """Forget Slack message ids older than `days` days. They only exist to catch Slack delivering a message twice."""
+    """Forget Slack message ids older than `days` days."""
     cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=days)).isoformat(timespec="seconds")
     return db.execute("DELETE FROM slack_dm_messages WHERE created_at < ?", (cutoff,)).rowcount
 
@@ -150,7 +149,7 @@ class Nightly:
             except Exception as exc:
                 log.exception("Backup failed")
                 self.db.set_kv("last_backup_error", f"{utcnow()} {exc}")
-                # Count the attempt so a broken backup folder doesn't retry every minute; it tries again tomorrow.
+                # Records the failed attempt, so the next try is tomorrow.
                 self.db.set_kv("last_backup_at", utcnow())
                 self.db.set_kv("last_backup_ok", "0")
                 self.db.audit("backup_failed", actor_id=None, details={"error": str(exc)})

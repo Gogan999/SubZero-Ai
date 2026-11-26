@@ -1,19 +1,18 @@
-"""What AI usage costs, so the app can show an estimate next to token counts.
+"""What AI usage costs, as an estimate shown next to token counts.
 
-To update a price, edit PRICES below: US dollars per million tokens, from https://www.anthropic.com/pricing (or the
-provider's own price page). A model that isn't listed falls back to the price the Pi gateway reports for it, and
-shows no cost when neither knows.
+PRICES below is in US dollars per million tokens, from https://www.anthropic.com/pricing (or the provider's own
+price page). A model that isn't listed falls back to the price the Pi gateway reports for it, and shows no cost
+when neither knows.
 
-Assumptions, so the numbers are estimates, not a bill:
+How the estimate is worked out:
 - Standard API rates (no Batch discount, no fast mode, no Priority Tier).
 - Cache reads use the cache_read price. Writing to the cache costs CACHE_WRITE_FACTOR times the input price (the
-  5-minute cache, which is what the app asks for).
-- Thinking tokens are already inside output_tokens, which is how the API reports them.
+  5-minute cache).
+- Thinking tokens are counted inside output_tokens.
 - Each web search costs WEB_SEARCH_PRICE on top of tokens.
-- Haiku 5.5's long-prompt rate applies to one reply whose prompt is over 100K tokens. Code sessions add up many
-  requests into one total, so they always use the normal rate.
-- Models answered through the Claude subscription bridge cost nothing per token (the subscription is a flat fee).
-"""
+- Haiku 5.5's long-prompt rate applies to one reply whose prompt is over 100K tokens. Code session totals always
+  use the normal rate.
+- Models answered through the Claude subscription bridge cost nothing per token."""
 
 from __future__ import annotations
 
@@ -27,13 +26,13 @@ class Price:
     input: float  # dollars per million input tokens
     output: float  # dollars per million output tokens
     cache_read: float  # dollars per million tokens read from the prompt cache
-    # Some models charge more once one request's prompt passes a size; None means one rate for every size
+    # Prompt size above which a higher rate applies; None means one rate for every size
     long_prompt_over: int | None = None
     long_input: float = 0.0
     long_output: float = 0.0
 
 
-# Last checked 2026-11-09. Haiku 5.5's cache read price isn't published separately; 10% of input is assumed.
+# Last checked 2026-11-09. Haiku 5.5's cache read price is assumed to be 10% of input.
 PRICES: dict[str, Price] = {
     "anthropic/claude-opus-5-5": Price(input=4.00, output=20.00, cache_read=0.20),
     "anthropic/claude-sonnet-5-5": Price(input=2.00, output=10.00, cache_read=0.20),
@@ -89,8 +88,7 @@ def cost_usd(model: str | None, *, input_tokens: int | None = 0, output_tokens: 
 
 
 def cost_label(dollars: float | None) -> str:
-    """'about $0.42', 'about $0.004' (most single replies cost less than a cent), 'under $0.001', 'no API cost',
-    or '' when the cost isn't known."""
+    """'about $0.42', 'about $0.004', 'under $0.001', 'no API cost', or '' when the cost isn't known."""
     if dollars is None:
         return ""
     if dollars == 0:

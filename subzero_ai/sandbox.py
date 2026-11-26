@@ -4,23 +4,20 @@ A Code session's commands run inside its own sandbox instead of on the mini PC. 
 stays on the host (reads, approvals and the patch download all use it), and every approved edit is written to both
 copies. A sandbox is a Hyper-V virtual machine made from one shared base disk as a differencing disk, so the base is
 only ever read. It is attached only to the internal switch named in Settings (default szsandbox-internal), whose host
-vNIC is 10.77.0.1/24. The host must firewall that adapter; see docs/CODE_SANDBOX_PLAN.md. Each VM also gets its own
-network ACLs, DHCP and router guards, a static MAC and a private VLAN (see new_vm_script and isolation_script). ACLs
-alone don't stop non-IP frames, so the private VLAN is what keeps sandboxes apart. A sandbox is deleted when its
-session finishes, after its time limit, and when no record of it is left in the database.
+vNIC is 10.77.0.1/24 and is firewalled on the host (docs/CODE_SANDBOX_PLAN.md). Each VM also gets its own network
+ACLs, DHCP and router guards, a static MAC and a private VLAN (new_vm_script and isolation_script). A sandbox is
+deleted when its session finishes, after its time limit, and when no record of it is left in the database.
 
 Each sandbox gets its own SSH host key pair, made on the host. The public half goes into the sandbox's known_hosts
 file, and the private half reaches the guest on a small NoCloud seed disk (a CIDATA disk that cloud-init reads on
-first boot). Nothing is read over the network, so ssh-keyscan isn't used (it fails with Windows OpenSSH). Once SSH
-answers, the seed disk is detached and deleted and the host's copy of the private key is deleted.
+first boot). Once SSH answers, the seed disk is detached and deleted and the host's copy of the private key is
+deleted.
 
-FakeSandbox does the same job with folders and subprocesses on this computer. It exists for the tests and is not
-isolated at all. HyperVSandbox builds its PowerShell, SSH and key commands with pure functions and takes its runners
-as parameters, so the tests can check every command without touching a real host.
+FakeSandbox does the same job with folders and subprocesses on this computer, for the tests, with no isolation.
+HyperVSandbox builds its PowerShell, SSH and key commands with pure functions and takes its runners as parameters.
 
 Guest image details that are not known yet are marked TODO (python3 and the base disk's path). The base image must
-have NoCloud enabled (the image script does this once). See docs/CODE_SANDBOX_PLAN.md, milestones M3, M3b and M4.
-"""
+have NoCloud enabled (the image script does this once). See docs/CODE_SANDBOX_PLAN.md, milestones M3, M3b and M4."""
 
 from __future__ import annotations
 
@@ -52,13 +49,13 @@ from .egress_proxy import EgressProxy, TokenStore
 
 log = logging.getLogger("subzero.sandbox")
 
-PREFIX = "szsandbox-"  # every sandbox's name starts with this, so the reaper only ever touches our own
+PREFIX = "szsandbox-"  # every sandbox's name starts with this; the reaper only touches names with it
 COPY_SKIP = frozenset({".gradle", "build"})  # build output and caches: never copied into or out of a sandbox
 OFF_VALUES = ("", "off")  # code_sandbox values that keep Code commands on this computer; anything else needs a sandbox
 MAX_OUTPUT_CHARS = 20_000  # the end of a command's output that goes back to Claude
-REAP_SECONDS = 5  # after a command exits, how long its output may stay open (a background child process)
+REAP_SECONDS = 5  # after a command exits, how long its output may stay open
 STALE_CREATING = timedelta(minutes=30)  # a sandbox still "being made" after this long was left by a crash
-EXTEND_LIMIT = timedelta(days=7)  # a sandbox can be extended by mentors, but never lives longer than this
+EXTEND_LIMIT = timedelta(days=7)  # the longest a sandbox can live, extensions included
 MAX_SLOTS = 200  # sandboxes get a numbered slot; the slot picks the guest's static address
 GUEST_ADDRESS = "10.77.0.{}"
 GUEST_FIRST_SLOT_HOST = 10  # 10.77.0.10 is the first guest address; .1 is the host's
@@ -66,8 +63,8 @@ HOST_ADDRESS = "10.77.0.1"  # the host's vNIC on the internal switch
 GUEST_SUBNET = "10.77.0.0/24"
 GUEST_GRADLE_OPTS = "-Dorg.gradle.daemon=false"  # a sandbox's Gradle runs without its daemon
 REDACTED = "[hidden]"  # what a proxy token becomes in output that goes back to Claude or a mentor
-RECENT_TOKENS = 64  # tokens kept (in memory) so output of a command still running at deletion is redacted
-IPV6_ANY = "::/0"  # every IPv6 address: the sandboxes get no IPv6 path at all
+RECENT_TOKENS = 64  # recent tokens kept in memory, for redacting output of commands still running at deletion
+IPV6_ANY = "::/0"  # every IPv6 address
 MAX_SESSION_BYTES = 800 * 1024 * 1024  # one session's two copies together, build output included; also the archive cap
 SSH = "ssh"  # the ssh program on the host (a test can point it at a fake)
 SSH_KEYGEN = "ssh-keygen.exe"  # makes each sandbox's host key pair and the app's client key (on the host)
@@ -83,9 +80,9 @@ SEED_FILES = ("meta-data", "network-config", "user-data")  # the files on the se
 SEED_SIZE_MB = 64
 PRIVATE_VLAN_PRIMARY = 100  # the private VLAN pair every sandbox adapter and the host's adapter use
 PRIVATE_VLAN_SECONDARY = 200
-# Waits in the guest until cloud-init has read the seed, so the seed can be detached without breaking its reads
+# Waits in the guest until cloud-init has read the seed.
 CLOUD_INIT_WAIT = "cloud-init status --wait >/dev/null 2>&1; true"
-# The guest account, from the seed's user-data. It is the same in every sandbox, so the base image can rely on it.
+# The guest account, from the seed's user-data, the same in every sandbox.
 GUEST_USER = "sandbox"
 GUEST_HOME = "/home/sandbox"
 GUEST_PATH = "/usr/local/bin:/usr/bin:/bin"
@@ -94,7 +91,7 @@ PS_QUOTES = {"'": "''", "\u2018": "''", "\u2019": "''", "\u201a": "''", "\u201b"
 
 
 class SandboxError(Exception):
-    """A sandbox couldn't be made, used or deleted. The message is plain enough to show a mentor."""
+    """A sandbox couldn't be made, used or deleted, with a message to show a mentor."""
 
 
 class SandboxRefused(SandboxError):
@@ -172,7 +169,7 @@ def guest_address(slot: int) -> str:
 
 def sandbox_address(name: str) -> str | None:
     """The address that belongs to a sandbox name: its slot's static address, which the VM's MAC and network config
-    are set from. None for anything that isn't a sandbox name with a slot (the egress proxy refuses those)."""
+    are set from. None for anything that isn't a sandbox name with a slot."""
     try:
         check_name(name)
     except SandboxError:
@@ -200,8 +197,8 @@ def archive_too_big() -> SandboxError:
 
 def pack_tree(root: Path, exclude: frozenset[str] | set[str] = frozenset(), limit: int | None = None) -> bytes:
     """A zip of a folder's files, with their permissions. Folders named in `exclude` are skipped at any depth,
-    and symbolic links are never followed (a link could point at the mini PC's own files). With `limit`, the
-    files' total size is checked before anything is read, and too much raises SandboxError."""
+    and symbolic links are never followed. With `limit`, the files' total size is checked before anything is read, and
+    too much raises SandboxError."""
     root = Path(root)
     buf = io.BytesIO()
     total = 0
@@ -271,7 +268,7 @@ def changed_in_archive(data: bytes, host_root: Path, exclude: frozenset[str] | s
 
 
 class OutputTail:
-    """Keeps only the end of a command's output, so a chatty command can't fill the app's memory."""
+    """Keeps only the end of a command's output."""
 
     def __init__(self, limit: int):
         self.limit = limit
@@ -292,7 +289,7 @@ class OutputTail:
 
 
 def read_output(stream, tail: OutputTail, on_output: Callable[[str], None] | None) -> None:
-    """Read a command's output as it comes, in a worker thread, so nothing waits for the command to end."""
+    """Read a command's output as it comes, in a worker thread."""
     try:
         while True:
             chunk = stream.read1(65536)
@@ -306,8 +303,7 @@ def read_output(stream, tail: OutputTail, on_output: Callable[[str], None] | Non
 
 
 def read_capped(stream, limit: int, sink: bytearray) -> None:
-    """Read a stream into `sink` until it ends or holds more than `limit` bytes. Reading stops there, so the caller
-    can refuse the data without ever holding all of it."""
+    """Read a stream into `sink` until it ends or holds more than `limit` bytes, and stop reading there."""
     try:
         while len(sink) <= limit:
             chunk = stream.read1(65536)
@@ -331,14 +327,14 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
 
 
 # --------------------------------------------------------------------------- FakeSandbox
-@dataclass(eq=False)  # compared by identity, so it can live in a set
+@dataclass(eq=False)  # compared by identity
 class _Run:
     proc: subprocess.Popen | None = None
     stopped: bool = False
 
 
 class FakeSandbox:
-    """Folders on this computer and subprocesses. For tests only: nothing is isolated."""
+    """Folders on this computer and subprocesses, for tests, with no isolation."""
 
     name = "fake"
 
@@ -387,7 +383,7 @@ class FakeSandbox:
             raise SandboxError(f"Couldn't start the command: {exc}") from exc
         with self._lock:
             self._runs.setdefault(handle.name, set()).add(run)
-        tail = OutputTail(MAX_OUTPUT_CHARS * 4)  # 4 bytes is the most a character takes in UTF-8
+        tail = OutputTail(MAX_OUTPUT_CHARS * 4)  # room for MAX_OUTPUT_CHARS of 4-byte UTF-8 characters
         reader = threading.Thread(target=read_output, args=(run.proc.stdout, tail, on_output), daemon=True)
         reader.start()
         timed_out = False
@@ -447,7 +443,7 @@ class FakeSandbox:
                 raise SandboxError(f"Couldn't delete the sandbox folder: {exc}") from exc
 
     def check_network(self) -> None:
-        """Nothing to check: the fake sandbox runs on this computer and has no network of its own."""
+        """Nothing to check: the fake sandbox runs on this computer."""
 
     def list_existing(self) -> list[str]:
         if not self.root.is_dir():
@@ -457,9 +453,8 @@ class FakeSandbox:
 
 def proxy_env(name: str, token: str, host: str, port: int) -> dict[str, str]:
     """The environment that lets a command in a sandbox reach the internet through the egress proxy
-    (egress_proxy.py). The token is in it: never log, audit or show the result. Java and Gradle don't read
-    HTTPS_PROXY, so their proxy settings are passed as JVM options. The empty Basic-scheme override lets Java send the
-    login for the HTTPS tunnel (the JDK refuses Basic for tunnels by default)."""
+    (egress_proxy.py). It holds the token, so the result is never logged, audited or shown. Java and Gradle get their
+    proxy settings as JVM options, with an empty Basic-scheme override so Java sends the login for the HTTPS tunnel."""
     url = f"http://{name}:{token}@{host}:{port}"
     java = (f"-Dhttps.proxyHost={host} -Dhttps.proxyPort={port} -Dhttps.proxyUser={name} "
             f"-Dhttps.proxyPassword={token} -Djdk.http.auth.tunneling.disabledSchemes=")
@@ -477,8 +472,8 @@ def ps_quote(value: str) -> str:
 
 
 def child_disk_path(base: str | Path, name: str, folder: str | Path | None = None) -> Path:
-    """The child disk for a sandbox, named after the sandbox: in `folder` when one is given (the app's own folder, which
-    the service can create files in), else next to the base disk. Never the base disk itself."""
+    """The child disk for a sandbox, named after the sandbox: in `folder` when one is given, else next to the base
+    disk. Never the base disk itself."""
     base = Path(base)
     check_name(name)
     child = Path(folder) / f"{name}.vhdx" if folder else base.with_name(f"{name}.vhdx")
@@ -492,8 +487,7 @@ def new_vhd_script(child: Path, base: str | Path, disk_gb: int) -> str:
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
         f"$parent = Get-VHD -Path {ps_quote(str(base))}",
-        # A reset of the data folder's permissions (an install or restore) can remove the VM group's read access, and the
-        # service can't grant it back. Say so plainly instead of letting Hyper-V fail with "Access is denied".
+        # Checks that the VM group can still read the base disk, with a plain message when it can't.
         f"$acl = Get-Acl -LiteralPath {ps_quote(str(base))}",
         "$vmRead = $acl.Access | Where-Object { "
         "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-83-0' }",
@@ -512,7 +506,7 @@ def new_vm_script(name: str, child: Path, switch: str, memory_mb: int, cpus: int
         "$ErrorActionPreference = 'Stop'",
         f"New-VM -Name {vm} -Generation 2 -MemoryStartupBytes {int(memory_mb)}MB -VHDPath {ps_quote(str(child))}"
         f" -SwitchName {ps_quote(switch)} -Path {ps_quote(str(vm_dir))} | Out-Null",
-        # Ubuntu's boot loader is signed by Microsoft's third-party CA, not by the default Windows template
+        # Secure Boot with Microsoft's third-party UEFI CA, which signs Ubuntu's boot loader
         f"Set-VMFirmware -VMName {vm} -EnableSecureBoot On -SecureBootTemplate MicrosoftUEFICertificateAuthority",
         f"Set-VMMemory -VMName {vm} -DynamicMemoryEnabled $false",
         f"Set-VMProcessor -VMName {vm} -Count {int(cpus)}",
@@ -522,26 +516,23 @@ def new_vm_script(name: str, child: Path, switch: str, memory_mb: int, cpus: int
 
 
 def mac_for_slot(slot: int) -> str:
-    """A static MAC for a slot: Microsoft's 00:15:5D prefix, then the guest's last address octet, so the MAC and the
-    address always go together. Twelve hex digits, no separators, as Set-VMNetworkAdapter expects."""
+    """A static MAC for a slot: Microsoft's 00:15:5D prefix, then the guest's last address octet. Twelve hex digits,
+    no separators, as Set-VMNetworkAdapter expects."""
     return f"00155D77{GUEST_FIRST_SLOT_HOST + slot:04X}"
 
 
 def isolation_script(name: str, slot: int) -> str:
     """Lock one VM's adapter down before it starts: a static MAC, DHCP and router messages from the guest dropped, and
-    traffic limited to the host's address. The host is allowed (IPv4 only); the rest of the guest subnet, where other
-    sandboxes live, is denied in both directions. All IPv6 is denied too (weight 150, below the host allow), so a
-    guest can't reach another sandbox over fe80:: link-local addresses. The base image should also turn IPv6 off
-    (docs/CODE_SANDBOX_PLAN.md). Last, the adapter goes into the private VLAN pair (100 primary, 200 secondary, isolated
-    mode). ACLs don't stop non-IP frames, so the VLAN is what keeps one sandbox's frames away from another's. The
-    host's adapter is promiscuous on the same pair (sandbox-network.ps1 Install). Measured on the mini PC, see
-    docs/CODE_SANDBOX_PLAN.md (M3b). The VLAN mode is read back before the VM starts and again after it starts
-    (check_vm_vlan, in HyperVSandbox._make)."""
+    traffic limited to the host's address. The host is allowed (IPv4 only); the rest of the guest subnet is denied in
+    both directions. All IPv6 is denied too (weight 150, below the host allow). Last, the adapter goes into the private
+    VLAN pair (100 primary, 200 secondary, isolated mode). The host's adapter is promiscuous on the same pair
+    (sandbox-network.ps1 Install). The VLAN mode is read back before the VM starts and again after it starts
+    (check_vm_vlan, in HyperVSandbox._make). See docs/CODE_SANDBOX_PLAN.md (M3b)."""
     vm = ps_quote(check_name(name))
     host = ps_quote(f"{HOST_ADDRESS}/32")
     subnet = ps_quote(GUEST_SUBNET)
     def both(action: str, remote: str, weight: int) -> list[str]:
-        # The cmdlet takes Inbound or Outbound only (there is no Both), so every rule is added once per direction
+        # Adds every rule once per direction, Inbound and Outbound.
         return [f"Add-VMNetworkAdapterExtendedAcl -VMName {vm} -Action {action} -Direction {direction} "
                 f"-RemoteIPAddress {remote} -Weight {weight}" for direction in ("Inbound", "Outbound")]
 
@@ -596,10 +587,10 @@ def destroy_script(name: str, child: Path, seed: Path, vm_folder: Path | None = 
         "  if ($vm.State -ne 'Off') { Stop-VM -Name " + vm + " -TurnOff -Force }",
         f"  Remove-VM -Name {vm} -Force",
         "}",
-        *wipe_file_lines(seed_disk),  # the seed may hold a copy of the host's private key; the VM no longer uses it
+        *wipe_file_lines(seed_disk),  # wipes the seed, which may hold a copy of the host's private key
         f"foreach ($disk in {disks}) {{ if (Test-Path -LiteralPath $disk) {{ "
         "Remove-Item -LiteralPath $disk -Force } }",
-        *([f"$folder = {ps_quote(check_path(vm_folder))}",  # Hyper-V leaves the VM's own (empty) folders behind
+        *([f"$folder = {ps_quote(check_path(vm_folder))}",  # removes the VM's own empty folders
            "if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $folder -Recurse -Force "
            "-ErrorAction SilentlyContinue }"] if vm_folder else []),
     ])
@@ -627,8 +618,8 @@ def vm_vlan_script(name: str) -> str:
 
 
 def check_vm_vlan(output: str) -> None:
-    """Refuse a VM whose adapters are not all isolated in the private VLAN pair. Nothing is accepted by default: an
-    empty answer, or any adapter that reads back differently, stops the VM."""
+    """Refuse a VM whose adapters are not all isolated in the private VLAN pair. An empty answer, or any adapter that
+    reads back differently, stops the VM."""
     text = (output or "").strip()
     rows = json.loads(text) if text else []
     if isinstance(rows, dict):
@@ -659,7 +650,7 @@ def seed_disk_path(base: str | Path, name: str, folder: str | Path | None = None
     return seed
 
 
-# Windows' own IMAPI2 image writer, called from PowerShell. It needs no extra privilege (mounting a disk image does)
+# Windows' own IMAPI2 image writer, called from PowerShell
 ISO_WRITER_SOURCE = """
 using System;
 using System.IO;
@@ -691,18 +682,18 @@ public static class SzIsoWriter {
 
 
 def seed_disk_script(seed: Path, staging: Path) -> str:
-    """Build the seed as an ISO image with Windows' IMAPI2 (no mounting, so no extra privilege): the label cidata and
-    the three seed files from the staging folder at its root. A seed that already exists is never overwritten."""
+    """Build the seed as an ISO image with Windows' IMAPI2 (no mounting): the label cidata and the three seed files
+    from the staging folder at its root. A seed that already exists is never overwritten."""
     disk = ps_quote(check_path(seed))
     lines = [
         "$ErrorActionPreference = 'Stop'",
         f"if (Test-Path -LiteralPath {disk}) {{ throw 'The seed disk is already there.' }}",
         "Add-Type -TypeDefinition @'" + ISO_WRITER_SOURCE + "'@",
         "$image = New-Object -ComObject IMAPI2FS.MsftFileSystemImage",
-        "$image.FileSystemsToCreate = 3",  # ISO 9660 and Joliet, so the file names keep their case and hyphens
+        "$image.FileSystemsToCreate = 3",  # ISO 9660 and Joliet, which keeps the file names' case and hyphens
         f"$image.VolumeName = {ps_quote(SEED_LABEL.lower())}",
     ]
-    # Only the seed folder goes onto the image (the host key's own file sits beside it, never in it)
+    # Only the seed folder goes onto the image.
     lines.append(f"$image.Root.AddTree({ps_quote(check_path(Path(staging) / SEED_DIR))}, $false)")
     lines += ["$result = $image.CreateResultImage()",
               f"[SzIsoWriter]::Write($result.ImageStream, {disk})"]
@@ -738,8 +729,8 @@ def wipe_file_lines(disk: str) -> list[str]:
 
 
 def release_seed_script(name: str, seed: Path) -> str:
-    """Detach the seed disk from the VM, overwrite the seed file with zeros (best effort: it holds a copy of the host's
-    private key, in its user-data), then delete it. Safe to run twice."""
+    """Detach the seed disk from the VM, overwrite the seed file with zeros (best effort), then delete it. Safe to run
+    twice."""
     vm = ps_quote(check_name(name))
     disk = ps_quote(check_path(seed))
     return "\n".join([
@@ -801,9 +792,9 @@ def network_config(slot: int) -> str:
 
 
 def user_data(client_public: str, host_public: str, host_private: str, *, guest_sudo: bool) -> str:
-    """The cloud-init user-data for a sandbox. The guest user accepts only the app's client key. Passwords are never
-    enabled (locked password, password login off). The host key pair is the one this sandbox's known_hosts file was
-    written from. sudo is off unless guest_sudo is set."""
+    """The cloud-init user-data for a sandbox. The guest user accepts only the app's client key, and passwords are
+    never enabled (locked password, password login off). The host key pair is the one this sandbox's known_hosts file
+    was written from. sudo is off unless guest_sudo is set."""
     private = private_key_text(host_private).rstrip("\n").split("\n")
     lines = [
         "#cloud-config",
@@ -814,10 +805,10 @@ def user_data(client_public: str, host_public: str, host_private: str, *, guest_
         "    ssh_authorized_keys:",
         f"      - {public_key_text(client_public)}",
         "ssh_pwauth: false",
-        # IPv6 off in the guest, as early as cloud-init allows and again from sysctl.d on every later boot
+        # IPv6 off in the guest, from cloud-init's bootcmd and again from sysctl.d on every later boot
         "bootcmd:",
         "  - [sh, -c, \"sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1\"]",
-        # The Azure agent waits for Azure data that never comes in a sandbox, which slowed the last boot stage by ~30 s
+        # Masks the Azure agent's services.
         "  - [sh, -c, \"systemctl mask walinuxagent.service walinuxagent-network-setup.service || true\"]",
         "write_files:",
         "  - path: /etc/sysctl.d/99-sandbox-no-ipv6.conf",
@@ -847,8 +838,7 @@ def keygen_argv(path: Path, comment: str) -> list[str]:
 
 def parse_whoami_sid(output: str) -> str:
     """The SID from `whoami /user /fo csv /nh` output (`"domain\\user","S-1-5-..."`) as the `*S-1-5-...` form icacls
-    takes, or '' when the output has no SID. A SID is used because %USERNAME% is the computer account (MINIPC$) for a
-    virtual service account such as NT SERVICE\\SubZeroAI."""
+    takes, or '' when the output has no SID."""
     match = re.search(r'"(S-1-[0-9-]+)"', output or "")
     return f"*{match.group(1)}" if match else ""
 
@@ -886,7 +876,7 @@ def shred_file(path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- Hyper-V: host network check
-NETWORK_OK_SECONDS = 60  # a passing host check is trusted this long, so each create doesn't run PowerShell again
+NETWORK_OK_SECONDS = 60  # how long a passing host check is trusted
 NETWORK_CHECK_MARK = "# szsandbox: host network check (read-only, changes nothing)"  # first line of the check script
 NETWORK_CHECK_SECONDS = 60  # the Settings page's check gives up after this long
 HOST_VNIC_NAME = "vEthernet ({})"  # the host's adapter for an Internal switch is named after it
@@ -930,9 +920,8 @@ UNREADABLE_CHECK = "The check gave an answer the app couldn't read"
 def block_rule_specs(proxy_port: int) -> list[tuple[str, str, str | None]]:
     """The firewall block rules for the sandbox adapter, as (name, protocol, local ports or None for every port). With
     PROXY_RULE they cover all inbound traffic: TCP is blocked below and above the proxy port, UDP, both ICMP versions
-    and BLOCK_PROTOCOLS are blocked whole, and the one allow rule opens only the proxy port. Windows Firewall lets a
-    block rule beat an allow rule, which is why the blocks skip the proxy port. A range that would be empty is left
-    out. Allow rules that already exist on the host need no change: these interface-scoped blocks take precedence."""
+    and BLOCK_PROTOCOLS are blocked whole, and the one allow rule opens only the proxy port. A range that would be
+    empty is left out."""
     port = int(proxy_port)
     specs: list[tuple[str, str, str | None]] = []
     if port > 1:
@@ -955,9 +944,8 @@ def describe_network_problem(code: str) -> str:
     return NETWORK_PROBLEMS.get(code, f"The check found a problem it doesn't know how to describe ({code[:60]})")
 
 
-# PowerShell helpers shared by the check script and sandbox-network.ps1. The two copies must stay identical; a test
-# compares them. A remote address written as a subnet mask (10.77.0.0/255.255.255.0) is turned into the prefix form
-# (10.77.0.0/24) so one comparison accepts either.
+# PowerShell helpers shared by the check script and sandbox-network.ps1, which a test checks are identical. A remote
+# address written as a subnet mask (10.77.0.0/255.255.255.0) is turned into the prefix form (10.77.0.0/24).
 NETWORK_CHECK_HELPERS = r'''function Get-RuleValues($Rule, [string]$Cmdlet, [string]$Field) {
     return @($Rule | & $Cmdlet -ErrorAction SilentlyContinue | ForEach-Object { $_.$Field })
 }
@@ -980,10 +968,10 @@ function Get-RemoteAddresses($Rule) {
 
 def host_network_check_script(switch: str, proxy_port: int) -> str:
     """A read-only PowerShell check of the host's side of the sandbox network. It prints a JSON list of problem codes
-    (an empty list when everything is in place); parse_host_network_check turns them into plain words. It changes
-    nothing. UNVERIFIED on a real host: the cmdlets and their property names are untested (docs/CODE_SANDBOX_PLAN.md,
-    M3b). The same checks, with messages, are in packaging/windows/scripts/sandbox-network.ps1; keep them in step.
-    It reads only the szsandbox-* firewall rules, and each one's filters once, so it stays fast."""
+    (an empty list when everything is in place), which parse_host_network_check turns into plain words. UNVERIFIED on a
+    real host (docs/CODE_SANDBOX_PLAN.md, M3b). The same checks, with messages, are in
+    packaging/windows/scripts/sandbox-network.ps1. It reads only the szsandbox-* firewall rules, and each one's filters
+    once."""
     sw = ps_quote(switch)
     alias = ps_quote(HOST_VNIC_NAME.format(switch))
     subnet = ps_quote(GUEST_SUBNET)
@@ -1072,7 +1060,7 @@ def host_network_check_script(switch: str, proxy_port: int) -> str:
 
 def parse_host_network_check(output: str) -> list[str]:
     """Plain-language problems from the check's output. An empty list means the sandbox network is ready. Output that
-    isn't a JSON list of codes (or nothing at all) is a problem too: the check fails closed."""
+    isn't a JSON list of codes, or no output, is a problem too."""
     text = (output or "").strip()
     try:
         codes = json.loads(text) if text else None
@@ -1086,7 +1074,7 @@ def parse_host_network_check(output: str) -> list[str]:
 
 
 def host_network_problems(switch: str, proxy_port: int, run_powershell: Callable[[str], str]) -> list[str]:
-    """Run the host check and return its problems. Any error while running it is itself a problem (fail closed)."""
+    """Run the host check and return its problems. Any error while running it is itself a problem."""
     try:
         output = run_powershell(host_network_check_script(switch, proxy_port))
     except Exception as exc:
@@ -1114,7 +1102,7 @@ def guest_run_command(argv: list[str], cwd: str, env: dict[str, str], timeout: i
             f"timeout -k 5 {int(timeout)} {shlex.join(argv)}")
 
 
-# The guest runs these with python3 (TODO: the base image must have it). They only use the standard library.
+# The guest runs these with python3 (TODO: the base image must have it), using only the standard library.
 GUEST_PACK = (
     "import io,os,sys,zipfile\n"
     "root=sys.argv[1]; skip=set(sys.argv[2:])\n"
@@ -1179,7 +1167,7 @@ def _run_pipes(argv: list[str], *, stdin: bytes | None, timeout: int, on_output:
     def capture_archive() -> None:
         read_capped(proc.stdout, limit, archive)
         if len(archive) > limit:
-            kill_process_tree(proc)  # stop the guest sending more; the caller refuses the archive
+            kill_process_tree(proc)  # stops the guest sending more; the caller refuses the archive
 
     threads = [threading.Thread(target=read_output, args=(proc.stderr, err_tail, emit), daemon=True)]
     if limit is None:
@@ -1247,8 +1235,8 @@ def plain_powershell_error(text: str) -> str:
 
 def default_run_powershell(script: str, timeout: int = 900) -> str:
     """Run a PowerShell script on the host and return its output. Needs an elevated PowerShell (M3). The script is
-    passed encoded, so its line breaks and quotes survive the trip to powershell.exe."""
-    # Errors are caught and written as plain text (powershell.exe wraps its own error stream in CLIXML otherwise)
+    passed encoded."""
+    # Catches errors and writes them as plain text.
     script = ("$ProgressPreference = 'SilentlyContinue'\ntry {\n" + script +
               "\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }")
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
@@ -1275,9 +1263,9 @@ class HyperVSandbox:
     Making a sandbox: a fresh ed25519 host key pair is made on the host (ssh-keygen) and locked to the app's account.
     Its public half is written to the sandbox's own known_hosts file. Its private half goes to the guest on a NoCloud
     seed disk, with the app's client public key for the guest user. The seed is attached before the VM starts. Once SSH
-    answers (with strict host key checking, so the pinned key must be the one in use), cloud-init is allowed to finish
-    reading the seed, then the seed is detached and deleted, and the host's copies of the private key (the staged host
-    key and the seed's user-data) are overwritten with zeros and deleted.
+    answers (with strict host key checking), cloud-init finishes reading the seed, then the seed is detached and
+    deleted, and the host's copies of the private key (the staged host key and the seed's user-data) are overwritten
+    with zeros and deleted.
     Destroy deletes whatever is left: the VM, its disks, the seed, the staged files and the known_hosts file.
 
     The runners are injected: run_powershell(script) -> output text; run_keygen(argv) makes a key pair (ssh-keygen);
@@ -1302,8 +1290,7 @@ class HyperVSandbox:
         self.switch = switch
         self.memory_mb, self.cpus, self.disk_gb = memory_mb, cpus, disk_gb
         base_dir = Path(base_image).parent
-        # Disks and VM files go in a folder the service makes itself: it has no right to set permissions in the base
-        # image's folder, and New-VM needs to
+        # Disks and VM files go in a folder the service makes itself.
         self.disks_dir = Path(disks_dir) if disks_dir else base_dir / "szsandbox-disks"
         self.vm_dir = Path(vm_dir) if vm_dir else self.disks_dir / "config"
         self.known_dir = Path(known_dir) if known_dir else base_dir / "szsandbox-known-hosts"
@@ -1321,7 +1308,7 @@ class HyperVSandbox:
         self.archive_limit = archive_limit
         self.proxy_port = proxy_port
         self._lock = threading.Lock()  # guards _killed, _reserved and _network_ok_until; never held across a VM call
-        self._key_lock = threading.Lock()  # makes the app's client key once, even when two sandboxes start together
+        self._key_lock = threading.Lock()  # makes the app's client key once
         self._killed: set[str] = set()
         self._reserved: set[int] = set()  # slots of sandboxes being made right now
         self._network_ok_until = 0.0  # monotonic time until which a passing host network check is trusted
@@ -1339,7 +1326,7 @@ class HyperVSandbox:
         return str(self.known_dir / check_name(name))
 
     def _staging(self, name: str) -> Path:
-        """The sandbox's folder of files for the seed (they include the host private key, so it is removed early)."""
+        """The sandbox's folder of files for the seed, including the host private key."""
         return self.staging_dir / check_name(name)
 
     def _seed(self, name: str) -> Path:
@@ -1368,7 +1355,7 @@ class HyperVSandbox:
         """Make one key pair at path (path.pub is the public half) and lock the private file to the app's account."""
         path.parent.mkdir(parents=True, exist_ok=True)
         for stale in (path, Path(str(path) + ".pub")):
-            stale.unlink(missing_ok=True)  # ssh-keygen would ask before overwriting
+            stale.unlink(missing_ok=True)  # removes an old key file first
         try:
             self.run_keygen(keygen_argv(path, comment))
         except SandboxError:
@@ -1411,8 +1398,7 @@ class HyperVSandbox:
         write_lf(Path(self._known_hosts(name)), known_hosts_line(host_public, guest_address(slot)) + "\n")
 
     def _wait_ready(self, name: str) -> None:
-        """Wait until the guest's SSH answers. Every try is strict about the pinned host key, so a guest that presents
-        any other key is never trusted."""
+        """Wait until the guest's SSH answers. Every try is strict about the pinned host key."""
         deadline = time.monotonic() + self.ready_seconds
         while True:
             try:
@@ -1427,8 +1413,7 @@ class HyperVSandbox:
 
     def _release_seed(self, name: str) -> None:
         """Once the guest is up: detach the seed disk and delete it, then wipe the host's copies of the private key (the
-        staged host key and the seed's user-data) and delete the staged files. The known_hosts file stays, since every
-        later connection checks it."""
+        staged host key and the seed's user-data) and delete the staged files. The known_hosts file stays."""
         try:
             self._ps(release_seed_script(name, self._seed(name)))
         finally:
@@ -1463,7 +1448,7 @@ class HyperVSandbox:
             self._ps(destroy_script(name, self._child(name), self._seed(name), self.vm_dir / check_name(name)))
         finally:
             try:
-                self._wipe_staged_keys(name)  # the staged files hold a private key: wiped even if the VM didn't go
+                self._wipe_staged_keys(name)  # wipes the staged files even if the VM didn't go
                 self._remove_staging(name)
             finally:
                 Path(self._known_hosts(name)).unlink(missing_ok=True)
@@ -1471,8 +1456,7 @@ class HyperVSandbox:
     # ---- lifecycle
     def check_network(self) -> None:
         """Refuse unless the host's side of the sandbox network passes the read-only check. A pass is trusted for
-        NETWORK_OK_SECONDS, so each create doesn't run PowerShell again. A failure is never kept, so a fix counts at
-        once. Any PowerShell error counts as a failure."""
+        NETWORK_OK_SECONDS; a failure is never kept. Any PowerShell error counts as a failure."""
         with self._lock:
             if time.monotonic() < self._network_ok_until:
                 return
@@ -1484,8 +1468,7 @@ class HyperVSandbox:
 
     def create(self, session_id: int | str) -> SandboxHandle:
         self.check_network()
-        # Only the slot is chosen under the lock. The VM takes minutes to boot, so it is made outside it, and the
-        # reaper and other sandboxes are never held up by it.
+        # Only the slot is chosen under the lock; the VM is made outside it.
         with self._lock:
             slot = next_slot(self.list_existing(), self._reserved)
             self._reserved.add(slot)
@@ -1498,14 +1481,14 @@ class HyperVSandbox:
     def _make(self, name: str, slot: int) -> SandboxHandle:
         try:
             child, seed = self._child(name), self._seed(name)
-            self.disks_dir.mkdir(parents=True, exist_ok=True)  # made by the app itself, so the app owns it
+            self.disks_dir.mkdir(parents=True, exist_ok=True)  # made by the app itself
             self.vm_dir.mkdir(parents=True, exist_ok=True)
             self._stage_seed(name, slot)
             self._ps(new_vhd_script(child, self.base_image, self.disk_gb))
             self._ps(new_vm_script(name, child, self.switch, self.memory_mb, self.cpus, self.vm_dir))
             self._ps(isolation_script(name, slot))
             check_adapters(self._ps(adapters_script(name)), self.switch)
-            check_vm_vlan(self._ps(vm_vlan_script(name)))  # before the start: a wrong VLAN destroys the VM unstarted
+            check_vm_vlan(self._ps(vm_vlan_script(name)))  # checks the VLAN before the start; a wrong VLAN destroys the VM unstarted
             self._ps(seed_disk_script(seed, self._staging(name)))
             self._ps(attach_seed_script(name, seed))
             self._ps(start_script(name))
@@ -1515,7 +1498,7 @@ class HyperVSandbox:
             self._release_seed(name)
         except Exception as exc:
             try:
-                self._destroy_name(name)  # don't leave a half-made VM, or its key files, behind
+                self._destroy_name(name)  # removes a half-made VM and its key files
             except Exception:
                 log.warning("Couldn't clean up sandbox %s after a failed start", name, exc_info=True)
             if isinstance(exc, SandboxError):
@@ -1540,7 +1523,7 @@ class HyperVSandbox:
         with self._lock:
             self._killed.discard(handle.name)
         remote = guest_run_command(argv, cwd, env, timeout)
-        # The runner streams the output to on_output as it comes and keeps only its end, so this stays bounded.
+        # The runner streams the output to on_output as it comes and keeps only its end.
         code, out, err = self._ssh(handle.name, remote, timeout=timeout + 60, on_output=on_output)
         tail = OutputTail(MAX_OUTPUT_CHARS * 4)
         tail.add(out + err)
@@ -1683,7 +1666,7 @@ class SandboxStore:
 
 class SandboxManager:
     """Makes, uses and deletes sandboxes, and keeps their records in step. `lock` covers the records and every
-    destroy, and it is never held while a VM boots: a sandbox's slot is reserved under the lock as a record in state
+    destroy, and is never held while a VM boots: a sandbox's slot is reserved under the lock as a record in state
     'creating' (which counts toward the limit), and the VM is made after the lock is released."""
 
     def __init__(self, settings: Settings, db: Database,
@@ -1699,21 +1682,20 @@ class SandboxManager:
         self._backends: dict[str, tuple[tuple, SandboxBackend]] = {}
         self._session_locks: dict[int, list] = {}  # code session -> [RLock, threads inside or waiting]
         self._state_lock = threading.Lock()  # guards _backends and _session_locks only
-        # Proxy tokens, in memory only. _secrets holds each running sandbox's token; _recent keeps the last few, so
-        # output from a command still running when its sandbox was deleted is redacted too.
+        # Proxy tokens, in memory only. _secrets holds each running sandbox's token; _recent keeps the last few for
+        # redacting output.
         self._token_lock = threading.Lock()
         self._secrets: dict[str, str] = {}
         self._recent: deque[tuple[str, str]] = deque(maxlen=RECENT_TOKENS)
 
     @property
     def enabled(self) -> bool:
-        """True unless code_sandbox is off. An unknown value counts as on, so a typo in config.env fails closed:
-        the command is refused, instead of running on this computer."""
+        """True unless code_sandbox is off. An unknown value counts as on."""
         return self.settings.code_sandbox.strip().lower() not in OFF_VALUES
 
     def backend(self, kind: str) -> SandboxBackend:
-        """The one backend of this kind that everyone shares, so its state (a running command, a stop request) is
-        seen by every caller. It is rebuilt only when the settings it is built from, or the factory, change."""
+        """The one backend of this kind that everyone shares. It is rebuilt only when the settings it is built from, or the
+        factory, change."""
         key = (self.backend_factory, backend_fingerprint(self.settings, kind))
         with self._state_lock:
             cached = self._backends.get(kind)
@@ -1724,9 +1706,8 @@ class SandboxManager:
 
     @contextmanager
     def session_lock(self, code_session_id: int) -> Iterator[None]:
-        """Serializes the sandbox work of one Code session (making its sandbox and copying the repository in), so two
-        commands can't each make one. Other sessions are not held up by it. The entry counts the threads inside or
-        waiting, so _forget_session_lock never drops a lock that is in use."""
+        """Serializes the sandbox work of one Code session (making its sandbox and copying the repository in). The entry
+        counts the threads inside or waiting, and _forget_session_lock never drops a lock that is in use."""
         with self._state_lock:
             entry = self._session_locks.setdefault(code_session_id, [threading.RLock(), 0])
             entry[1] += 1
@@ -1738,8 +1719,8 @@ class SandboxManager:
                 entry[1] -= 1
 
     def _forget_session_lock(self, code_session_id: int) -> None:
-        """Drop a Code session's lock entry once its sandbox is gone, so the table doesn't grow with every session.
-        A lock still in use is kept, and a later session_lock call makes a new one."""
+        """Drop a Code session's lock entry once its sandbox is gone. A lock still in use is kept, and a later
+        session_lock call makes a new one."""
         with self._state_lock:
             entry = self._session_locks.get(code_session_id)
             if entry is not None and entry[1] == 0:
@@ -1831,7 +1812,7 @@ class SandboxManager:
         """Refuse a new sandbox when the limit is reached, the disk is low, or the base image isn't set."""
         if self.settings.code_sandbox == "hyperv" and not self.settings.sandbox_base_image:
             raise SandboxRefused("Set the sandbox base image in Settings before Code can use sandboxes.")
-        if self.settings.code_sandbox == "hyperv" and not self.proxy_ready():  # fail closed: no proxy, no sandbox
+        if self.settings.code_sandbox == "hyperv" and not self.proxy_ready():  # no proxy, no sandbox
             raise SandboxRefused(self.proxy_problem())
         limit = self.settings.sandbox_max_sessions
         if self.store.alive_count() >= limit:
@@ -1845,13 +1826,13 @@ class SandboxManager:
 
     def create_for_session(self, code_session_id: int, *, actor_id: int | None) -> SandboxHandle:
         """Make a sandbox for a Code session. Raises SandboxRefused or SandboxError. The lock is held only to check
-        the limit and record the reservation; the VM is made outside it, so the reaper is never held up."""
+        the limit and record the reservation; the VM is made outside it."""
         kind = self.settings.code_sandbox
-        self.backend(kind).check_network()  # first, and outside the lock: a refused sandbox leaves no record
+        self.backend(kind).check_network()  # checked first, outside the lock; a refused sandbox leaves no record
         now = datetime.now(timezone.utc)
         expires = now + timedelta(hours=self.settings.sandbox_ttl_hours)
         with self.lock:
-            self.check_capacity()  # counts sandboxes being made too, so parallel requests can't exceed the limit
+            self.check_capacity()  # counts sandboxes being made too
             row_id = self.store.insert(code_session_id, kind, state="creating",
                                        created_at=now.isoformat(timespec="seconds"),
                                        expires_at=expires.isoformat(timespec="seconds"))
@@ -1869,7 +1850,7 @@ class SandboxManager:
             if recorded:
                 with self._token_lock:
                     self._issue_locked(handle)  # the sandbox's commands get this token from now on
-        if not recorded:  # the reaper closed this record while the VM was being made: don't keep the VM
+        if not recorded:  # the reaper closed this record while the VM was being made: the VM is deleted
             try:
                 self.backend(kind).destroy(handle)
             except Exception:
@@ -1884,7 +1865,7 @@ class SandboxManager:
     def destroy_record(self, row, *, reason: str, actor_id: int | None = None,
                        before: Callable[[SandboxHandle], None] | None = None) -> None:
         """Delete one sandbox and mark its record. `before` saves what the sandbox holds first; if it fails, the
-        delete still goes ahead. A failed delete is kept as "failed" so the reaper tries again."""
+        delete still goes ahead. A failed delete is kept as "failed" for the reaper to try again."""
         with self.lock:
             if row["state"] == "destroyed":
                 return
@@ -1941,7 +1922,7 @@ class SandboxManager:
 
 def reap_sandboxes(services: Any, now: datetime | None = None) -> dict[str, int]:
     """Delete sandboxes past their time limit, of finished sessions, or that no record owns. Never raises: every
-    problem is logged and counted in the result, and the next run tries again."""
+    problem is logged and counted in the result."""
     report = {"expired": 0, "orphans": 0, "failed": 0}
     manager: SandboxManager | None = getattr(services, "sandboxes", None)
     if manager is None:
@@ -1974,8 +1955,7 @@ def watch_sandbox_disks(services: Any) -> dict[str, int]:
 
 
 def _reap_oversize(manager: SandboxManager, report: dict[str, int]) -> None:
-    """Delete a running sandbox whose disk has grown past sandbox_disk_cap_gb, so a few busy sandboxes can't fill the
-    drive the app's database is on."""
+    """Delete a running sandbox whose disk has grown past sandbox_disk_cap_gb."""
     cap = int(getattr(manager.settings, "sandbox_disk_cap_gb", 0) or 0) * 1024 ** 3
     low = manager.settings.code_sandbox == "hyperv" and manager.free_gb() < manager.settings.sandbox_min_free_gb / 2
     if cap <= 0 and not low:
@@ -2033,7 +2013,7 @@ def _reap_row(manager: SandboxManager, row, stamp: str, report: dict[str, int]) 
 
 def _reap_orphans(manager: SandboxManager, report: dict[str, int]) -> None:
     if manager.store.any_creating():
-        return  # a VM can exist before its record has a name, so nothing is an orphan until the makes finish
+        return  # skips the orphan check while any sandbox is being made
     known = manager.store.known_names()
     for kind in sorted(manager.kinds_in_use()):
         try:

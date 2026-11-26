@@ -49,7 +49,7 @@ class SlackInteractions:
         self.dms = None  # SlackDMs, set by build_services
 
     async def dispatch(self, envelope: dict[str, Any]) -> dict[str, Any] | None:
-        """Called for every Socket Mode envelope. Must return quickly: the return value is the acknowledgement."""
+        """Handles one Socket Mode envelope and returns its acknowledgement."""
         if envelope.get("type") == "events_api":
             event = (envelope.get("payload") or {}).get("event") or {}
             if self.dms is not None and event.get("type") == "message" and event.get("channel_type") == "im":
@@ -67,9 +67,7 @@ class SlackInteractions:
         return None
 
     async def reviewer(self, slack_user_id: str, *, fresh: bool = True) -> Viewer | None:
-        """The mentor behind a tap, or None. fresh=True re-reads #claude-approvals so someone just removed
-        loses access at once; opening and submitting modals use the cached list, because Slack gives those
-        3 seconds and the cache was refreshed within the last few minutes."""
+        """The mentor behind a tap, or None. fresh=True re-reads #claude-approvals instead of using the cached list."""
         role = await self.directory.role_for(slack_user_id, force=fresh)
         if role not in MENTOR_ROLES:
             return None
@@ -93,7 +91,7 @@ class SlackInteractions:
             message_id = int(action.get("value", ""))
         except ValueError:
             return
-        # Edit and Reject open a modal, and Slack's trigger_id for that expires 3 seconds after the tap.
+        # Edit and Reject use the cached mentor list; other taps re-read it.
         reviewer = await self.reviewer(user_id, fresh=action_id not in ("edit", "reject"))
         if reviewer is None:
             await self._tell(channel, user_id, "Only mentors in this channel can review messages.")

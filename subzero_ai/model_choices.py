@@ -3,8 +3,8 @@ and the check each reply makes before it uses a chat's model.
 
 A model is offered only when its provider is turned on and has a key (Claude subscription: signed in), the active
 backend can run it (on `anthropic` only Claude models), `check_model` allows it (Fable and Mythos are kept off), and,
-for chats and the screener, it has passed the Model safety check. The Settings page also lists models that haven't
-been checked yet, marked so, because saving still refuses them."""
+for chats and the screener, it has passed the Model safety check. The Settings page also lists unchecked models,
+marked so."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def model_label(model_id: str, names: dict[str, str] | None = None) -> str:
 
 
 def cost_hint(info: dict | None) -> str:
-    """What the gateway says a model costs per million tokens, or '' when it reports nothing (it sends 0 then)."""
+    """What the gateway says a model costs per million tokens, or '' when it reports nothing."""
     cost = (info or {}).get("cost") or {}
     try:
         cost_in, cost_out = float(cost.get("input") or 0), float(cost.get("output") or 0)
@@ -56,7 +56,7 @@ def option_label(option: dict[str, Any]) -> str:
 
 def _candidates(services: Any) -> list[str]:
     """Every model the app knows about: the built-in labels, the gateway's list, models ever checked, and the ones
-    set now. Settings only lists a model when its provider is on and keyed, so extra names are harmless."""
+    set now."""
     ids: list[str] = list(MODEL_LABELS) + list(services.model_info)
     ids += [row["model"] for row in latest_results(services.db)]
     ids += [getattr(services.settings, name) for name in MODEL_ID_SETTINGS]
@@ -83,7 +83,7 @@ def _rules_problem(settings: Settings, model: str, purpose: str) -> str:
 
 
 def _grandfathered(db: Database, model: str) -> bool:
-    """True when the model was never checked, or its newest check is out of date (the check suite changed since).
+    """True when the model was never checked, or its newest check is from an older version of the check suite.
     A check of the current version that failed still blocks."""
     result = latest_result(db, model)
     return result is None or not result["current"]
@@ -91,8 +91,8 @@ def _grandfathered(db: Database, model: str) -> bool:
 
 def _check_problem(db: Database, model: str, purpose: str, settings: Settings | None = None) -> str:
     """Why the Model safety check doesn't allow this purpose yet, or '' (purposes without a check always pass).
-    The models set now as default and hard-problem keep working without a check: they ran before the check existed,
-    and the check only gates a change (saving a new one still needs it). A check that ran and failed still blocks."""
+    The models set now as default and hard-problem keep working without a check; saving a new one needs it. A check
+    that ran and failed still blocks."""
     if purpose not in CHECKED_PURPOSES:
         return ""
     if settings is not None and not CHECKED_PURPOSES[purpose] and model in {

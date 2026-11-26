@@ -28,7 +28,7 @@ from pathlib import Path
 from . import __version__
 from .config import Settings, load_settings
 
-# Exit code that asks for a restart: the Windows service starts the app again, and run.ps1 loops on it.
+# Exit code that asks the Windows service, or run.ps1, to start the app again.
 RESTART_EXIT_CODE = 3
 COMMANDS = ["run", "check", "claude-login", "backup", "backups", "restore", "recovery-code", "reset-setup"]
 
@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         overrides["dev_login"] = True
         if not os.environ.get("DATA_DIR"):
             overrides["data_dir"] = Path.cwd() / "test-data"
-    # Test mode only reads test-data/config.env, never a real config.env sitting in the app folder.
+    # Test mode reads only test-data/config.env.
     settings = load_settings(args.config, search_cwd=not args.test_mode, **overrides)
     if args.test_mode and not settings.anthropic_api_key:
         settings.fake_claude = True
@@ -102,10 +102,10 @@ def main(argv: list[str] | None = None) -> int:
         threading.Timer(1.5, webbrowser.open, [f"http://localhost:{settings.port}/{page}"]).start()
     config = uvicorn.Config(
         app, host=settings.host, port=settings.port,
-        # Trust the X-Forwarded headers from the Cloudflare connector, which runs on this PC.
+        # Trusts the X-Forwarded headers from the Cloudflare connector on this PC.
         proxy_headers=True, forwarded_allow_ips="127.0.0.1,::1",
         log_config=None, access_log=False, server_header=False,
-        # Open live-update connections would otherwise hold up Ctrl+C and service restarts.
+        # Closes open live-update connections within 3 seconds on shutdown.
         timeout_graceful_shutdown=3,
     )
     server = uvicorn.Server(config)
@@ -204,13 +204,13 @@ def claude_login_tool(settings: Settings, run=None) -> int:
 
 
 def run_tool(command: str, name: str | None, settings: Settings) -> int:
-    """The maintenance commands. They print plain sentences, since mentors run them from a .cmd file."""
+    """The maintenance commands, which print plain sentences."""
     from . import backup, setup_flow
     from .db import Database
 
     try:
         if command == "backup":
-            Database(settings.db_path)  # make sure the database exists and is up to date
+            Database(settings.db_path)  # creates or upgrades the database
             path = backup.make_backup(settings, label=name or "manual")
             print(f"Backed up to {path}")
         elif command == "backups":
