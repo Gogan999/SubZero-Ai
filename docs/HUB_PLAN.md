@@ -13,7 +13,7 @@ the choices below. For example, existing files aren't moved or renamed, and inte
 | Topic | Decision |
 | --- | --- |
 | Name | **SubZero Hub**. The AI chat is still called SubZero AI inside the Hub. |
-| Repository | `SubZero-Hub` holds SubZero AI's full history, so changes can be merged either way. |
+| Repository | The `hub` branch of `Gogan999/SubZero-Ai`, to be merged into `main` when it's ready. |
 | Host | The same Windows mini PC, installed as an **in-place upgrade**: chats, users and settings are kept. It must also be able to move to a cloud server later. |
 | Internal names | No change: the `subzero_ai` package, the `SubZeroAI` Windows service, `C:\ProgramData\SubZeroAI`, and the release zip name. Only the names people see change. |
 | Web address | `hub.yourdomain.org`. The old `ai.` address redirects to it. |
@@ -285,8 +285,8 @@ Default permissions:
   - page titles, the sidebar, the setup page and the Slack manifest
   - the README and the `.cmd` tools' messages
   - "SubZero AI" stays as the name of the AI tool
-- **Update source:** `UPDATE_REPO` in `packaging/build_windows.py` and `update_repo` in `config.py` point to
-  `Gogan999/SubZero-Hub`, so `update.cmd` installs Hub releases. Version numbers start at **1.0.0**.
+- **Update source:** unchanged (`Gogan999/SubZero-Ai`). Hub releases are published there from the `hub` branch,
+  and `update.cmd` installs the latest one. Version numbers start at **1.0.0**.
 - **Upgrade steps on the mini PC:**
   1. Run `back-up-now.cmd`.
   2. Run `update.cmd` from a SubZero Hub release zip (`update.cmd -Zip path\to\zip` for the first one).
@@ -308,9 +308,8 @@ Default permissions:
 Each phase ends with every existing test passing, plus new tests for what it adds, and a short
 README update.
 
-0. **Repository:**
-   - set up `SubZero-Hub` from SubZero AI's history, with the `upstream` remote pointing at SubZero-Ai
-   - change the user-facing name and the update source
+0. **Repository:** *done: the `hub` branch of SubZero-Ai*
+   - change the user-facing name
    - update CLAUDE.md
 1. **Core and modules:** *done (on the local `hub` branch)*
    - module registry and per-module migrations
