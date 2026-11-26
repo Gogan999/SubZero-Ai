@@ -12,12 +12,10 @@
 # switches, VMs and rules are never touched.
 # Firewall rules, all inbound on the sandbox adapter. Block rules from any address: TCP below and above the proxy port,
 # all UDP, ICMPv4, ICMPv6, and the IP protocols in $BlockProtocols (IGMP, IPv6 in IPv4, GRE, ESP, AH). Windows Firewall
-# lets a block rule beat an allow rule, so the blocks skip the proxy port, and the one allow rule (szsandbox-allow-proxy)
-# opens only TCP to the proxy port from 10.77.0.0/24. Together they leave nothing open but the proxy. Other allow rules
-# on the host need no change, because these interface-scoped blocks take precedence. IPv6 is also unbound from the
-# host's adapter, so the host has no IPv6 address there. Check also reads the Public profile's default inbound action,
-# which must be Block. The private VLAN matters because ACLs don't stop non-IP frames between sandboxes.
-# The checks here must match host_network_check_script in subzero_ai/sandbox.py. Keep both in step (a test compares
+# lets a block rule beat an allow rule; the blocks skip the proxy port, and the one allow rule (szsandbox-allow-proxy)
+# opens only TCP to the proxy port from 10.77.0.0/24. Together they leave nothing open but the proxy. IPv6 is also
+# unbound from the host's adapter. Check also reads the Public profile's default inbound action, which must be Block.
+# The checks here match host_network_check_script in subzero_ai/sandbox.py (a test compares
 # the problem codes, the rule names and the helper functions).
 
 param(
@@ -66,7 +64,7 @@ $Messages = @{
 
 function Get-SandboxSwitch { return Get-VMSwitch -Name $Switch -ErrorAction SilentlyContinue }
 
-# Only the szsandbox-* rules are asked for, by name, so the lookup stays fast on a PC with many rules
+# Asks only for the szsandbox-* rules, by name
 function Get-SandboxRules {
     return @(Get-NetFirewallRule -DisplayName "$Prefix*" -ErrorAction SilentlyContinue)
 }
@@ -85,7 +83,7 @@ function Get-BlockRuleSpecs([int]$Port) {
     return $specs
 }
 
-# Shared with host_network_check_script in sandbox.py (NETWORK_CHECK_HELPERS). Keep the two identical.
+# Shared with host_network_check_script in sandbox.py (NETWORK_CHECK_HELPERS).
 function Get-RuleValues($Rule, [string]$Cmdlet, [string]$Field) {
     return @($Rule | & $Cmdlet -ErrorAction SilentlyContinue | ForEach-Object { $_.$Field })
 }
@@ -224,7 +222,7 @@ function Install-SandboxNetwork {
     if (-not $adapter) { throw "Windows didn't create the adapter $Alias. Wait a minute and run this again." }
 
     Write-Step "Giving the host's adapter $HostAddress/24, with no gateway"
-    # This adapter belongs to the sandbox switch, so its old addresses and gateways can be replaced
+    # Replaces the sandbox adapter's old addresses and gateways
     Get-NetRoute -InterfaceAlias $Alias -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue |
         Remove-NetRoute -Confirm:$false
     Get-NetIPAddress -InterfaceAlias $Alias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -292,7 +290,7 @@ try {
     if (-not (Get-Command Get-VMSwitch -ErrorAction SilentlyContinue)) {
         throw "Hyper-V's PowerShell tools aren't installed, or Hyper-V isn't turned on."
     }
-    # Not a `switch` statement: the -Switch parameter is the automatic $switch variable, so `switch` would run nothing
+    # An if/elseif chain, not a `switch` statement
     if ($Action -eq "Install") { Install-SandboxNetwork }
     elseif ($Action -eq "Remove") { Remove-SandboxNetwork }
     elseif ($Action -eq "Check") { if ((Show-SandboxCheck) -gt 0) { $code = 1 } }

@@ -443,7 +443,7 @@ class FlowTest(unittest.TestCase):
         directory = self.h.services.directory
         self.assertEqual(self.h.call(directory.role_for, "UMENTOR9"), "mentor")
         self.h.slack.members = set()
-        # Their session is still cached as mentor, but the action re-checks Slack
+        # Their session is still cached as mentor; the action re-checks Slack
         from .helpers import Actor
         cookie = self._session_for(user["id"])
         actor = Actor(self.h, "UMENTOR9", cookie, "csrf-token")

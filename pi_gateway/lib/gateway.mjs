@@ -55,7 +55,7 @@ export function createGateway({ models, getApiKey, write, version = "0.0.0", piA
         );
       }
       if (Array.isArray(payload.betas)) {
-        // Betas that only support the thinking/effort markers we just removed; match by prefix (dates change).
+        // Drops the betas for the thinking/effort markers removed above, matched by prefix.
         payload.betas = payload.betas.filter(
           (b) => !(typeof b === "string" && (b.startsWith("mid-conversation-output-config-") || b.startsWith("thinking-binding-controls-"))),
         );

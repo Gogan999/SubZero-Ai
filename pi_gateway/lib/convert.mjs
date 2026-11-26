@@ -95,7 +95,7 @@ export function convertMessages(messages, model) {
         if (p) rest.push(p);
       }
     }
-    // Tool results must directly follow the assistant tool call, so they go first.
+    // Tool results go first, right after the assistant tool call.
     out.push(...results);
     if (rest.length) out.push({ role: "user", content: rest, timestamp: now });
   }

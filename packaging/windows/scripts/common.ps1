@@ -1,6 +1,6 @@
 # Shared helpers for the SubZero AI install, update, restore, and uninstall scripts.
 # Dot-source it:  . (Join-Path $PSScriptRoot "common.ps1")
-# Written for Windows PowerShell 5.1, which every Windows 10 and 11 PC has. Keep this file ASCII-only.
+# Written for Windows PowerShell 5.1. ASCII-only.
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # Invoke-WebRequest is much faster without the progress bar
@@ -9,7 +9,7 @@ $ServiceName = "SubZeroAI"
 $ServiceAccount = "NT SERVICE\SubZeroAI"
 $TunnelServiceName = "Cloudflared"
 $InstallDir = Join-Path $env:ProgramFiles "SubZeroAI"
-# The Cloudflare connector gets its own folder, so removing or updating SubZero AI never breaks the tunnel.
+# The Cloudflare connector's own folder, outside the app's.
 $CloudflaredExe = Join-Path $env:ProgramFiles "cloudflared\cloudflared.exe"
 $DataDir = Join-Path $env:ProgramData "SubZeroAI"
 $AppPort = 8787
@@ -107,8 +107,8 @@ function Invoke-AppTool([string[]]$ToolArgs, [string]$Dir = $InstallDir) {
     return $LASTEXITCODE
 }
 
-# The data folder holds config.env (the API key and Slack tokens) and the team's chats. Only administrators,
-# Windows itself, and the app's own service account can open it.
+# Limits the data folder (config.env and the team's chats) to administrators, Windows itself, and the app's
+# own service account.
 function Set-DataFolderAccess {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     $grants = @(
@@ -123,8 +123,8 @@ function Set-DataFolderAccess {
     Restore-SandboxImageAccess
 }
 
-# The reset above wipes the permissions on the sandbox base disk, which Hyper-V needs: the virtual machines' group can
-# read it, and the app's service can only read it (the service can't grant permissions itself). Put them back.
+# Puts back the sandbox base disk's permissions after the reset above: read for the virtual machines' group and
+# read for the app's service.
 function Restore-SandboxImageAccess {
     $images = Join-Path $DataDir "sandbox\images"
     if (-not (Test-Path -LiteralPath $images)) { return }
@@ -166,7 +166,7 @@ function Copy-AppFiles([string]$From, [string]$To) {
     }
 }
 
-# Byte-compile the Python files once, as an administrator, since the service can't write to Program Files.
+# Byte-compiles the Python files, as an administrator.
 function Optimize-AppFiles([string]$Dir = $InstallDir) {
     $python = Join-Path $Dir "python\python.exe"
     & $python -m compileall -q -j 0 (Join-Path $Dir "app") (Join-Path $Dir "python\Lib\site-packages") | Out-Null

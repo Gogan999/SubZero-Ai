@@ -15,7 +15,7 @@
 # parent.
 # Only the file named by -ParentName, inside -Folder, and its .sha256 file are ever written or deleted. The folder must
 # be inside the SubZero AI data folder's sandbox folder, which Build creates.
-# The release date must be a dated folder (such as 20261015), never "current", so the image never changes under the app.
+# The release date must be a dated folder (such as 20261015), never "current".
 
 param(
     [ValidateSet("Build", "Check", "Remove")]
@@ -23,7 +23,7 @@ param(
     [string]$ReleaseDate = "",
     [string]$Folder = "C:\ProgramData\SubZeroAI\sandbox\images",
     [string]$ParentName = "sandbox-base.vhdx",
-    # On by default. A PowerShell switch can't default to true, so this is a bool: -VerifySignature:$false turns it off.
+    # On by default; -VerifySignature:$false turns it off.
     [bool]$VerifySignature = $true,
     # With -Action Check: also hash the base disk (about a minute) and compare it with the SHA-256 that Build saved.
     [switch]$Deep
@@ -40,12 +40,12 @@ $LinuxFsType = "{0fc63daf-8483-4772-8e79-3d69d8477de4}"  # the GPT type of a Lin
 $NeedFreeGB = 45
 $SandboxRoot = Join-Path $DataDir "sandbox"
 # The Ubuntu Cloud Image Builder key that signs each release's SHA256SUMS (as SHA256SUMS.gpg). The key ID and the full
-# fingerprint are both pinned, so any other key is refused. THIS MUST BE RE-VERIFIED against
-# https://ubuntu.com/tutorials/how-to-verify-ubuntu before first use. Do that before trusting the signature check.
+# fingerprint are both pinned, and any other key is refused. THIS MUST BE RE-VERIFIED against
+# https://ubuntu.com/tutorials/how-to-verify-ubuntu before first use.
 $CloudKeyId = "1A5D6C4C7DB87C81"
 $CloudKeyFingerprint = "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"
 
-# Refuses '..' and any folder outside the sandbox folder, so only the sandbox's own files are ever written.
+# Refuses '..' and any folder outside the sandbox folder.
 function Get-SafeFolder([string]$Path) {
     if ($Path -match '\.\.') { throw "The folder can't contain two dots in a row. Give the full path, such as $SandboxRoot\images." }
     if (-not [System.IO.Path]::IsPathRooted($Path)) { throw "Give the folder as a full path, such as $SandboxRoot\images." }
@@ -118,8 +118,8 @@ function Assert-SumsSignature([string]$Sums, [string]$Signature, [string]$Gpg) {
     Write-Ok "The checksum list is signed by the Ubuntu cloud image key ($CloudKeyId)."
 }
 
-# The search line from the image's EFI grub.cfg. It points GRUB at the boot partition (ext4, which Windows can't read),
-# and it is kept exactly as the image has it. Stops with a plain message if it is missing; nothing is changed then.
+# The search line from the image's EFI grub.cfg, which points GRUB at the boot partition. It is kept exactly as the
+# image has it. Stops with a plain message, changing nothing, if it is missing.
 function Read-SearchLine([string]$Text) {
     foreach ($raw in ($Text -split "`r?`n")) {
         $line = $raw.Trim()
@@ -130,8 +130,8 @@ function Read-SearchLine([string]$Text) {
 }
 
 # The PARTUUID of the root filesystem: the largest Linux filesystem partition on the disk. For a GPT disk the PARTUUID
-# is the partition's own unique GUID (Get-Partition's Guid), so it is written without braces and in lower case.
-# Stops with a plain message if there is no such partition, or two equally large ones, so nothing is guessed.
+# is the partition's own unique GUID (Get-Partition's Guid), written without braces and in lower case.
+# Stops with a plain message if there is no such partition, or two equally large ones.
 function Get-RootPartUuid([int]$DiskNumber) {
     $linux = @(Get-Partition -DiskNumber $DiskNumber -ErrorAction Stop | Where-Object { $_.GptType -eq $LinuxFsType })
     if ($linux.Count -eq 0) {
@@ -154,7 +154,7 @@ function Get-RootPartUuid([int]$DiskNumber) {
 # The new boot menu: no pause, the sandbox entry only, cloud-init told to use the NoCloud seed. The kernel and the
 # initrd are not named here: GRUB finds the files at boot. The loops set each variable to the last match of the glob,
 # which is the last name in alphabetical order (the highest version while the version numbers have the same length).
-# The lines use single quotes so that GRUB's $variables are not expanded by PowerShell; backticks escape the rest.
+# The lines use single quotes, which leave GRUB's $variables alone; backticks escape the rest.
 function New-BootMenu([string]$SearchLine, [string]$PartUuid) {
     $lines = @(
         $SearchLine,
@@ -173,7 +173,7 @@ function New-BootMenu([string]$SearchLine, [string]$PartUuid) {
 }
 
 # Mounts the base disk, rewrites the boot menu on its EFI partition (keeping grub.cfg.orig), and unmounts it.
-# The Azure image ignores a NoCloud seed unless the kernel command line has ci.ds=NoCloud, so this runs once.
+# Adds ci.ds=NoCloud to the kernel command line. Runs once.
 function Set-EspBootMenu([string]$Parent) {
     Write-Step "Changing the boot menu so the sandbox reads its seed (NoCloud)"
     Mount-VHD -Path $Parent -ErrorAction Stop | Out-Null
@@ -245,7 +245,7 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
         if ($LASTEXITCODE -ne 0) {
             throw "Couldn't download the checksum list for release $ReleaseDate. Check the date: it must be a dated folder under $ImageRoot/."
         }
-        # The signature is checked before the big download. Without gpg.exe the check is skipped, with a note.
+        # Checks the signature before the big download. Without gpg.exe the check is skipped, with a note.
         Write-Step "Checking the checksum list's signature"
         $gpg = Get-Command gpg.exe -ErrorAction SilentlyContinue
         if (-not $VerifySignature) {
@@ -274,7 +274,7 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
         if ($LASTEXITCODE -ne 0) { throw "Couldn't unpack the image (tar exit code $LASTEXITCODE)." }
         if (-not (Test-Path -LiteralPath $vhd)) { throw "The image doesn't contain $ImageVhdName, so it can't be used." }
 
-        # Convert-VHD fails on a sparse file (0xC03A001A), so the flag is cleared first
+        # Clears the sparse flag before Convert-VHD
         Write-Step "Clearing the sparse flag on the disk image"
         & fsutil.exe sparse setflag $vhd 0 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "fsutil couldn't clear the sparse flag (exit code $LASTEXITCODE)." }
@@ -290,9 +290,9 @@ function Build-SandboxImage([string]$Dir, [string]$Parent) {
             # Only SYSTEM and Administrators may change it. Hyper-V adds each VM's own read permission when it uses it
             icacls $Parent /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "icacls couldn't limit access to the base disk (exit code $LASTEXITCODE)." }
-            # The app's service only reads the disk (Get-VHD); a missing service account is not an error here
+            # Read access for the app's service; a missing service account is not an error here
             icacls $Parent /grant "${ServiceAccount}:(R)" 2>&1 | Out-Null
-            # Hyper-V reads the base for every sandbox as the VM's own identity. The service can't add that entry itself
+            # Read access for the virtual machines' group
             icacls $Parent /grant "*S-1-5-83-0:(R)" 2>&1 | Out-Null
         } catch {
             Remove-PartialParent $Parent
@@ -360,7 +360,7 @@ function Show-ImageCheck([string]$Parent, [bool]$Deep) {
     return $problems
 }
 
-# The VM disks whose parent is the base disk. A VM disk that can't be read stops the removal (fails closed).
+# The VM disks whose parent is the base disk. A VM disk that can't be read stops the removal.
 function Get-ChildDisks([string]$Parent) {
     $found = @()
     $full = [System.IO.Path]::GetFullPath($Parent)

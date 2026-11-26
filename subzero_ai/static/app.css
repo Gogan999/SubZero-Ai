@@ -1,5 +1,5 @@
-/* SubZero AI. Palette: drafting ink on cool drafting film, steel blue for the team,
-   and one memorable device: shop inspection tags that show where each message stands. */
+/* SubZero AI. Palette: drafting ink on cool drafting film, steel blue for the team, and shop inspection tags
+   that show where each message stands. */
 
 :root {
   --ink: #142231;
@@ -203,8 +203,8 @@ a.menu-item:hover, button.menu-item:hover { background: var(--frost); color: var
 .pill.plain { background: var(--frost); color: var(--ink); font-variant-numeric: tabular-nums; }
 
 .thread-col { width: 100%; max-width: 780px; margin: 0 auto; padding: 1.25rem 1.25rem 0; display: flex; flex-direction: column; flex: 1; }
-/* A chat fills the window exactly: the messages scroll inside .thread-scroll and the composer stays at the bottom,
-   so the page itself never grows. The scroller spans the whole column (its scrollbar sits at the window's edge) and
+/* A chat fills the window exactly: the messages scroll inside .thread-scroll and the composer stays at the bottom.
+   The scroller spans the whole column (its scrollbar sits at the window's edge) and
    pads its content in to the same 780px reading width. */
 body.chat-page { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 body.chat-page .shell { flex: 1; min-height: 0; }
@@ -298,7 +298,7 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .start-panel .lede { margin: 0 auto; text-align: center; }
 
 /* Messages ---------------------------------------------------------------------- */
-/* minmax(0, 1fr) keeps a long code line from widening the page on phones; it scrolls inside its block instead */
+/* minmax(0, 1fr): a long code line scrolls inside its block */
 .thread { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 1.1rem; flex: 1; }
 .msg-head { display: flex; align-items: center; gap: .5rem; font-size: .88rem; color: var(--ink-2); margin-bottom: .35rem; }
 .msg-head .who { color: var(--ink); font-weight: 650; }

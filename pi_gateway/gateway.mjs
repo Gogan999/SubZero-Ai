@@ -8,7 +8,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createGateway, keyEnvName } from "./lib/gateway.mjs";
 import { createBridgeRunner } from "./lib/bridge.mjs";
 
-// Anything a library prints must not corrupt the protocol stream.
+// Sends everything libraries print to stderr.
 for (const name of ["log", "info", "warn", "debug"]) {
   console[name] = (...args) => console.error(...args);
 }
@@ -17,8 +17,8 @@ const readJson = (rel) => JSON.parse(readFileSync(new URL(rel, import.meta.url),
 const version = readJson("./package.json").version;
 const piAiVersion = readJson("./node_modules/@earendil-works/pi-ai/package.json").version;
 
-// Keys come only from SUBZERO_KEY_*. When the Claude bridge is on, copy them aside and remove them from the
-// environment, because Claude Code inherits process.env.
+// Keys come only from SUBZERO_KEY_*. When the Claude bridge is on, they are copied aside and removed from the
+// environment.
 const keys = new Map(Object.entries(process.env).filter(([k, v]) => k.startsWith("SUBZERO_KEY_") && v));
 let bridge = null;
 if (process.env.SUBZERO_BRIDGE === "1") {
@@ -31,7 +31,7 @@ if (process.env.SUBZERO_BRIDGE === "1") {
     bridge = createBridgeRunner({
       dataDir: dirname(dirname(agentDir)),
       extensionPaths: [
-        // Tests may swap in a fake extension; this is ignored unless NODE_ENV=test.
+        // A test extension, used only when NODE_ENV=test.
         process.env.NODE_ENV === "test" && process.env.SUBZERO_BRIDGE_TEST_EXTENSION
           ? resolve(process.env.SUBZERO_BRIDGE_TEST_EXTENSION)
           : fileURLToPath(new URL("./node_modules/pi-claude-bridge/src/index.ts", import.meta.url)),
@@ -41,11 +41,11 @@ if (process.env.SUBZERO_BRIDGE === "1") {
 }
 
 const out = process.stdout;
-// If the reader goes away, stop quietly: nothing further may be written to stdout.
+// Exits when stdout's reader goes away.
 out.on("error", () => process.exit(1));
 process.on("unhandledRejection", (e) => console.error("pi_gateway: unhandled rejection:", e));
 const gateway = createGateway({
-  // Keys come only from SUBZERO_KEY_* (passed per call); hide ambient env vars and credential files from pi-ai.
+  // Keys come only from SUBZERO_KEY_* (passed per call); pi-ai sees no ambient env vars or credential files.
   models: builtinModels({ authContext: { env: async () => undefined, fileExists: async () => false } }),
   getApiKey: (provider) => keys.get(keyEnvName(provider)),
   bridge,
@@ -54,7 +54,7 @@ const gateway = createGateway({
   piAiVersion,
 });
 
-// Lines end at "\n"; a trailing "\r" is stripped. (JSON escapes any raw CR/LF inside strings.)
+// Lines end at "\n"; a trailing "\r" is stripped.
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on("line", (line) => {
   if (line.endsWith("\r")) line = line.slice(0, -1);
@@ -63,6 +63,6 @@ rl.on("line", (line) => {
 });
 rl.on("close", async () => {
   await gateway.close();
-  // Let stdout drain, then exit cleanly.
+  // Exits once stdout has drained.
   out.write("", () => process.exit(0));
 });

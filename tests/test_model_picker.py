@@ -69,7 +69,7 @@ class PickerTest(unittest.TestCase):
         self.assertNotIn('<select id="new-model"', self.ava.get("/chats", headers=HTML).text)
 
     def test_unchecked_model_is_refused_with_a_plain_note(self):
-        # Keep the session cookie the new-chat reply sets, as a browser does, so the note reaches the next page
+        # Keeps the session cookie the new-chat reply sets, as a browser does
         self.h.client.cookies.clear()
         resp = self.h.client.post("/chats/new", data={"text": "Hello robot", "subteam": "Programming", "model": HAIKU},
                                   headers={"Cookie": f"subzero_session={self.kim.cookie}",
@@ -84,7 +84,7 @@ class PickerTest(unittest.TestCase):
         self.assertEqual(self.kim.post(f"/c/{cid}/model", {"model": HAIKU}).status_code, 400)
 
     def test_model_without_a_provider_key_is_not_listed(self):
-        self.h.settings.ai_backend = "fake"  # so the Anthropic-only rule doesn't hide the OpenAI model
+        self.h.settings.ai_backend = "fake"  # the fake backend runs the OpenAI model
         self.h.settings.ai_providers = ("anthropic", "openai")
         self.h.services.model_info[GPT] = {"id": GPT, "name": "GPT X"}
         pass_model_check(self.h, GPT)
@@ -110,7 +110,7 @@ class PickerTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- set_model
     def test_configured_default_and_hard_models_need_no_check(self):
-        """The default and hard-problem models ran before the check existed, so they stay allowed without one."""
+        """The default and hard-problem models stay allowed without a check."""
         h = Harness(anthropic_api_key=KEY)  # no safety check has been run
         try:
             settings = h.services.settings

@@ -37,8 +37,7 @@ class MatrixTest(unittest.TestCase):
 
 class Base(unittest.TestCase):
     def setUp(self):
-        # The fake backend runs any provider's model, and OTHER is keyed and passes the safety check, so mentors can
-        # switch chats to it (the picker only lists models that meet both)
+        # The fake backend runs any provider's model, and OTHER is keyed and passes the safety check
         self.h = Harness(ai_backend="fake", model_hard=OTHER, ai_providers=("anthropic", "openrouter"),
                          openrouter_api_key="sk-or-test-key-0123456789", connector_github_repo="team/robot-code")
         self.ava = self.h.login(STUDENT)

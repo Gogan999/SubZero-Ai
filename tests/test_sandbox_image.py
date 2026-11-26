@@ -29,7 +29,7 @@ def function_body(text: str, name: str) -> str:
 class SandboxImageScriptTest(unittest.TestCase):
     def test_the_script_ships_and_is_ascii_only(self):
         self.assertIn("sandbox-image.ps1", [p.name for p in sorted(SCRIPTS.glob("*.ps1"))])
-        # Windows PowerShell 5.1 reads this file as ASCII; the build refuses anything else
+        # The file is ASCII only
         SCRIPT.read_bytes().decode("ascii")
 
     def test_it_needs_an_administrator(self):
@@ -46,7 +46,7 @@ class SandboxImageScriptTest(unittest.TestCase):
 
     def test_no_switch_statement_and_no_switch_parameter(self):
         text = script_text()
-        # -Switch would be PowerShell's automatic $switch variable, so no `switch (...)` statement may appear at all
+        # No `switch (...)` statement at all
         self.assertIsNone(re.search(r"\bswitch\s*[({]", text, flags=re.IGNORECASE))
         self.assertNotIn("$Switch", text)
         self.assertIn('if ($Action -eq "Build")', text)
@@ -118,7 +118,7 @@ class SandboxImageScriptTest(unittest.TestCase):
         # The search line comes first, so the root is set before the glob runs
         self.assertLess(body.index("$SearchLine,"), body.index("for k in /vmlinuz-*"))
         self.assertLess(body.index("for k in /vmlinuz-*"), body.index("menuentry 'sandbox'"))
-        # Single quotes keep PowerShell from expanding GRUB's $variables; no double-quoted line holds one
+        # No double-quoted line holds one of GRUB's $variables
         self.assertNotIn('"$sandbox', body)
         self.assertNotIn('"  linux $sandbox', body)
 
@@ -258,7 +258,7 @@ class SandboxImageScriptTest(unittest.TestCase):
             self.assertTrue(any(name in line for name in ("$work", "$Parent", "$vhd")), line)
 
     def test_the_parent_is_removed_on_failure_only_when_build_made_it(self):
-        # Build refuses an existing disk before anything is written, so a partial disk is always one Build made
+        # Build refuses an existing disk before anything is written
         text = script_text()
         self.assertLess(text.index("if (Test-Path -LiteralPath $Parent) {"), text.index("Remove-PartialParent $Parent"))
 
@@ -382,7 +382,7 @@ class SignatureAndHashTest(unittest.TestCase):
                         remove.index("Remove-Item -LiteralPath (Get-HashPath $Parent)"))
 
     def test_the_nocloud_kernel_argument_is_unchanged(self):
-        # Changing it to ds=nocloud is untested, so the script keeps the form that was tested
+        # The script keeps the tested ci.ds=NoCloud form
         text = script_text()
         self.assertIn("ci.ds=NoCloud", text)
         self.assertNotIn("ds=nocloud", text.lower().replace("ci.ds=nocloud", ""))
@@ -432,7 +432,7 @@ if __name__ == "__main__":
 
 
 class PowerShellParsePitfallTest(unittest.TestCase):
-    """`"$name: text"` doesn't parse on PowerShell 5.1 (it reads $name: as a drive reference); use ${name}: instead."""
+    """`"$name: text"` doesn't parse on PowerShell 5.1; the script uses ${name}: instead."""
 
     def test_no_variable_is_followed_by_a_colon_and_a_space_in_any_script(self):
         import re
@@ -458,7 +458,7 @@ class BaseDiskAccessTest(unittest.TestCase):
 
 
 class BaseDiskPermissionsKeptTest(unittest.TestCase):
-    """An install or restore resets the data folder's permissions; that must not strip the base disk's VM-group read."""
+    """An install or restore keeps the base disk's VM-group read."""
 
     def test_the_data_folder_reset_puts_the_base_disk_permissions_back(self):
         text = (SCRIPTS / "common.ps1").read_text(encoding="utf-8")

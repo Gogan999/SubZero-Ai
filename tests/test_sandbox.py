@@ -246,7 +246,7 @@ class FakeKeygen:
             raise sandbox.SandboxError("ssh-keygen failed for the test")
         path = Path(argv[argv.index("-f") + 1])
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(PRIVATE_KEY.replace("\n", "\r\n"), encoding="ascii")  # CRLF on purpose: the seed must be LF
+        path.write_text(PRIVATE_KEY.replace("\n", "\r\n"), encoding="ascii")  # CRLF here; the seed must be LF
         Path(str(path) + ".pub").write_text(f"{HOST_KEY} {argv[argv.index('-C') + 1]}\r\n", encoding="ascii")
 
     def icacls(self, argv: list[str]) -> None:
@@ -706,7 +706,7 @@ class SeedDiskTest(unittest.TestCase):
                      "$image.VolumeName = 'cidata'", "[SzIsoWriter]::Write($result.ImageStream, "
                      f"{ps_quote(seed)})", "$result = $image.CreateResultImage()", "Add-Type -TypeDefinition @'"):
             self.assertIn(text, script)
-        # The seed folder (not the staging folder) goes onto the image, so the host key file never does
+        # The seed folder (not the staging folder) goes onto the image, without the host key file
         self.assertIn(f"$image.Root.AddTree({ps_quote('/srv/sandbox/staging/' + self.NAME + '/seed')}, $false)", script)
         self.assertLess(script.index("AddTree("), script.index("CreateResultImage"), "added before the image is made")
         self.assertLess(script.index("CreateResultImage"), script.index("[SzIsoWriter]::Write"))
@@ -848,7 +848,7 @@ class SeedLeftOnDiskTest(unittest.TestCase):
     """No copy of the host's private key may be left in the staging folder or on the seed disk, after a create that
     works and after one that fails at any step."""
 
-    SECRET = b"PRIVATEBODYONLYFORTESTS"  # a line of PRIVATE_KEY only (not in the public key), so a copy shows up
+    SECRET = b"PRIVATEBODYONLYFORTESTS"  # a line of PRIVATE_KEY only (not in the public key)
 
     def make(self, host: SeedFileHost) -> HyperVSandbox:
         return hyperv(host, base_image=str(host.root / "images" / "sandbox-base.vhdx"))
@@ -2302,7 +2302,7 @@ if __name__ == "__main__":
 
 
 class SandboxScriptPitfallTest(unittest.TestCase):
-    """PowerShell pitfalls that made the network script silently do nothing on the mini PC."""
+    """PowerShell pitfalls in the network script."""
 
     def test_script_does_not_use_a_switch_statement(self):
         import re
@@ -2310,7 +2310,7 @@ class SandboxScriptPitfallTest(unittest.TestCase):
         text = (Path(__file__).resolve().parent.parent / "packaging" / "windows" / "scripts"
                 / "sandbox-network.ps1").read_text(encoding="ascii")
         self.assertIn("[string]$Switch", text)  # the parameter name stays
-        # A `switch (...)` statement would never run: -Switch is PowerShell's automatic $switch variable
+        # No `switch (...)` statement
         self.assertIsNone(re.search(r"(?m)^\s*switch\s*\(", text))
         self.assertIn('$Action -eq "Check"', text)
 

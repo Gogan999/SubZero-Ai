@@ -356,7 +356,7 @@ class AppWiringTest(unittest.TestCase):
         proc = client._proc.popen
         self.h.close()
         self.assertIsNotNone(proc.poll())
-        self.h = Harness()  # so tearDown has something to close
+        self.h = Harness()  # gives tearDown something to close
 
 
 class NodeResolveTest(unittest.TestCase):

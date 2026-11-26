@@ -7,7 +7,7 @@
 //    for a reply are deleted afterwards (the login credentials file is never touched);
 //  - ANTHROPIC_* variables are removed from the environment before the bridge loads;
 //  - any tool call or tool execution aborts the reply with a "provider" error;
-//  - replies run one at a time (the bridge keeps module-wide state and one shared Claude Code config folder).
+//  - replies run one at a time.
 import { randomUUID } from "node:crypto";
 import {
   closeSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
@@ -104,20 +104,19 @@ export function createBridgeRunner({
   const workRoot = join(bridgeDir, "work");
   for (const d of [agentDir, claudeDir, workRoot]) mkdirSync(d, { recursive: true });
 
-  // Environment: never let API-key billing or version checks reach the bridge.
+  // Environment: no ANTHROPIC_* variables, offline, no version check.
   for (const k of Object.keys(env)) if (k.startsWith("ANTHROPIC_")) delete env[k];
   env.PI_OFFLINE = "1";
   env.PI_SKIP_VERSION_CHECK = "1";
   env.PI_CODING_AGENT_DIR = agentDir;
   env.CLAUDE_CONFIG_DIR = claudeDir;
 
-  // One reply at a time across processes (an old and a new gateway can overlap during a restart).
+  // One reply at a time across processes, using a lock file.
   const requestTimeoutMs = (Number(env.PI_REQUEST_TIMEOUT) > 0 ? Number(env.PI_REQUEST_TIMEOUT) : 300) * 1000;
   const staleMs = requestTimeoutMs + 60_000;
   const lockPath = join(bridgeDir, "reply.lock");
 
-  // There is no heartbeat: a live holder is trusted until its lock is older than the request timeout + 60 s.
-  // Python gives up on a reply after the same request timeout, so a lock that old belongs to a stuck holder.
+  // A lock older than the request timeout + 60 s is stale.
   let mine = false; // we created the lock file and have not released it
 
   function createLock() {
@@ -170,8 +169,8 @@ export function createBridgeRunner({
       same = readFileSync(moved, "utf8") === raw;
     } catch { /* gone */ }
     if (!same) {
-      // Another gateway replaced the stale lock with its own live one before our rename: put it back.
-      // linkSync fails if yet another lock appeared meanwhile; then that one stands. (A tiny window remains.)
+      // Another gateway replaced the stale lock with its own live one before our rename: puts it back.
+      // linkSync fails if yet another lock appeared meanwhile; then that one stands.
       try {
         linkSync(moved, lockPath);
       } catch { /* a newer lock exists */ }
@@ -238,7 +237,7 @@ export function createBridgeRunner({
     }
   }
 
-  // Startup: clean up after earlier runs, unless a live reply holds the lock (its own cleanup will do it).
+  // Startup: cleans up after earlier runs, unless a live reply holds the lock.
   for (let i = 0; i < 3; i++) {
     if (!tryLock()) continue;
     try {
@@ -377,7 +376,7 @@ export function createBridgeRunner({
     let giveUp;
     const gaveUp = new Promise((r) => { giveUp = r; });
     let graceTimer = null;
-    // After an abort, wait a little for the session to stop, then drop it so the queue can move on.
+    // After an abort, waits a little for the session to stop, then drops it.
     const startGrace = () => { graceTimer ??= setTimeout(giveUp, abortGraceMs); };
     const onAbort = () => {
       void session?.abort().catch(() => {});

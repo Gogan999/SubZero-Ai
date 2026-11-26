@@ -120,8 +120,7 @@ class PrepareTest(unittest.TestCase):
             self.assertIn(words, str(ctx.exception))
 
     def test_huge_images_are_refused_before_decoding(self):
-        # A blank 7500 x 7500 PNG is tiny on disk but would take hundreds of MB to decode. Pillow alone
-        # only refuses images above twice its limit, so prepare() checks the size from the header first.
+        # A blank 7500 x 7500 PNG: tiny on disk, refused by prepare() from its header.
         out = io.BytesIO()
         Image.new("L", (7500, 7500)).save(out, "PNG")
         self.assertLess(len(out.getvalue()), 1024 * 1024)

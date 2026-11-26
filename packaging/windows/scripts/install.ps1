@@ -37,7 +37,7 @@ try {
     Write-Step "Copying SubZero AI $version to $InstallDir"
     Stop-AppService
     Copy-AppFiles $Source $InstallDir
-    # Files from a downloaded zip carry a "came from the internet" mark that can trigger warnings.
+    # Removes the "came from the internet" mark from the copied files.
     Get-ChildItem -Path $InstallDir -Recurse -File | Unblock-File
     Optimize-AppFiles
     Write-Ok "Done."
@@ -66,7 +66,7 @@ try {
     & sc.exe config $ServiceName obj= $ServiceAccount start= delayed-auto | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Couldn't set the service's account (sc.exe exit code $LASTEXITCODE)." }
     # Restart it after a crash, and when the app exits with an error code (the setup page exits with 3 to
-    # load its new settings). Set every time, so running install.cmd again also repairs these rules.
+    # load its new settings). Set on every run of install.cmd.
     & sc.exe failure $ServiceName reset= 3600 actions= restart/3000/restart/20000/restart/60000 | Out-Null
     & sc.exe failureflag $ServiceName 1 | Out-Null
     & icacls.exe $InstallDir /grant "${ServiceAccount}:(OI)(CI)RX" /Q | Out-Null
@@ -81,7 +81,7 @@ try {
     }
     Write-Ok "Running version $($health.version) at http://localhost:$AppPort"
 
-    # Check that Windows really restarts the app when it stops on its own, which finishing setup relies on.
+    # Checks that Windows restarts the app when it stops on its own.
     Write-Note "Checking that Windows restarts SubZero AI if it stops..."
     $appPython = Join-Path $InstallDir "python\python.exe"
     $child = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Where-Object { $_.ExecutablePath -eq $appPython } | Select-Object -First 1

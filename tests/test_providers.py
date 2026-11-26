@@ -151,7 +151,7 @@ class ValidationTest(unittest.TestCase):
     def test_anthropic_cant_be_removed_while_a_model_uses_it(self):
         _, errors = self.providers({"ai_providers": "openrouter"})
         self.assertIn("is still used", errors["ai_providers"])
-        # fine once the models move; the screener (another section) still uses anthropic, so it still blocks
+        # fine once the models move; the screener (another section) still uses anthropic and still blocks
         moved = {"ai_providers": "openrouter", "model_default": "openrouter/a/b", "model_hard": "openrouter/a/c",
                  "model_titles": "openrouter/a/d"}
         self.assertIn("screener model", self.providers(moved)[1]["ai_providers"])
@@ -278,7 +278,7 @@ class KeyRouteTest(unittest.TestCase):
                 "model_hard": "openai/gpt-x", "model_titles": "claude-haiku-5-5", "effort_default": "medium",
                 "effort_high": "high", "max_tokens_chat": "8000", "max_tokens_explainer": "16000",
                 "long_chat_tokens": "150000", "web_search_daily_limit": "50"}
-        # the offline backend takes any enabled provider, and a new hard-problem model needs a passing safety check
+        # the offline backend takes any enabled provider; a new hard-problem model needs a passing safety check
         model_check.save_result(self.h.services.db, model_check.CheckResult("openai/gpt-x", cases=[
             model_check.CaseResult(c, True) for c in model_check.CHAT_CASES + model_check.SCREENER_CASES]))
         resp = self.admin.post("/settings/claude", form, headers=HTML)

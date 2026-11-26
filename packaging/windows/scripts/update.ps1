@@ -45,7 +45,7 @@ try {
         Write-Note "Downloading version $newVersion..."
         $Zip = Join-Path $work $release.asset
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $Zip -UseBasicParsing -TimeoutSec 1800
-        # GitHub lists each file's SHA-256; a download that doesn't match is cut short or tampered with.
+        # Checks the download against the SHA-256 GitHub lists.
         if ($asset.digest -and $asset.digest -like "sha256:*") {
             $expected = $asset.digest.Substring(7)
             $actual = (Get-FileHash -Path $Zip -Algorithm SHA256).Hash
@@ -56,7 +56,7 @@ try {
 
     Write-Step "Unpacking"
     $unpacked = Join-Path $work "u"
-    # Work folders are named short (SZ-<stamp>\u) because Windows PowerShell 5.1 can't open paths over 260 characters.
+    # Short work folder names (SZ-<stamp>\u).
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $unpacked)
     $newRoot = Get-ChildItem -Path $unpacked -Recurse -Filter "release.json" | Select-Object -First 1 | ForEach-Object { $_.DirectoryName }

@@ -44,7 +44,7 @@
   // On phones the sidebar opens over the page from the menu button in the slim top bar.
   function setSidebar(open) {
     document.body.classList.toggle("sidebar-open", open);
-    // The page behind the full-screen panel can't be seen, so take it out of Tab order and screen readers
+    // Takes the page behind the full-screen panel out of Tab order and screen readers
     document.querySelector(".main-col")?.toggleAttribute("inert", open);
     if (open) document.querySelector("#sidebar .side-new")?.focus();
     document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
@@ -61,7 +61,7 @@
     });
   }
 
-  // Widening past the phone layout (a tablet turned sideways) hides the menu button, so close the panel then
+  // Closes the panel when the window widens past the phone layout
   window.matchMedia("(max-width: 900px)").addEventListener("change", (event) => {
     if (!event.matches) setSidebar(false);
   });
@@ -186,7 +186,7 @@
       return;
     }
 
-    // Plain form buttons that do something hard to undo ask first, like the data-action buttons below.
+    // Form buttons with data-confirm ask first, like the data-action buttons below.
     const confirmSubmit = event.target.closest('button[type="submit"][data-confirm]');
     if (confirmSubmit && !window.confirm(confirmSubmit.dataset.confirm)) {
       event.preventDefault();
@@ -563,7 +563,7 @@
       }
       return frames;
     } catch {
-      return []; // a format this browser can't play: Claude is told it got no stills
+      return []; // a format this browser can't play
     } finally {
       video.removeAttribute("src");
       video.load();
@@ -653,7 +653,7 @@
     const input = event.target;
     if (!input.matches?.("input[data-tool]")) return;
     const form = input.closest("form");
-    // Research already searches the web, so the two don't need to be on together
+    // Research and web search are never on together
     if (input.checked && input.name === "research") form.querySelector('input[name="search"]')?.click();
     if (input.checked && input.name === "search") {
       const research = form.querySelector('input[name="research"]');
@@ -763,7 +763,7 @@
     const waiting = composer.hasAttribute("data-needs-review")
       && !!thread.querySelector('.msg.person[data-status="pending"]');
     const replying = !!thread.querySelector('.msg.claude[data-status="streaming"]');
-    textarea.disabled = waiting; // drafting is fine while Claude replies
+    textarea.disabled = waiting; // stays enabled while Claude replies
     composer.querySelectorAll("[data-files]").forEach((input) => { input.disabled = waiting; });
     button.disabled = waiting || replying;
     textarea.placeholder = waiting ? "Waiting for a mentor to review your last message"
@@ -798,7 +798,7 @@
       if (heading) heading.textContent = title;
     });
     events.addEventListener("visibility", () => window.location.reload());
-    // Leaving already (say, an admin's Delete chat form): let that page load instead of jumping to New chat
+    // Skips the jump to New chat when the page is already being left
     let leaving = false;
     window.addEventListener("beforeunload", () => { leaving = true; });
     events.addEventListener("gone", () => {
@@ -816,7 +816,7 @@
   async function refreshQueue() {
     if (!queue) return;
     if (queue.querySelector(".inline-form:not([hidden])")) {
-      queueStale = true; // don't wipe a reason or edit someone is typing
+      queueStale = true; // skips the refresh while a reason or edit is being typed
       return;
     }
     queueStale = false;
@@ -887,7 +887,7 @@
     // Links inside the page (like "see Claude subscription") can point into another section
     window.addEventListener("hashchange", fromAddress);
     fromAddress();
-    // The browser jumps to the address's box once the page has loaded, after this ran: put the right place back
+    // Opens the address's section again after the page has loaded
     window.addEventListener("load", () => setTimeout(fromAddress, 0), { once: true });
   }
 })();

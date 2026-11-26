@@ -715,7 +715,7 @@ class CodeTest(FeatureTest):
         self.assertIn("src/Robot.java:2", space.search(r"kP\s*="))
         with self.assertRaises(ToolProblem):
             space.preview("edit_file", {"path": "src/Robot.java", "old_text": "missing", "new_text": "x"})
-        # Build files run with the app's permissions, so Claude can't change them
+        # Claude can't change build files
         for name in ("build.gradle", "settings.gradle", "sub/build.gradle.kts", "gradlew", "gradlew.bat",
                      "gradle.properties", "gradle/wrapper/gradle-wrapper.properties", "buildSrc/A.java",
                      "vendordeps/Phoenix.json", ".gradle/init.gradle", "tools/run.ps1", "libs/x.jar"):

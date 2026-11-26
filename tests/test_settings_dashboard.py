@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         self.h = Harness(**{"ai_backend": "fake", **self.overrides})
-        self.h.settings.public_url = SITE["public_url"]  # after the app is built, so cookies still work over http
+        self.h.settings.public_url = SITE["public_url"]  # set after the app is built
         self.admin = self.h.login(ADMIN)
 
     def tearDown(self):
@@ -169,7 +169,7 @@ class EngineTest(Base):
 
     @mock.patch.dict(os.environ, {}, clear=False)
     def test_bad_engine_values(self):
-        os.environ.pop("ANTHROPIC_BASE_URL", None)  # some machines set it, which locks the field
+        os.environ.pop("ANTHROPIC_BASE_URL", None)  # an environment variable would lock the field
         for name, value in (("ai_backend", "skynet"), ("pi_idle_timeout", "1"), ("pi_node", "C:/no/such/node.exe"),
                             ("anthropic_base_url", "http://evil.example.com")):
             resp = self.post("/settings/env/engine", {**ENGINE, name: value})

@@ -5,12 +5,11 @@ connector, and the install, update, and restore scripts.
 
 Runs on Windows, macOS, or Linux with Python 3.10 or newer and internet access. Every download is pinned to
 an exact version and checked against its SHA-256: Python, WinSW, and cloudflared below, and the Python packages
-in requirements-windows.txt. Downloads are cached in packaging/.cache so repeat builds are quick.
+in requirements-windows.txt. Downloads are cached in packaging/.cache.
 
 After changing requirements-lock.txt, refresh the Windows hashes with:
 
-    python packaging/build_windows.py --write-hashes
-"""
+    python packaging/build_windows.py --write-hashes"""
 
 from __future__ import annotations
 
@@ -32,9 +31,8 @@ WINDOWS = PACKAGING / "windows"
 PYTHON_VERSION = "3.13.17"
 NODE_VERSION = "22.23.4"
 MIN_NPM = (9, 6)  # --os and --cpu for optional dependencies
-# update.ps1 unpacks the zip under %TEMP%\SZ-<yyyyMMdd-HHmmss>\u\ with Windows PowerShell 5.1, which fails past 259
-# characters. Assume the worst: a 30-character user name. Explorer's Extract All (about 45 characters in front,
-# C:\Users\<name>\Downloads\SubZeroAI-windows\) is then covered too.
+# The longest folder the zip may be unpacked under: update.ps1's %TEMP%\SZ-<yyyyMMdd-HHmmss>\u\ for a
+# 30-character user name. Paths must stay under 260 characters there.
 UPDATE_PREFIX = "C:\\Users\\" + "u" * 30 + "\\AppData\\Local\\Temp" + "\\SZ-20260101-120000\\u\\"
 PATH_LIMIT = 259
 PATH_PREFIX = len(UPDATE_PREFIX)
@@ -62,8 +60,8 @@ def app_version() -> str:
 
 
 def pth_contents(python_version: str = PYTHON_VERSION) -> str:
-    """The embedded Python's path file: its standard library, the bundled packages, and the app folder.
-    `import site` is needed for the packages' .pth files to work."""
+    """The embedded Python's path file: its standard library, the bundled packages, and the app folder, plus
+    `import site` for the packages' .pth files."""
     short = "".join(python_version.split(".")[:2])
     return f"python{short}.zip\n.\nLib\\site-packages\n..\\app\nimport site\n"
 
@@ -255,7 +253,7 @@ def build(out_dir: Path, cache: Path) -> Path:
 
 def write_hashes(cache: Path) -> None:
     """Download the Windows wheels for requirements-lock.txt and write requirements-windows.txt with their
-    SHA-256 hashes, so the build installs exactly these files."""
+    SHA-256 hashes."""
     short = "".join(PYTHON_VERSION.split(".")[:2])
     wheels = cache / "wheels"
     shutil.rmtree(wheels, ignore_errors=True)

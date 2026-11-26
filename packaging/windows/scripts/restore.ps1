@@ -2,7 +2,7 @@
 #   restore.cmd                     lists the backups and asks which one
 #   restore.cmd -Backup latest      restores the newest backup
 # The service is stopped while the backup goes back, and the current data is saved first
-# (as a backup labelled before-restore), so a restore can itself be undone.
+# as a backup labelled before-restore.
 param(
     [string]$Backup = ""
 )

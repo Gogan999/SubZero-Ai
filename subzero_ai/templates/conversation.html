@@ -2,8 +2,8 @@
 {% from "_icons.html" import icon %}
 {% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
 {% block body_class %}chat-page{% endblock %}
-{# On phones the AI notice moves to the top of the messages and scrolls away with them, so it doesn't use up the
-   little room a chat has there. On wider screens it stays above the chat. #}
+{# On phones the AI notice moves to the top of the messages and scrolls away with them.
+   On wider screens it stays above the chat. #}
 {% block notice %}{% set notice_class = " notice-fixed" %}{% include "_notice.html" %}{% endblock %}
 {% block main %}
 <section class="thread-col" data-conversation="{{ conv.id }}">

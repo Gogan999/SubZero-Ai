@@ -1,5 +1,5 @@
 """Students' Code sessions (M6): a mentor approves each request, then the sandbox runs free-rein steps without clicks.
-Everything runs offline with the fake sandbox and the scripted Claude, so nothing here reaches a real VM or site."""
+Everything runs offline with the fake sandbox and the scripted Claude."""
 
 from __future__ import annotations
 
@@ -544,7 +544,7 @@ if __name__ == "__main__":
 
 
 class FakeSandboxIsTestOnlyTest(unittest.TestCase):
-    """The Fake sandbox runs on the mini PC itself, so a real install must never be able to use it."""
+    """A real install can never use the Fake sandbox."""
 
     def setUp(self):
         import os
