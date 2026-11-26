@@ -195,6 +195,7 @@ class TimeClockModule(Module):
     # ------------------------------------------------------------------ minute job
     async def tick(self, services: Any) -> None:
         clock = clock_for(services)
+        clock.forget_old_imports()
         clock.close_departed()
         for row in clock.reminders_due():
             await self.remind(services, clock, row)

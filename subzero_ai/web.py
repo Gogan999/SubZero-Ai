@@ -436,6 +436,9 @@ def page(require: str = "login"):
                     or ("." in require and not viewer.can(require))):
                 if wants_json:
                     return JSONResponse({"ok": False, "error": "You don't have access to that."}, status_code=403)
+                if "." in require:
+                    return error_page(request, viewer, 403, "Not available to you",
+                                      "Your role can't open this page. Ask a coach if you need it.")
                 return error_page(request, viewer, 403, "Mentors only", "This page is for mentors and coaches.")
             if request.method == "POST" and not await check_csrf(request):
                 return JSONResponse({"ok": False, "error": "Your session expired. Reload the page and try again."},
@@ -472,7 +475,8 @@ def waited(iso: str) -> str:
     return f"{hours} hr" if hours < 48 else f"{hours // 24} days"
 
 
-def render(request: Request, name: str, viewer: Viewer | None, status_code: int = 200, **context) -> HTMLResponse:
+def render(request: Request, name: str, viewer: Viewer | None, status_code: int = 200,
+           headers: dict[str, str] | None = None, **context) -> HTMLResponse:
     s = services(request)
     base = {
         "viewer": viewer,
@@ -491,12 +495,36 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         "hub_tools": (lambda: hub_modules.tools_for(viewer)) if viewer else list,
     }
     base.update(context)
-    return templates.TemplateResponse(request, name, base, status_code=status_code)
+    return templates.TemplateResponse(request, name, base, status_code=status_code, headers=headers)
 
 
 def _health_alerts(s: Services) -> list[dict[str, str]]:
     from .web_admin import health_rows
     return health_rows(s)
+
+
+async def not_found(request: Request, exc: Exception) -> Response:
+    """A friendly page for an address that doesn't exist."""
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"ok": False, "error": "Not found."}, status_code=404)
+    return error_page(request, await current_viewer(request), 404, "Page not found",
+                      "That page doesn't exist. Check the link, or start from the home page.")
+
+
+async def server_error(request: Request, exc: Exception) -> Response:
+    """A plain page for an unexpected error, with nothing about the error itself (it goes to the log)."""
+    log.error("Unexpected error on %s %s", request.method, request.url.path, exc_info=exc)
+    accept = request.headers.get("accept", "")
+    if "text/html" not in accept and (request.method != "GET" or "application/json" in accept):
+        return JSONResponse({"ok": False, "error": "Something went wrong. Try again in a minute."}, status_code=500)
+    return HTMLResponse(SERVER_ERROR_PAGE, status_code=500)
+
+
+SERVER_ERROR_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Something went wrong</title>
+<link rel="stylesheet" href="/static/app.css"></head><body><main id="main"><section class="page narrow">
+<h1>Something went wrong</h1><p class="lede">That didn't work. Try again in a minute; if it keeps happening, tell a
+coach.</p><p><a class="button" href="/">Back home</a></p></section></main></body></html>"""
 
 
 def error_page(request: Request, viewer: Viewer | None, code: int, title: str, detail: str) -> HTMLResponse:
@@ -1504,9 +1532,14 @@ async def about_page(request: Request) -> Response:
     return render(request, "about.html", viewer)
 
 
+PROXY_HEADERS = ("cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded")
+
+
 async def health(request: Request) -> Response:
     """For setup.ps1 and the Windows service checks: the app is up, and what it knows about Slack, Claude,
-    and backups. No secrets or names."""
+    and backups. No secrets or names. Requests through the tunnel or another proxy only get "ok"."""
+    if any(h in request.headers for h in PROXY_HEADERS):
+        return JSONResponse({"ok": True})
     s = services(request)
     snap = s.health.snapshot()
     client = getattr(request.app.state, "socket_client", None)
@@ -1599,6 +1632,10 @@ class SecurityHeaders:
                 # Uses same-origin referrers unless the page set its own policy (share links send none).
                 if not any(name.lower() == b"referrer-policy" for name, _ in headers):
                     headers.append((b"referrer-policy", b"same-origin"))
+                names = {name.lower() for name, _ in headers}
+                html = any(n.lower() == b"content-type" and v.startswith(b"text/html") for n, v in headers)
+                if html and b"cache-control" not in names:
+                    headers.append((b"cache-control", b"no-store"))
                 if self.https:
                     headers.append((b"strict-transport-security", b"max-age=31536000"))
                 message["headers"] = headers
@@ -1796,7 +1833,8 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Middleware(SessionMiddleware, secret_key=settings.session_secret, session_cookie="subzero_session",
                    max_age=14 * 24 * 3600, same_site="lax", https_only=settings.https),
     ]
-    app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
+    app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan,
+                    exception_handlers={404: not_found, 500: server_error})
     app.state.services = s
     app.state.request_restart = None  # set by __main__: stops the app so the Windows service starts it again
     return app

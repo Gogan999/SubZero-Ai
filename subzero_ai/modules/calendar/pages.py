@@ -50,6 +50,8 @@ async def month(request: Request, viewer: Viewer) -> Response:
         first = date.fromisoformat(request.query_params.get("month", "") + "-01")
     except ValueError:
         first = today.replace(day=1)
+    if not 2000 <= first.year <= 2100:
+        first = today.replace(day=1)
     weeks = monthcal.Calendar(firstweekday=6).monthdatescalendar(first.year, first.month)
     lo = datetime.combine(weeks[0][0], time(), tzinfo=calendars.tz)
     hi = datetime.combine(weeks[-1][-1] + timedelta(days=1), time(), tzinfo=calendars.tz)

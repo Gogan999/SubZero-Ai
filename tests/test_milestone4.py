@@ -176,6 +176,8 @@ class SettingsPageTest(unittest.TestCase):
         body = self.h.client.get("/healthz").json()
         self.assertEqual(set(body), {"ok", "version", "setup_complete", "slack", "socket_mode", "claude",
                                      "last_backup_at", "last_backup_ok"})
+        tunnel = self.h.client.get("/healthz", headers={"Cf-Connecting-Ip": "203.0.113.9"}).json()
+        self.assertEqual(tunnel, {"ok": True})
 
 
 # --------------------------------------------------------------------------- setup page

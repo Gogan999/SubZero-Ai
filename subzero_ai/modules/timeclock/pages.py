@@ -23,6 +23,7 @@ from .importer import CsvImportError, match, parse_csv
 from .store import EntryError, TimeClock, iso, parse_iso
 
 log = logging.getLogger("subzero.timeclock")
+NO_STORE = {"Cache-Control": "no-store"}
 
 SOURCES = {"slack": "Slack", "web": "Website", "kiosk": "Kiosk", "nfc": "NFC tag", "shortcut": "Shortcut",
            "shortcut_leave": "Left the building", "auto_close": "Nightly clock-out", "edit": "Edited",
@@ -71,6 +72,8 @@ def from_input(clock: TimeClock, raw: str) -> datetime | None:
         naive = datetime.fromisoformat(raw.strip())
     except ValueError:
         return None
+    if not rules.sensible(naive.date()):
+        return None
     return clock.from_local(naive.date(), naive.time())
 
 
@@ -85,6 +88,8 @@ def day_range(request: Request, clock: TimeClock, default_days: int = 7) -> tupl
             end = date.fromisoformat(request.query_params["end"])
     except ValueError:
         pass
+    if not (rules.sensible(start) and rules.sensible(end)):
+        start, end = today - timedelta(days=today.weekday()), today
     return (start, end) if start <= end else (end, start)
 
 
@@ -240,6 +245,11 @@ async def team(request: Request, viewer: Viewer) -> Response:
 # ---------------------------------------------------------------------- admin
 @page(require=EDIT_OTHERS)
 async def admin(request: Request, viewer: Viewer) -> Response:
+    return admin_view(request, viewer)
+
+
+def admin_view(request: Request, viewer: Viewer, pairing: dict | None = None) -> Response:
+    """The Admin page. A new kiosk pairing link is shown once, on a page the browser doesn't store."""
     s = services(request)
     clock = clock_for(s)
     settings = clock.settings()
@@ -251,11 +261,12 @@ async def admin(request: Request, viewer: Viewer) -> Response:
     batches = s.db.all("SELECT import_batch, COUNT(*) AS n, MIN(created_at) AS at FROM tc_entries WHERE "
                        "import_batch IS NOT NULL AND deleted = 0 GROUP BY import_batch ORDER BY at DESC")
     return render(request, "timeclock/admin.html", viewer, settings=settings, days=rules.DAYS, flagged=flagged,
-                  kiosks=kiosks, batches=batches, pairing=request.session.pop("tc_pairing", None),
+                  kiosks=kiosks, batches=batches, pairing=pairing,
                   errors=request.session.pop("tc_errors", None), flash=request.session.pop("flash", None),
                   people=s.db.all("SELECT id, name FROM users WHERE active = 1 ORDER BY name COLLATE NOCASE"),
                   week_start=today - timedelta(days=today.weekday()), today=today,
-                  season=rules.season_start(settings, today), tools=tool_links(viewer))
+                  season=rules.season_start(settings, today), tools=tool_links(viewer),
+                  headers=NO_STORE if pairing else None)
 
 
 @page(require=EDIT_OTHERS)
@@ -276,8 +287,7 @@ async def kiosk_add(request: Request, viewer: Viewer) -> Response:
     form = await request.form()
     kiosk_id, code = clock_for(s).create_kiosk(str(form.get("name", "")))
     s.db.audit("kiosk_added", actor_id=viewer.id, target_type="kiosk", target_id=kiosk_id)
-    request.session["tc_pairing"] = {"id": kiosk_id, "url": s.settings.url(f"/timeclock/kiosk/pair/{code}")}
-    return RedirectResponse("/timeclock/admin#kiosks", status_code=303)
+    return admin_view(request, viewer, {"id": kiosk_id, "url": s.settings.url(f"/timeclock/kiosk/pair/{code}")})
 
 
 @page(require=EDIT_OTHERS)
@@ -285,10 +295,11 @@ async def kiosk_repair(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     clock = clock_for(s)
     kiosk = clock.kiosk(request.path_params["kid"])
-    if kiosk is not None:
-        code = clock.new_pairing_code(kiosk["id"])
-        request.session["tc_pairing"] = {"id": kiosk["id"], "url": s.settings.url(f"/timeclock/kiosk/pair/{code}")}
-    return RedirectResponse("/timeclock/admin#kiosks", status_code=303)
+    if kiosk is None:
+        return RedirectResponse("/timeclock/admin#kiosks", status_code=303)
+    code = clock.new_pairing_code(kiosk["id"])
+    s.db.audit("kiosk_pairing_link", actor_id=viewer.id, target_type="kiosk", target_id=kiosk["id"])
+    return admin_view(request, viewer, {"id": kiosk["id"], "url": s.settings.url(f"/timeclock/kiosk/pair/{code}")})
 
 
 @page(require=EDIT_OTHERS)
@@ -350,7 +361,9 @@ async def import_people(s) -> list[dict]:
             log.warning("Couldn't list the Slack workspace's members for an import", exc_info=True)
             members = []
         for m in members:
-            if m.get("deleted") or m.get("is_bot") or m.get("id") in known or m.get("id") == "USLACKBOT":
+            guest = m.get("is_restricted") or m.get("is_ultra_restricted")
+            if (m.get("deleted") or m.get("is_bot") or m.get("id") in known or m.get("id") == "USLACKBOT"
+                    or (guest and not s.settings.allow_slack_guests)):
                 continue
             profile = m.get("profile") or {}
             names = [profile.get("real_name"), profile.get("display_name"), m.get("real_name"), m.get("name")]
@@ -385,7 +398,11 @@ async def import_upload(request: Request, viewer: Viewer) -> Response:
     except CsvImportError as exc:
         request.session["tc_error"] = str(exc)
         return RedirectResponse("/timeclock/import", status_code=303)
+    old = request.session.get("tc_import")
+    if old:
+        s.db.delete_kv(f"timeclock.import.{old}")
     key = secrets.token_hex(8)
+    preview["created"] = clock_for(s).now().isoformat()
     s.db.set_kv(f"timeclock.import.{key}", json.dumps(preview))
     request.session["tc_import"] = key
     return RedirectResponse("/timeclock/import", status_code=303)
@@ -460,22 +477,26 @@ async def import_undo(request: Request, viewer: Viewer) -> Response:
 # ---------------------------------------------------------------------- phone setup
 @page(require=USE)
 async def phone(request: Request, viewer: Viewer) -> Response:
+    return phone_view(request, viewer)
+
+
+def phone_view(request: Request, viewer: Viewer, new_key: str | None = None) -> Response:
+    """The Phone setup page. A new key is shown once, on a page the browser doesn't store."""
     s = services(request)
     clock = clock_for(s)
     today = clock.local(clock.now()).date()
     keys = [{"id": k["id"], "label": k["label"],
              "used": rules.when_text(clock.local(k["last_used_at"]), today) if k["last_used_at"] else "Not yet"}
             for k in clock.tokens(viewer.id)]
-    return render(request, "timeclock/phone.html", viewer, keys=keys, new_key=request.session.pop("tc_key", None),
+    return render(request, "timeclock/phone.html", viewer, keys=keys, new_key=new_key,
                   api_url=s.settings.url("/timeclock/api/event"), tools=tool_links(viewer),
-                  flash=request.session.pop("flash", None))
+                  flash=request.session.pop("flash", None), headers=NO_STORE if new_key else None)
 
 
 @page(require=USE)
 async def phone_key(request: Request, viewer: Viewer) -> Response:
     form = await request.form()
-    request.session["tc_key"] = clock_for(services(request)).create_token(viewer.id, str(form.get("label", "")))
-    return RedirectResponse("/timeclock/phone#new-key", status_code=303)
+    return phone_view(request, viewer, clock_for(services(request)).create_token(viewer.id, str(form.get("label", ""))))
 
 
 @page(require=USE)

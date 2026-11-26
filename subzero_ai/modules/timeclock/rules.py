@@ -41,6 +41,14 @@ class Settings:
         return {name: getattr(self, name) for name in DEFAULTS}
 
 
+FIRST_YEAR, LAST_YEAR = 2000, 2100
+
+
+def sensible(day: date) -> bool:
+    """True for dates the time clock accepts (years 2000 to 2100)."""
+    return FIRST_YEAR <= day.year <= LAST_YEAR
+
+
 def parse_time(text: str) -> time | None:
     match = TIME_RE.fullmatch(text.strip())
     return time(int(match.group(1)), int(match.group(2))) if match else None

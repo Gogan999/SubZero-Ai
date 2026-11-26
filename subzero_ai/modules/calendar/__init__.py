@@ -9,6 +9,7 @@ from typing import Any
 
 from ...hub.modules import Module, NavItem
 from ...hub.permissions import Permission
+from ...slack_dm import escape
 from .store import MIGRATIONS, Calendars
 
 VIEW = "calendar.view"
@@ -76,7 +77,8 @@ class CalendarModule(Module):
             return []
         calendars = calendars_for(services)
         events = self.today(services)[:5]
-        lines = [f"• {event_time(calendars, r)}: {r['title']}" for r in events] or ["Nothing on the calendar today."]
+        lines = [f"• {event_time(calendars, r)}: {escape(r['title'])}" for r in events]
+        lines = lines or ["Nothing on the calendar today."]
         link = services.settings.url("/calendar")
         text = f"*Today*  <{link}|Calendar>\n" + "\n".join(lines)
         return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]

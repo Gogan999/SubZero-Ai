@@ -261,6 +261,21 @@ class TimeClock:
                                                                 iso(now), entry_id))
 
     # ------------------------------------------------------------------ minute jobs
+    def forget_old_imports(self, days: int = 1) -> int:
+        """Deletes import previews nobody confirmed or cancelled within `days` days."""
+        cutoff = (self.now() - timedelta(days=days)).isoformat()
+        stale = []
+        for row in self.db.all("SELECT key, value FROM kv WHERE key LIKE 'timeclock.import.%'"):
+            try:
+                created = json.loads(row["value"]).get("created", "")
+            except ValueError:
+                created = ""
+            if created < cutoff:
+                stale.append(row["key"])
+        for key in stale:
+            self.db.delete_kv(key)
+        return len(stale)
+
     def reminders_due(self) -> list[sqlite3.Row]:
         """Open entries whose reminder time has come; each is returned once."""
         now = iso(self.now())

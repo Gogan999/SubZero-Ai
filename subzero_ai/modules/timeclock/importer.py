@@ -66,9 +66,10 @@ def _when(text: str, day: str = "") -> datetime | None:
     if not text or text.upper() == "NA":
         return None
     try:
-        return dateparser.parse(f"{day} {text}" if day else text, fuzzy=False)
+        moment = dateparser.parse(f"{day} {text}" if day else text, fuzzy=False)
     except (ValueError, OverflowError):
         return None
+    return moment if 2000 <= moment.year <= 2100 else None
 
 
 def _layout(rows: list[list[str]]) -> tuple[int, dict]:

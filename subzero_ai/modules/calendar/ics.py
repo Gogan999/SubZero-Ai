@@ -178,6 +178,8 @@ def _occurrences(props: list, overrides: dict, start: datetime, end: datetime, d
         duration = parse_duration(_first(props, "DURATION")[1] or "")
         length = duration if duration is not None else (timedelta(days=1) if all_day else timedelta())
     rule = _first(props, "RRULE")[1]
+    if rule and re.search(r"FREQ=(SECONDLY|MINUTELY)", rule, re.IGNORECASE):
+        return []
     if rule:
         dtstart = datetime.combine(first, time()) if all_day else first
         if not all_day:
