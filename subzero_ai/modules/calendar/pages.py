@@ -101,7 +101,10 @@ async def add(request: Request, viewer: Viewer) -> Response:
         else:
             source_id = calendars.add_url(name, str(form.get("url", "")), opens)
             problem = await asyncio.to_thread(calendars.sync, source_id)
-            request.session["flash"] = "Added the calendar." + (f" The first sync failed: {problem}" if problem else "")
+            if problem:
+                calendars.remove(source_id)
+                raise IcsError(f"Couldn't add that calendar. {problem}")
+            request.session["flash"] = "Added the calendar."
         s.db.audit("calendar_added", actor_id=viewer.id, target_type="calendar", target_id=source_id)
     except IcsError as exc:
         request.session["cal_error"] = str(exc)

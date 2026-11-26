@@ -181,6 +181,7 @@ class PrivacyTest(ClockedHarness):
         self.assertEqual(resp.status_code, 404)
         self.assertIn("Page not found", resp.text)
         self.assertIn("Back home", resp.text)
+        self.assertNotIn("chatting with an AI", resp.text)
         signed_out = self.h.client.get("/no-such-page")
         self.assertEqual(signed_out.status_code, 404)
         api = self.h.client.get("/no-such-page", headers={"Accept": "application/json"})

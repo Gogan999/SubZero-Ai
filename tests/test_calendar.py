@@ -201,6 +201,14 @@ class PagesTest(unittest.TestCase):
         audit = [r["action"] for r in self.h.services.db.all("SELECT action FROM audit_log WHERE action LIKE 'cal%'")]
         self.assertEqual(audit, ["calendar_added", "calendar_added", "calendar_removed"])
 
+    def test_an_address_that_cant_be_downloaded_isnt_added(self):
+        self.calendars.fetch = lambda url: (_ for _ in ()).throw(ics.IcsError("That calendar address points to a "
+                                                                             "private network."))
+        self.kim.post("/calendar/manage", data={"name": "Team", "url": "https://inside.example/x.ics"})
+        self.assertEqual(self.calendars.sources(), [])
+        audit = self.h.services.db.all("SELECT action FROM audit_log WHERE action LIKE 'cal%'")
+        self.assertEqual(audit, [])
+
     def test_a_bad_upload(self):
         self.kim.post("/calendar/manage", files={"file": ("x.ics", b"not a calendar", "text/calendar")})
         self.assertEqual(self.calendars.sources(), [])
