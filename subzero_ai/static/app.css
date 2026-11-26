@@ -465,6 +465,7 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .who-in li:last-child { border-bottom: 0; }
 .who-in form, .row-actions { margin-left: auto; display: flex; gap: .25rem; }
 .range { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; }
+.links-under { margin-top: .6rem; }
 .range label { display: grid; gap: .2rem; font-size: .85rem; color: var(--ink-2); }
 .steps { margin: .25rem 0 0; padding-left: 1.3rem; display: grid; gap: .45rem; }
 .copyable { user-select: all; background: var(--muted-bg); padding: .15rem .4rem; border-radius: 6px; }
@@ -481,6 +482,7 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .clock-card.in { border-left-color: var(--approved); }
 .clock-state { display: grid; gap: .2rem; }
 .clock-state p { margin: 0; }
+.clock-state .pill { justify-self: start; }
 .clock-big { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .clock-button { font-size: 1.05rem; padding: .7rem 1.6rem; }
 .stats { list-style: none; padding: 0; margin: 1rem 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
@@ -501,8 +503,10 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .kiosk-page main { min-height: 100vh; display: grid; }
 .kiosk { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 420px); gap: 2rem; align-items: center; padding: 2rem; }
 .kiosk-code { display: grid; place-items: center; }
-.kiosk-qr svg { width: min(70vh, 100%); height: auto; background: var(--sheet); border-radius: var(--radius); padding: .5rem; }
-.kiosk-closed { font-size: 1.6rem; font-weight: 650; text-align: center; max-width: 24ch; }
+.kiosk-code { width: 100%; }
+.kiosk-qr { width: min(72vh, 100%); }
+.kiosk-qr svg { display: block; width: 100%; height: auto; background: var(--sheet); border-radius: var(--radius); padding: .5rem; }
+.kiosk-closed { font-weight: 650; background: var(--held-bg); color: var(--held); border-radius: 8px; padding: .6rem .8rem; }
 .kiosk h1 { font-size: 2.2rem; }
 .kiosk-names { list-style: none; padding: 0; margin: .5rem 0 0; display: flex; flex-wrap: wrap; gap: .4rem; }
 .kiosk-names li { background: var(--approved-bg); color: var(--approved); border-radius: 999px; padding: .25rem .8rem; font-weight: 600; }
@@ -512,12 +516,13 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .agenda-day { margin-top: 1.25rem; }
 .agenda-day h2 { font-size: 1rem; margin: 0 0 .4rem; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; }
 .agenda-day.today h2 { color: var(--brand); }
-.event { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: .75rem; padding: .6rem .8rem; background: var(--sheet);
+.event { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: .75rem; padding: .6rem .8rem; background: var(--sheet);
   border: 1px solid var(--rule); border-left: 4px solid var(--brand); border-radius: 8px; margin-bottom: .4rem; }
 .event.opens-clock { border-left-color: var(--approved); }
 .event-time { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: .9rem; }
+.event p { margin: 0; }
 .event-title { font-weight: 650; }
-.event-meta { color: var(--ink-2); font-size: .88rem; }
+.event-meta { color: var(--ink-2); font-size: .88rem; margin-top: .1rem; }
 .month { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .month th { font-size: .8rem; color: var(--ink-2); font-weight: 600; padding: .3rem; text-align: left; }
 .month td { border: 1px solid var(--rule); vertical-align: top; height: 6.5rem; padding: .3rem; background: var(--sheet); overflow: hidden; }
@@ -580,6 +585,11 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
   border: 1px solid var(--field-edge); border-radius: 8px; background: var(--paper); color: var(--ink);
 }
 .field textarea { max-width: none; resize: vertical; }
+.inline-role input, .inline-role select, .range input, .range select, .week-grid input {
+  font: inherit; max-width: 100%; padding: .4rem .55rem;
+  border: 1px solid var(--field-edge); border-radius: 8px; background: var(--paper); color: var(--ink);
+}
+.week-grid input { width: 100%; padding: .45rem .3rem; }
 .field textarea.code-input { font-family: var(--mono); font-size: .86rem; line-height: 1.5; }
 .field [aria-invalid="true"]:not([type="checkbox"]) { border-color: var(--rejected); }
 .field-hint { color: var(--ink-2); font-size: .85rem; margin: 0; max-width: 62ch; }
@@ -679,7 +689,10 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
 
 /* Small screens ------------------------------------------------------------------------ */
 @media (max-width: 900px) {
-  .stats { grid-template-columns: minmax(0, 1fr); }
+  .stats { gap: .5rem; }
+  .stats li { padding: .7rem .75rem; }
+  .stat-value { font-size: 1.05rem; }
+  .data .hide-small { display: none; }
   .kiosk { grid-template-columns: minmax(0, 1fr); padding: 1rem; }
   .week-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .event { grid-template-columns: minmax(0, 1fr); gap: .1rem; }

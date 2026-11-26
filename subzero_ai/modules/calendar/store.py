@@ -133,7 +133,7 @@ class Calendars:
         sql = ("SELECT e.*, s.name AS calendar, s.opens_clock FROM cal_events e JOIN cal_sources s "
                "ON s.id = e.source_id WHERE e.starts_at < ? AND e.ends_at > ?")
         if opens_clock:
-            sql += " AND s.opens_clock = 1"
+            sql += " AND s.opens_clock = 1 AND e.all_day = 0"
         return self.db.all(sql + " ORDER BY e.starts_at, e.title", (iso(end), iso(start)))
 
     def opens_clock(self, moment: datetime, lead_minutes: int) -> bool:

@@ -482,7 +482,7 @@ def kiosk_state(request: Request, kiosk) -> dict[str, Any]:
     clock = clock_for(s)
     clock.kiosk_seen(kiosk["id"])
     url = s.settings.url(f"/timeclock/k/{kiosk['id']}/{clock.kiosk_code(kiosk)}")
-    svg = segno.make(url, error="m").svg_inline(scale=8, dark="#142231", light="#ffffff", border=2)
+    svg = segno.make(url, error="m").svg_inline(dark="#142231", light="#ffffff", border=2, omitsize=True)
     names = [r["name"].split(" ")[0] for r in clock.who_is_in()]
     return {"svg": svg, "inside": names, "open": clock.window_open(), "closed_message": clock.closed_message()}
 

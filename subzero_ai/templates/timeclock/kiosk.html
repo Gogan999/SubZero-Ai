@@ -6,12 +6,12 @@
 {% block main %}
 <section class="kiosk" data-kiosk>
   <div class="kiosk-code">
-    <div class="kiosk-qr" data-kiosk-qr {% if not open %}hidden{% endif %}>{{ svg|safe }}</div>
-    <p class="kiosk-closed" data-kiosk-closed {% if open %}hidden{% endif %}>{{ closed_message }}</p>
+    <div class="kiosk-qr" data-kiosk-qr>{{ svg|safe }}</div>
   </div>
   <div class="kiosk-side">
     <h1>Scan to clock in or out</h1>
     <p class="lede">Point your phone's camera at the code. The code changes every 30 seconds.</p>
+    <p class="kiosk-closed" data-kiosk-closed {% if open %}hidden{% endif %}>{{ closed_message }} Scanning still clocks you out.</p>
     <h2>In now <span class="count-chip" data-kiosk-count>{{ inside|length }}</span></h2>
     <ul class="kiosk-names" data-kiosk-names>{% for n in inside %}<li>{{ n }}</li>{% endfor %}</ul>
   </div>

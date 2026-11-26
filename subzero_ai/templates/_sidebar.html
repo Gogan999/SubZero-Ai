@@ -13,11 +13,12 @@
     <nav aria-label="Tools">
       <ul class="side-nav tools">
         <li><a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ icon('home') }} Home</a></li>
-        {% for t in tools %}
+        {% for t in tools if t.href != '/chats' %}
         <li><a href="{{ t.href }}" {% if path.startswith(t.href) %}aria-current="page"{% endif %}>{{ icon(t.icon) }} {{ t.label }}</a></li>
         {% endfor %}
       </ul>
     </nav>
+    <h2 class="side-label">SubZero AI</h2>
     {% endif %}
     <nav aria-label="Main">
       <a class="side-new" href="/chats" {% if path == '/chats' %}aria-current="page"{% endif %}><span class="side-new-mark">{{ icon('plus') }}</span> New chat</a>

@@ -143,6 +143,11 @@ class StoreTest(unittest.TestCase):
         self.calendars.set_opens_clock(source, False)
         self.assertFalse(self.calendars.opens_clock(start, 15))
 
+    def test_all_day_events_never_open_the_clock(self):
+        holiday = wrap(event("UID:h", "DTSTART;VALUE=DATE:20261201", "SUMMARY:No school"))
+        self.calendars.add_file("Notes", holiday, True)
+        self.assertFalse(self.calendars.opens_clock(NOW, 15))
+
     def test_remove(self):
         source = self.calendars.add_file("Builds", ONE, False)
         self.calendars.remove(source)

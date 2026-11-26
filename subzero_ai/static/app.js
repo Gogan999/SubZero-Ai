@@ -904,9 +904,8 @@
         if (!res.ok) return;
         const data = await res.json();
         qr.innerHTML = data.svg;
-        qr.hidden = !data.open;
         closed.hidden = data.open;
-        closed.textContent = data.closed_message;
+        closed.textContent = `${data.closed_message} Scanning still clocks you out.`;
         names.replaceChildren(...data.inside.map((name) => Object.assign(document.createElement("li"), { textContent: name })));
         count.textContent = String(data.inside.length);
       } catch {

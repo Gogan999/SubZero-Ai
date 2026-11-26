@@ -21,7 +21,8 @@ AGENDA_DAYS = 60
 def event_view(calendars, row) -> dict:
     start = datetime.fromisoformat(row["starts_at"]).astimezone(calendars.tz)
     return {"title": row["title"], "time": event_time(calendars, row), "location": row["location"],
-            "description": row["description"], "calendar": row["calendar"], "opens_clock": bool(row["opens_clock"]),
+            "description": row["description"], "calendar": row["calendar"],
+            "opens_clock": bool(row["opens_clock"]) and not row["all_day"],
             "day": start.date()}
 
 

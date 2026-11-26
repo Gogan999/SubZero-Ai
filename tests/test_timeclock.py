@@ -463,7 +463,8 @@ class KioskTest(ClockedHarness):
     def pair(self):
         page = self.browse(self.kim, "POST", "/timeclock/admin/kiosks", data={"name": "Shop door"}).text
         url = page.split('class="mono copyable">')[1].split("<")[0]
-        return url.replace("http://localhost:8787", "")
+        self.pair_path = url.replace("http://localhost:8787", "")
+        return self.pair_path
 
     def test_pairing_and_the_screen(self):
         path = self.pair()
@@ -477,6 +478,22 @@ class KioskTest(ClockedHarness):
         self.assertTrue(self.h.client.get("/timeclock/kiosk/code").json()["ok"])
         self.h.client.cookies.clear()
         self.assertEqual(self.h.client.get(path).status_code, 404, "a pairing link works once")
+
+    def test_closed_kiosk_still_shows_the_code_and_clocks_people_out(self):
+        self.pair()
+        self.now = TUESDAY_NOON
+        self.clock.clock_in(self.uid(self.ava), "web", any_time=True)
+        kiosk = self.clock.kiosks()[0]
+        self.h.client.cookies.clear()
+        self.h.client.get(self.pair_path)
+        page = self.h.client.get("/timeclock/kiosk").text
+        self.assertIn("<svg", page)
+        self.assertIn("Scanning still clocks you out.", page)
+        self.h.client.cookies.clear()
+        scan = f"/timeclock/k/{kiosk['id']}/{self.clock.kiosk_code(kiosk)}"
+        self.assertIn("re clocked out</h1>", self.ava.get(scan).text)
+        page = self.ben.get(f"/timeclock/k/{kiosk['id']}/{self.clock.kiosk_code(kiosk)}").text
+        self.assertIn("Clock-in opens at 3:15 pm.", page)
 
     def test_scanning(self):
         self.pair()
