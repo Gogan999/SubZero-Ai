@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import sqlite3
 from collections.abc import Callable
-from urllib.parse import urljoin, urlsplit
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
-import requests
+import certifi
+import urllib3
 
 from ...db import Database
 from . import ics
@@ -20,6 +22,7 @@ PAST_DAYS = 30
 FUTURE_DAYS = 180
 MAX_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 5
+REDIRECTS = frozenset({301, 302, 303, 307, 308})
 
 MIGRATIONS = (
     # Version 1: calendars and their events
@@ -120,7 +123,7 @@ class Calendars:
         try:
             self.load(source_id, self.fetch(row["url"]))
             return None
-        except (requests.RequestException, ics.IcsError, ValueError) as exc:
+        except (OSError, urllib3.exceptions.HTTPError, ics.IcsError, ValueError) as exc:
             problem = str(exc) if isinstance(exc, ics.IcsError) else "Couldn't download the calendar."
             self.db.execute("UPDATE cal_sources SET last_synced_at = ?, last_error = ? WHERE id = ?",
                             (iso(self.clock()), problem, source_id))
@@ -146,35 +149,57 @@ class Calendars:
                                  opens_clock=True))
 
 
-def check_public(url: str, resolve: Callable = socket.getaddrinfo) -> None:
-    """Raises IcsError unless the address is https and every address its host resolves to is on the internet."""
+def check_public(url: str, resolve: Callable = socket.getaddrinfo) -> str:
+    """The address to connect to for an https url. Raises IcsError unless every address its host resolves to is on
+    the internet."""
     parts = urlsplit(url)
     if parts.scheme != "https" or not parts.hostname:
         raise ics.IcsError("Calendar addresses must start with https://.")
     try:
         found = resolve(parts.hostname, parts.port or 443, proto=socket.IPPROTO_TCP)
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         raise ics.IcsError("Couldn't find that calendar's server.") from exc
-    for *_, sockaddr in found:
-        address = ipaddress.ip_address(sockaddr[0].split("%")[0])
-        if not address.is_global:
-            raise ics.IcsError("That calendar address points to a private network, which the Hub doesn't fetch.")
+    addresses = [ipaddress.ip_address(sockaddr[0].split("%")[0]) for *_, sockaddr in found]
+    if not addresses:
+        raise ics.IcsError("Couldn't find that calendar's server.")
+    if not all(a.is_global for a in addresses):
+        raise ics.IcsError("That calendar address points to a private network, which the Hub doesn't fetch.")
+    return str(addresses[0])
 
 
-def download(url: str, session: requests.Session | None = None, resolve: Callable = socket.getaddrinfo) -> str:
-    """Fetches an iCal address, checking it and each redirect with check_public, uncompressed, up to MAX_BYTES."""
-    session = session or requests.Session()
+def open_pinned(url: str, address: str) -> urllib3.BaseHTTPResponse:
+    """GETs an https url from the server at `address`, checking its certificate against the url's host name."""
+    parts = urlsplit(url)
+    host = parts.hostname.encode("idna").decode("ascii")
+    pool = urllib3.HTTPSConnectionPool(address, parts.port or 443, server_hostname=host, assert_hostname=host,
+                                       cert_reqs="CERT_REQUIRED", ca_certs=certifi.where(), maxsize=1,
+                                       timeout=urllib3.Timeout(connect=10, read=20), retries=False)
+    return pool.urlopen("GET", urlunsplit(("", "", parts.path or "/", parts.query, "")), redirect=False,
+                        preload_content=False, decode_content=False,
+                        headers={"Host": host if parts.port in (None, 443) else f"{host}:{parts.port}",
+                                 "User-Agent": "SubZeroHub-Calendar/1.0", "Accept-Encoding": "identity"})
+
+
+def download(url: str, opener: Callable = open_pinned, resolve: Callable = socket.getaddrinfo) -> str:
+    """Fetches an iCal address, up to MAX_BYTES, uncompressed. Each hop connects only to the address check_public
+    approved."""
     for _ in range(MAX_REDIRECTS + 1):
-        check_public(url, resolve)
-        resp = session.get(url, timeout=20, stream=True, allow_redirects=False,
-                           headers={"User-Agent": "SubZeroHub-Calendar/1.0", "Accept-Encoding": "identity"})
-        if resp.is_redirect and resp.headers.get("location"):
-            url = urljoin(url, resp.headers["location"])
+        resp = opener(url, check_public(url, resolve))
+        try:
+            location = resp.headers.get("location")
+            if resp.status in REDIRECTS and location:
+                url = urljoin(url, location)
+                continue
+            if resp.status >= 400:
+                raise ics.IcsError(f"The calendar's server said no (error {resp.status}).")
+            data = resp.read(MAX_BYTES + 1, decode_content=False)
+        finally:
             resp.close()
-            continue
-        resp.raise_for_status()
-        data = resp.raw.read(MAX_BYTES + 1, decode_content=False)
         if len(data) > MAX_BYTES:
             raise ics.IcsError("That calendar is larger than 5 MB.")
-        return data.decode(resp.encoding or "utf-8", errors="replace")
+        charset = re.search(r"charset=\"?([\w.:-]+)", resp.headers.get("content-type", ""))
+        try:
+            return data.decode(charset.group(1) if charset else "utf-8", errors="replace")
+        except LookupError:
+            return data.decode("utf-8", errors="replace")
     raise ics.IcsError("That calendar address redirects too many times.")

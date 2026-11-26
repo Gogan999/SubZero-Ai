@@ -33,29 +33,23 @@ PUBLIC = resolver("93.184.216.34")
 
 
 class FakeResponse:
-    def __init__(self, status=200, body=b"", location=""):
-        self.status_code, self.body = status, body
-        self.headers = {"location": location} if location else {}
-        self.is_redirect = bool(location)
-        self.encoding = "utf-8"
-        self.raw = self
+    def __init__(self, status=200, body=b"", location="", content_type="text/calendar"):
+        self.status, self.body = status, body
+        self.headers = {"content-type": content_type, **({"location": location} if location else {})}
 
     def read(self, amount, decode_content=True):
         return self.body[:amount]
-
-    def raise_for_status(self):
-        pass
 
     def close(self):
         pass
 
 
-class FakeSession:
+class FakeOpener:
     def __init__(self, *responses):
-        self.responses, self.urls = list(responses), []
+        self.responses, self.calls = list(responses), []
 
-    def get(self, url, **kwargs):
-        self.urls.append(url)
+    def __call__(self, url, address):
+        self.calls.append((url, address))
         return self.responses.pop(0)
 
 
@@ -90,21 +84,37 @@ class CalendarDownloadTest(unittest.TestCase):
         def resolve(host, port, proto=0):
             return resolver(hops[host])(host, port, proto)
 
-        session = FakeSession(FakeResponse(302, location="https://good.example/b.ics"), FakeResponse(body=b"ok"))
-        self.assertEqual(download("https://good.example/a.ics", session, resolve), "ok")
-        self.assertEqual(session.urls, ["https://good.example/a.ics", "https://good.example/b.ics"])
-        session = FakeSession(FakeResponse(302, location="https://inside.example/secret"))
+        opener = FakeOpener(FakeResponse(302, location="https://good.example/b.ics"), FakeResponse(body=b"ok"))
+        self.assertEqual(download("https://good.example/a.ics", opener, resolve), "ok")
+        self.assertEqual(opener.calls, [("https://good.example/a.ics", "93.184.216.34"),
+                                        ("https://good.example/b.ics", "93.184.216.34")])
+        opener = FakeOpener(FakeResponse(302, location="https://inside.example/secret"))
         with self.assertRaises(ics.IcsError):
-            download("https://good.example/a.ics", session, resolve)
-        self.assertEqual(session.urls, ["https://good.example/a.ics"])
+            download("https://good.example/a.ics", opener, resolve)
+        self.assertEqual(len(opener.calls), 1)
 
-    def test_too_many_redirects_and_too_big(self):
-        loop = FakeSession(*[FakeResponse(302, location="/again") for _ in range(20)])
+    def test_connects_to_the_address_it_checked(self):
+        answers = ["93.184.216.34", "127.0.0.1"]
+
+        def rebinding(host, port, proto=0):
+            return resolver(answers.pop(0))(host, port, proto)
+
+        opener = FakeOpener(FakeResponse(body=b"ok"))
+        self.assertEqual(download("https://calendar.example/x.ics", opener, rebinding), "ok")
+        self.assertEqual(opener.calls, [("https://calendar.example/x.ics", "93.184.216.34")])
+        self.assertEqual(answers, ["127.0.0.1"], "the host is looked up once")
+
+    def test_too_many_redirects_errors_and_too_big(self):
+        loop = FakeOpener(*[FakeResponse(302, location="/again") for _ in range(20)])
         with self.assertRaises(ics.IcsError):
             download("https://calendar.example/x.ics", loop, PUBLIC)
-        big = FakeSession(FakeResponse(body=b"x" * (MAX_BYTES + 10)))
-        with self.assertRaises(ics.IcsError):
-            download("https://calendar.example/x.ics", big, PUBLIC)
+        for response in (FakeResponse(body=b"x" * (MAX_BYTES + 10)), FakeResponse(404)):
+            with self.subTest(status=response.status), self.assertRaises(ics.IcsError):
+                download("https://calendar.example/x.ics", FakeOpener(response), PUBLIC)
+        latin = FakeResponse(body="Caf\xe9".encode("latin-1"), content_type="text/calendar; charset=ISO-8859-1")
+        self.assertEqual(download("https://calendar.example/x.ics", FakeOpener(latin), PUBLIC), "Caf\xe9")
+        odd = FakeResponse(body="Caf\xe9".encode(), content_type="text/calendar; charset=nonsense")
+        self.assertEqual(download("https://calendar.example/x.ics", FakeOpener(odd), PUBLIC), "Caf\xe9")
 
     def test_events_that_repeat_every_minute_are_skipped(self):
         text = wrap(event("UID:spam", "DTSTART:20261201T150000Z", "RRULE:FREQ=MINUTELY", "SUMMARY:Spam"),
