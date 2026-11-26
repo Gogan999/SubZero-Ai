@@ -78,7 +78,8 @@ from subzero_ai.sandbox import (
 from .helpers import MENTOR, Harness
 from .test_features import FakeResponse, FakeWeb, repo_zip
 
-BASE = "/srv/sandbox/base.vhdx"
+BASE_DIR = Path(tempfile.mkdtemp(prefix="szsandbox-test-"))
+BASE = str(BASE_DIR / "base.vhdx")
 SWITCH = "szsandbox-internal"
 GOOD_ADAPTERS = '[{"Name":"Network Adapter","SwitchName":"szsandbox-internal"}]'
 PASSING_NETWORK = "[]"  # the host network check's output when everything is in place
@@ -482,7 +483,7 @@ class HyperVCommandTest(unittest.TestCase):
         with self.assertRaises(SandboxError):
             child_disk_path(BASE, "base")
         self.assertEqual(child_disk_path(BASE, "szsandbox-1-s000-aaaaaa"),
-                         Path("/srv/sandbox/szsandbox-1-s000-aaaaaa.vhdx"))
+                         BASE_DIR / "szsandbox-1-s000-aaaaaa.vhdx")
 
     def test_disk_size_is_checked_against_the_limit(self):
         host = FakeHost()
@@ -672,7 +673,7 @@ class HostKeyTest(unittest.TestCase):
         with self.assertRaises(SandboxError):
             seed_disk_path(BASE, "base")
         self.assertEqual(seed_disk_path(BASE, "szsandbox-1-s000-aaaaaa"),
-                         Path("/srv/sandbox/szsandbox-1-s000-aaaaaa-seed.iso"))
+                         BASE_DIR / "szsandbox-1-s000-aaaaaa-seed.iso")
         self.assertEqual(seed_disk_path(BASE, "szsandbox-1-s000-aaaaaa", "/srv/disks"),
                          Path("/srv/disks/szsandbox-1-s000-aaaaaa-seed.iso"))
 
@@ -696,18 +697,19 @@ class SeedDiskTest(unittest.TestCase):
     NAME = "szsandbox-7-s000-abcdef"
 
     def script(self) -> str:
-        return seed_disk_script(seed_disk_path(BASE, self.NAME), Path("/srv/sandbox/staging") / self.NAME)
+        return seed_disk_script(seed_disk_path(BASE, self.NAME), BASE_DIR / "staging" / self.NAME)
 
     def test_the_seed_is_an_iso_labelled_cidata_built_from_the_seed_folder(self):
         script = self.script()
         seed = str(seed_disk_path(BASE, self.NAME))
-        self.assertEqual(seed, f"/srv/sandbox/{self.NAME}-seed.iso")
+        self.assertEqual(seed, str(BASE_DIR / f"{self.NAME}-seed.iso"))
         for text in ("New-Object -ComObject IMAPI2FS.MsftFileSystemImage", "$image.FileSystemsToCreate = 3",
                      "$image.VolumeName = 'cidata'", "[SzIsoWriter]::Write($result.ImageStream, "
                      f"{ps_quote(seed)})", "$result = $image.CreateResultImage()", "Add-Type -TypeDefinition @'"):
             self.assertIn(text, script)
         # The seed folder (not the staging folder) goes onto the image, without the host key file
-        self.assertIn(f"$image.Root.AddTree({ps_quote('/srv/sandbox/staging/' + self.NAME + '/seed')}, $false)", script)
+        tree = ps_quote(str(BASE_DIR / "staging" / self.NAME / "seed"))
+        self.assertIn(f"$image.Root.AddTree({tree}, $false)", script)
         self.assertLess(script.index("AddTree("), script.index("CreateResultImage"), "added before the image is made")
         self.assertLess(script.index("CreateResultImage"), script.index("[SzIsoWriter]::Write"))
         self.assertIn("already there", script, "an existing seed is never written over")
@@ -716,7 +718,7 @@ class SeedDiskTest(unittest.TestCase):
             self.assertNotIn(gone, script)
 
     def test_the_seed_script_is_ascii_only(self):
-        for seed, staging in ((seed_disk_path(BASE, self.NAME), "/srv/sandbox/staging"),
+        for seed, staging in ((seed_disk_path(BASE, self.NAME), str(BASE_DIR / "staging")),
                               (seed_disk_path("C:\\SubZeroAI\\sandbox\\base.vhdx", self.NAME, "C:\\disks"),
                                "C:\\SubZeroAI\\staging")):
             script = seed_disk_script(seed, Path(staging) / self.NAME)
@@ -2362,3 +2364,7 @@ class GuestAzureAgentOffTest(unittest.TestCase):
     def test_user_data_masks_the_azure_agent(self):
         text = user_data(f"{HOST_KEY} c", f"{HOST_KEY} h", PRIVATE_KEY, guest_sudo=False)
         self.assertIn("systemctl mask walinuxagent.service", text)
+
+
+def tearDownModule():
+    shutil.rmtree(BASE_DIR, ignore_errors=True)

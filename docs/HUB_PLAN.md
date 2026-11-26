@@ -328,7 +328,7 @@ the next tool.
 6. **Import:** CSV import with a preview, manual matching and undo. Checked against the team's real Attendance Bot
    Time Sheet Report: each person's hours match its totals to within a few minutes (the export rounds to the
    minute).
-7. **Still to do:** a release (version 1.0.0), the upgrade on the mini PC, and screenshots for the Shortcut guide.
+7. **Still to do:** the upgrade on the mini PC, and screenshots for the Shortcut guide.
 
 One installer and updater: `setup.cmd` installs, updates (from a newer release's folder, or by downloading the
 newest release when run from the install folder) or repairs.
