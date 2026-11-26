@@ -39,7 +39,7 @@
             </td>
             <td class="num">{{ p.entries }}</td>
             <td class="num">{{ '%.2f'|format(p.hours) }}</td>
-            <td class="fine">{% if p.problems %}{{ p.problems }} not readable{% endif %}{% if p.problems and p.long %} · {% endif %}{% if p.long %}{{ p.long }} over 12 h{% endif %}</td>
+            <td class="fine">{% if p.problems %}{{ p.problems }} can't be imported{% endif %}{% if p.problems and p.long %} · {% endif %}{% if p.long %}{{ p.long }} over 12 h{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
