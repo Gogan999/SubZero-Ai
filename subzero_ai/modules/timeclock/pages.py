@@ -75,8 +75,10 @@ def day_range(request: Request, clock: TimeClock, default_days: int = 7) -> tupl
     today = clock.local(clock.now()).date()
     start, end = today - timedelta(days=today.weekday() if default_days == 7 else default_days), today
     try:
-        start = date.fromisoformat(request.query_params.get("start", "")) if request.query_params.get("start") else start
-        end = date.fromisoformat(request.query_params.get("end", "")) if request.query_params.get("end") else end
+        if request.query_params.get("start"):
+            start = date.fromisoformat(request.query_params["start"])
+        if request.query_params.get("end"):
+            end = date.fromisoformat(request.query_params["end"])
     except ValueError:
         pass
     return (start, end) if start <= end else (end, start)

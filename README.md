@@ -6,7 +6,7 @@ page and what each role can do on the Permissions page.
 
 **SubZero AI** is a claude.ai-style chat for the team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
-This is version 0.10.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)). Code sessions can run their commands in a disposable Hyper-V sandbox (see [docs/CODE_SANDBOX_PLAN.md](docs/CODE_SANDBOX_PLAN.md)); students can use Code once a mentor turns that on. Chats scroll inside the window, admins can delete chats, and mentors see an estimated cost next to token counts.
+This is version 1.0.0, the first SubZero Hub release: the Hub core, the Time Clock and the Calendar, plus SubZero AI with all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)). Code sessions can run their commands in a disposable Hyper-V sandbox (see [docs/CODE_SANDBOX_PLAN.md](docs/CODE_SANDBOX_PLAN.md)); students can use Code once a mentor turns that on. Chats scroll inside the window, admins can delete chats, and mentors see an estimated cost next to token counts.
 
 ## What's in this version
 
@@ -60,7 +60,7 @@ In the Cloudflare Zero Trust dashboard, open **Networks**, **Tunnels**, and crea
 
 ### 2. Run the installer
 
-Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases), right-click it, and choose **Extract All**. In the extracted folder, double-click **install.cmd** and choose **Yes** when Windows asks for permission. The installer:
+Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gogan999/SubZero-Ai/releases), right-click it, and choose **Extract All**. In the extracted folder, double-click **setup.cmd** and choose **Yes** when Windows asks for permission. Setup:
 
 - copies the app, with its own Python and Node.js (for the AI helper in `app\pi_gateway`), to `C:\Program Files\SubZeroAI`;
 - creates `C:\ProgramData\SubZeroAI` for settings, chats, files, backups, and logs, readable only by administrators and the app's service account;
@@ -68,7 +68,7 @@ Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gog
 - asks for the Cloudflare tunnel token and installs the Cloudflare connector as a Windows service;
 - opens `http://localhost:8787/setup` in the browser.
 
-Running install.cmd again repairs an install and keeps all data.
+**setup.cmd is also the updater.** Run it from a newer release's folder to update to that release, or run `setup.cmd` in `C:\Program Files\SubZeroAI` to download the newest one. It backs up the data first and puts the old version back if the new one doesn't start. Running it from the same version repairs the install. All data is kept every time.
 
 ### 3. Setup page
 
@@ -85,6 +85,19 @@ The setup page only opens on the mini PC, saves each step as you go, and locks w
 
 Open `https://ai.yourdomain.org` on a phone and sign in with Slack as a coach. Open **Settings**: the health list should say Slack is working, and a backup should already be listed. Check the per-student limits, the retention period, and the three system prompt layers (ask a coach to review the safety layer). Then send a test message as a student and approve it in #claude-approvals.
 
+## Time Clock
+
+Clock in and out by DMing the bot `in`, `out`, `status` or `hours`, with `/clock`, with the button on the bot's Home tab or the Hub home page, by scanning the QR code on a kiosk screen, or with an iPhone Shortcut. Clock-in opens during the practice window (weekdays from 3:15 pm, weekends all day, set on the Time Clock's Admin page) and shortly before events on a calendar that opens the time clock.
+
+- **Forgetting to clock out:** a "Still here?" DM after 5 hours, a Shortcut that clocks you out when you leave the building, and a nightly clock-out at 10 pm that ends the entry at the last time the person was seen and asks them, with a time picker, when they left.
+- **Pages:** My time (anyone edits their own entries; every change is logged), Team (who's in and hours per person), and Admin (anyone's time, entries to check, kiosks, settings, CSV export and import).
+- **Kiosk:** on the Admin page, add a kiosk and open its one-time pairing link on the screen by the door. Its QR code changes every 30 seconds.
+- **Shortcuts:** each person makes a key on the Phone setup page, which has step-by-step instructions.
+
+## Calendar
+
+Paste a Google Calendar's secret iCal address (it syncs every 15 minutes) or upload an `.ics` file from any calendar app on the Calendar's Calendars page. Repeating events, time zones and moved or cancelled dates are handled. People see an agenda and a month view, today's events on the Hub home page and the Slack Home tab. Mark a calendar "opens the time clock" to open clock-in 15 minutes before its events.
+
 ## Slack permissions
 
 The **Create Slack app** button and `slack-manifest.yaml` set all of these up for you. If you made the app by hand, or the setup page or check-settings.cmd says a permission is missing, compare the app's **OAuth & Permissions** page with this list.
@@ -98,6 +111,7 @@ The **Create Slack app** button and `slack-manifest.yaml` set all of these up fo
 | `im:history` | Reads the messages people send the bot in a DM (the `message.im` event), so they can ask the AI questions from Slack. | `message.im` event |
 | `groups:read` | Lists the private channels the bot was invited to (so the setup page can offer #claude-approvals) and reads that channel's members to know who the mentors are. Without it you get "missing_scope" after inviting the bot to the channel. | `conversations.list`, `conversations.members` |
 | `users:read` | Looks up names and profile pictures, and spots deactivated, guest, and bot accounts. | `users.info` |
+| `commands` | The `/clock` slash command. | `/clock` |
 
 **Event subscriptions** (bot events): `message.im` and `app_home_opened`, delivered over Socket Mode like button clicks. The app's **Messages** tab must also be on and not read-only (`messages_tab_read_only_enabled: false` in the manifest), and its **Home** tab on (`home_tab_enabled: true`), which shows each tool's section. Publishing the Home tab (`views.publish`) needs no extra scope.
 
@@ -133,7 +147,7 @@ Everything below runs on the mini PC from `C:\Program Files\SubZeroAI`. Each too
 
 | Tool | What it does |
 | --- | --- |
-| **update.cmd** | Downloads the newest release, backs up the data, replaces the app, and restarts it. If the new version doesn't start, it puts the old one back. The Settings page says when an update is available. If the repository is private, download the zip yourself and run `update.cmd -Zip path\to\SubZeroAI-windows.zip`. |
+| **setup.cmd** | Downloads the newest release, backs up the data, replaces the app, and restarts it. If the new version doesn't start, it puts the old one back. The Settings page says when an update is out. If the repository is private, download the zip yourself and run `setup.cmd -Zip path\to\SubZeroAI-windows.zip`. |
 | **restore.cmd** | Lists the backups and puts the one you pick back, after saving the current data as a `before-restore` backup. |
 | **back-up-now.cmd** | Makes a backup now. Admins can also click **Back up now** on the Settings page. |
 | **check-settings.cmd** | Checks the Slack and Claude settings and says what to fix. |
@@ -217,7 +231,7 @@ Normal chat, files that are text or code, explainers, the screener, and chat tit
 - [ ] Someone follows only the install guide on a clean mini PC and gets a first approved prompt in under an hour.
 - [ ] After a restart of the mini PC, with nobody signed in, the site comes back by itself.
 - [ ] A backup restores cleanly with restore.cmd: a chat made after the backup disappears, and the earlier chats and their files are back.
-- [ ] update.cmd moves to a newer release and keeps every chat and setting.
+- [ ] setup.cmd moves to a newer release and keeps every chat, time entry, calendar and setting.
 - [ ] Changing a limit on the Settings page applies to the next message without a restart.
 
 ## How it behaves
@@ -258,7 +272,7 @@ Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` fo
 
 ## Troubleshooting
 
-- **The installer says SubZero Hub didn't start**: read `C:\ProgramData\SubZeroAI\logs\subzero.log` and `SubZeroAI.err.log`. Run install.cmd again after fixing the cause.
+- **The installer says SubZero Hub didn't start**: read `C:\ProgramData\SubZeroAI\logs\subzero.log` and `SubZeroAI.err.log`. Run setup.cmd again after fixing the cause.
 - **The setup page says "Not found"**: it only opens on the mini PC itself, at `http://localhost:8787/setup`, and only until setup is finished. To open it again, run `python\python.exe -m subzero_ai reset-setup` from `C:\Program Files\SubZeroAI` in an administrator window (with `DATA_DIR` set to `C:\ProgramData\SubZeroAI`), or change settings on the Settings page instead.
 - **"Python 3.12 or 3.13 isn't installed"** (only when running from a copy of the repository): install it from python.org with "Add python.exe to PATH" ticked, then close and reopen the window.
 - **Sign-in says the sign-in couldn't be verified or the link expired**: check that the computer's clock is right and that `PUBLIC_URL` matches the address in the browser exactly.

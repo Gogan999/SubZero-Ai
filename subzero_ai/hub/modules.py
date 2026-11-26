@@ -36,7 +36,7 @@ class Module:
     commands: tuple[str, ...] = ()  # Slack slash commands it answers, like "/clock"
 
     def routes(self) -> list[BaseRoute]:
-        """The module's pages, mounted under /<key>."""
+        """The module's pages; their paths start with /<key>."""
         return []
 
     def nav(self, viewer: Viewer) -> list[NavItem]:

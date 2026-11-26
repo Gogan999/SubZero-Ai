@@ -1505,7 +1505,7 @@ async def about_page(request: Request) -> Response:
 
 
 async def health(request: Request) -> Response:
-    """For update.ps1 and the Windows service checks: the app is up, and what it knows about Slack, Claude,
+    """For setup.ps1 and the Windows service checks: the app is up, and what it knows about Slack, Claude,
     and backups. No secrets or names."""
     s = services(request)
     snap = s.health.snapshot()

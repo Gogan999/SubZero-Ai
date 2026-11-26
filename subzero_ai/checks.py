@@ -278,7 +278,7 @@ def data_folder_open(path: str, icacls_output: str | None = None) -> str:
             return ""
     for group in ("BUILTIN\\Users", "Everyone", "NT AUTHORITY\\Authenticated Users", "CREATOR OWNER"):
         if group.lower() in icacls_output.lower():
-            return (f"{group} has access to {path}. Run install.cmd again (it locks the folder down), "
+            return (f"{group} has access to {path}. Run setup.cmd again (it locks the folder down), "
                     "and keep config.env private.")
     return ""
 

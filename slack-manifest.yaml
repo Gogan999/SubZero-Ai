@@ -17,6 +17,11 @@ features:
   bot_user:
     display_name: SubZero Hub
     always_online: true
+  slash_commands:
+    - command: /clock
+      description: Clock in or out, or see your time
+      usage_hint: in | out | status | hours
+      should_escape: false
 oauth_config:
   redirect_urls:
     - https://ai.yourdomain.org/auth/slack/callback
@@ -27,6 +32,7 @@ oauth_config:
       - im:history    # read the messages people send the bot in a DM (message.im below)
       - groups:read   # list private channels for setup; read #claude-approvals members to know who's a mentor
       - users:read    # names and pictures; spot removed, guest, and bot accounts
+      - commands      # the /clock slash command
     user:
       - openid        # Sign in with Slack
       - email

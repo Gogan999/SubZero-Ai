@@ -78,7 +78,8 @@ class CalendarModule(Module):
         events = self.today(services)[:5]
         lines = [f"• {event_time(calendars, r)}: {r['title']}" for r in events] or ["Nothing on the calendar today."]
         link = services.settings.url("/calendar")
-        return [{"type": "section", "text": {"type": "mrkdwn", "text": f"*Today*  <{link}|Calendar>\n" + "\n".join(lines)}}]
+        text = f"*Today*  <{link}|Calendar>\n" + "\n".join(lines)
+        return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
 
     async def tick(self, services: Any) -> None:
         calendars = calendars_for(services)

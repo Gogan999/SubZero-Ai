@@ -187,7 +187,8 @@ class PagesTest(unittest.TestCase):
         self.assertEqual((source["name"], source["events"], source["opens_clock"]), ("Team", 1, 1))
         self.kim.post(f"/calendar/manage/{source['id']}", data={"action": "closes"})
         self.assertEqual(self.calendars.source(source["id"])["opens_clock"], 0)
-        self.kim.post("/calendar/manage", data={"name": ""}, files={"file": ("robotics.ics", ONE.encode(), "text/calendar")})
+        upload = {"file": ("robotics.ics", ONE.encode(), "text/calendar")}
+        self.kim.post("/calendar/manage", data={"name": ""}, files=upload)
         names = sorted(s["name"] for s in self.calendars.sources())
         self.assertEqual(names, ["Team", "robotics"])
         self.kim.post(f"/calendar/manage/{source['id']}", data={"action": "remove"})
@@ -204,7 +205,8 @@ class PagesTest(unittest.TestCase):
         self.assertIn("Practice", self.ava.get("/").text)
         module = next(m for m in installed() if m.key == "calendar")
         row = self.ava.user
-        blocks = module.slack_home_blocks(self.h.services, Viewer(row["id"], row["slack_user_id"], row["name"], "student"))
+        viewer = Viewer(row["id"], row["slack_user_id"], row["name"], "student")
+        blocks = module.slack_home_blocks(self.h.services, viewer)
         self.assertIn("3:30 pm to 6:00 pm: Practice", str(blocks))
 
 

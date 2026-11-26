@@ -1,4 +1,4 @@
-# Shared helpers for the SubZero Hub install, update, restore, and uninstall scripts.
+# Shared helpers for the SubZero Hub setup, restore, and uninstall scripts.
 # Dot-source it:  . (Join-Path $PSScriptRoot "common.ps1")
 # Written for Windows PowerShell 5.1. ASCII-only.
 
@@ -147,7 +147,7 @@ function Copy-Mirror([string]$From, [string]$To) {
 $AppParts = @("app", "python", "node", "scripts", "service")
 # Parts that older releases don't have. Copying from a release without one removes it from the destination.
 $OptionalParts = @("node")
-$AppFiles = @("VERSION", "release.json", "README.txt", "update.cmd", "restore.cmd", "back-up-now.cmd",
+$AppFiles = @("VERSION", "release.json", "README.txt", "setup.cmd", "restore.cmd", "back-up-now.cmd",
               "check-settings.cmd", "recovery-code.cmd", "uninstall.cmd")
 
 function Copy-AppFiles([string]$From, [string]$To) {

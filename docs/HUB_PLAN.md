@@ -305,40 +305,27 @@ Default permissions:
 
 ## Build order
 
-Each phase ends with every existing test passing, plus new tests for what it adds, and a short
-README update.
+Steps 0 to 6 are done on the `hub` branch, each with its tests (1,100+ in all). `docs/MODULES.md` says how to add
+the next tool.
 
-0. **Repository and name:** *done: the `hub` branch of SubZero-Ai, renamed SubZero Hub*
-   - every name people see says SubZero Hub; SubZero AI is the AI chat's own name inside the Hub
-   - an install whose app name is still the old default "SubZero AI" (in config.env or saved on the Settings
-     page) shows SubZero Hub after the update; a custom name is kept
-   - update CLAUDE.md
-1. **Core and modules:** *done (on the local `hub` branch)*
-   - module registry and per-module migrations
-   - roles and permissions, People and Permissions pages
-   - Slack router, Home tab, Hub home page, tool switcher
-   - the AI module wrapper
+0. **Repository and name:** the `hub` branch of SubZero-Ai, renamed SubZero Hub. An install still named the old
+   default "SubZero AI" shows SubZero Hub after updating; a custom name is kept.
+1. **Core and modules:** module registry and per-module migrations, roles and permissions with the People and
+   Permissions pages, the Slack router and Home tab, the Hub home page and tool switcher.
+2. **Time Clock basics:** Slack `in` / `out` / `status` / `hours`, `/clock`, Home-tab button, My time, Team and
+   Admin pages, CSV export, the edit log.
+3. **Safety nets:** practice window, "Still here?" DM, nightly clock-out with a time picker to fix it, the list
+   of entries to check.
+4. **Door check-in:** kiosk pairing and the rotating QR code, personal keys and the Shortcuts API (leave, NFC,
+   toggle), the Phone setup page.
+5. **Calendar:** iCal address sync, `.ics` upload, agenda and month pages, calendars that open the time clock.
+   (A week view was left out: the agenda covers it on a phone.)
+6. **Import:** CSV import with a preview and undo. It finds the columns by their headings; check it against a
+   real Attendance Bot export when one is available.
+7. **Still to do:** a release (version 1.0.0), the upgrade on the mini PC, and screenshots for the Shortcut guide.
 
-   No change to how the AI chat behaves. Until a second tool exists, `/` still opens the chat and the sidebar
-   shows no tool switcher.
-2. **Time Clock basics:**
-   - Slack `in` / `out` / `status` / `hours`, `/clock`, Home-tab buttons
-   - the My time, Team and Admin pages
-   - CSV export
-   - edit log
-
-   *This is enough to replace Attendance Bot.*
-3. **Safety nets:** practice window, 5-hour DM, nightly auto clock-out, the "when did you leave?" prompt,
-   the flagged list.
-4. **Door check-in:** kiosk pairing and the rotating QR code, NFC, personal keys and the Shortcuts API,
-   setup guides.
-5. **Calendar:** iCal address sync, `.ics` upload, agenda/week/month pages, calendar events opening the
-   time clock.
-6. **Attendance Bot import:** once a sample CSV is available.
-7. **Docs:** the upgrade guide, kiosk setup, Shortcut setup with screenshots, moving to a cloud server.
-
-If the Attendance Bot trial runs out before phase 2 ships, phase 1 can be cut down to the module registry
-and the Slack router, with the People and Permissions pages finished after phase 2.
+One installer and updater: `setup.cmd` installs, updates (from a newer release's folder, or by downloading the
+newest release when run from the install folder) or repairs.
 
 ## Testing
 

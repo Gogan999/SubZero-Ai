@@ -109,7 +109,7 @@ def health_rows(s: Services) -> list[dict[str, Any]]:
     if newer:
         rows.append({"label": "Version", "state": "Update available", "kind": "unknown",
                      "detail": f"You have {__version__}. Version {newer['version']} is out. "
-                               "On the mini PC, run update.cmd in the SubZero Hub folder.",
+                               "On the mini PC, run setup.cmd in the SubZero Hub folder.",
                      "link": newer.get("url")})
     else:
         rows.append({"label": "Version", "state": __version__, "kind": "plain", "detail": "Up to date as of the "

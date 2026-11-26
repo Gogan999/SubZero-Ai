@@ -31,7 +31,7 @@ WINDOWS = PACKAGING / "windows"
 PYTHON_VERSION = "3.13.17"
 NODE_VERSION = "22.23.4"
 MIN_NPM = (9, 6)  # --os and --cpu for optional dependencies
-# The longest folder the zip may be unpacked under: update.ps1's %TEMP%\SZ-<yyyyMMdd-HHmmss>\u\ for a
+# The longest folder the zip may be unpacked under: setup.ps1's %TEMP%\SZ-<yyyyMMdd-HHmmss>\u\ for a
 # 30-character user name. Paths must stay under 260 characters there.
 UPDATE_PREFIX = "C:\\Users\\" + "u" * 30 + "\\AppData\\Local\\Temp" + "\\SZ-20260101-120000\\u\\"
 PATH_LIMIT = 259

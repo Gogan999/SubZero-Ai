@@ -135,7 +135,8 @@ class TimeClockModule(Module):
         if verb == "toggle":
             clock.toggle(viewer.id, "slack", any_time=viewer.can(EDIT_OTHERS))
         elif verb == "out_now" and entry is not None:
-            reply = clock.clock_out(viewer.id, "slack").message if entry["clock_out"] is None else "Already clocked out."
+            done = entry["clock_out"] is not None
+            reply = "Already clocked out." if done else clock.clock_out(viewer.id, "slack").message
         elif verb == "still_here" and entry is not None and entry["clock_out"] is None:
             clock.still_here(entry["id"])
             reply = "Got it. I'll check again later."
@@ -184,9 +185,10 @@ class TimeClockModule(Module):
         week = rules.duration_text(clock.summary(viewer.id)["week"])
         button = {"type": "button", "action_id": "timeclock:toggle", "style": "danger" if current else "primary",
                   "text": {"type": "plain_text", "text": "Clock out" if current else "Clock in"}}
+        link = services.settings.url("/timeclock")
         return [
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Time Clock*  <{services.settings.url('/timeclock')}"
-                                                                   f"|Your time>\n{status}\nThis week: {week}."}},
+            {"type": "section", "text": {"type": "mrkdwn",
+                                         "text": f"*Time Clock*  <{link}|Your time>\n{status}\nThis week: {week}."}},
             {"type": "actions", "elements": [button]},
         ]
 

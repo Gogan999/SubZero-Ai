@@ -620,7 +620,7 @@ class DataFolderCheckTest(unittest.TestCase):
                   "  NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n  NT SERVICE\\SubZeroAI:(OI)(CI)(M)\n")
         self.assertEqual(data_folder_open("C:\\ProgramData\\SubZeroAI", locked), "")
         opened = locked + "  BUILTIN\\Users:(OI)(CI)(RX)\n"
-        self.assertIn("install.cmd", data_folder_open("C:\\ProgramData\\SubZeroAI", opened))
+        self.assertIn("setup.cmd", data_folder_open("C:\\ProgramData\\SubZeroAI", opened))
 
 
 class PackagingTest(unittest.TestCase):
@@ -682,7 +682,7 @@ class PackagingTest(unittest.TestCase):
     def test_update_prefix_is_the_worst_case(self):
         self.assertTrue(self.build.UPDATE_PREFIX.startswith("C:\\Users\\" + "u" * 30 + "\\AppData\\Local\\Temp\\SZ-"))
         self.assertTrue(self.build.UPDATE_PREFIX.endswith("\\u\\"))
-        update = (ROOT / "packaging" / "windows" / "scripts" / "update.ps1").read_text(encoding="utf-8")
+        update = (ROOT / "packaging" / "windows" / "scripts" / "setup.ps1").read_text(encoding="utf-8")
         self.assertIn('("SZ-" +', update)
         self.assertIn('Join-Path $work "u"', update)
 
@@ -721,3 +721,46 @@ class PackagingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupScriptTest(unittest.TestCase):
+    """setup.cmd, the one installer and updater: checks of the script's text."""
+
+    def setUp(self):
+        self.scripts = ROOT / "packaging" / "windows" / "scripts"
+        self.text = (self.scripts / "setup.ps1").read_text(encoding="utf-8")
+
+    def test_ascii_only_for_windows_powershell(self):
+        for path in self.scripts.glob("*.ps1"):
+            with self.subTest(path=path.name):
+                path.read_bytes().decode("ascii")
+
+    def test_updates_back_up_first_and_roll_back(self):
+        update = self.text[self.text.index("function Update-App"):self.text.index("try {\n    Write-Host")]
+        self.assertLess(update.index('Invoke-AppTool @("backup", "pre-update")'), update.index("Copy-AppFiles $From"))
+        self.assertLess(update.index("Copy-AppFiles $InstallDir $previous"), update.index("Copy-AppFiles $From"))
+        self.assertIn("Copy-AppFiles $previous $InstallDir", update)
+
+    def test_chooses_install_update_or_repair(self):
+        main = self.text[self.text.index("try {\n    Write-Host"):]
+        self.assertIn("if (-not $current) {\n        Install-App $newRoot", main)
+        self.assertIn("newer than this one", main)
+        self.assertIn("Repairing it", main)
+        self.assertIn("Update-App $newRoot $current", main)
+        self.assertIn("Get-LatestZip $current", main)
+
+    def test_old_entry_points_are_gone(self):
+        self.assertIn('$LegacyFiles = @("install.cmd", "update.cmd")', self.text)
+        cmd_dir = ROOT / "packaging" / "windows" / "cmd"
+        self.assertFalse((cmd_dir / "install.cmd").exists())
+        self.assertFalse((cmd_dir / "update.cmd").exists())
+        common = (self.scripts / "common.ps1").read_text(encoding="utf-8")
+        app_files = common[common.index("$AppFiles"):common.index("function Copy-AppFiles")]
+        listed = re.findall(r'"([a-z-]+\.cmd)"', app_files)
+        self.assertIn("setup.cmd", listed)
+        for name in listed:
+            self.assertTrue((cmd_dir / name).exists(), name)
+
+    def test_nothing_leaks_into_the_health_result(self):
+        self.assertIn("service install $token | Out-Host", self.text)
+        self.assertNotIn("return $health", self.text)

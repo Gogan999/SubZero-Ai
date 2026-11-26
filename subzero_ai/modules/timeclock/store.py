@@ -234,7 +234,8 @@ class TimeClock:
                         "next_reminder = NULL, updated_at = ? WHERE id = ?",
                         (iso(out), source, flag, iso(now), current["id"]))
         total = rules.duration_text((out - parse_iso(current["clock_in"])).total_seconds())
-        return Outcome(True, f"Clocked out at {rules.clock_text(self.local(out))}. That's {total}.", current["id"], "out")
+        message = f"Clocked out at {rules.clock_text(self.local(out))}. That's {total}."
+        return Outcome(True, message, current["id"], "out")
 
     def toggle(self, user_id: int, source: str, *, any_time: bool = False) -> Outcome:
         if self.open_entry(user_id) is None:
