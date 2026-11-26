@@ -6,34 +6,61 @@
   {% include "timeclock/_nav.html" %}
   <h1>Import time</h1>
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
   {% if not preview %}
   <form class="panel" method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="field">
       <label for="file">CSV file</label>
       <input id="file" name="file" type="file" accept=".csv,text/csv" required aria-describedby="file-hint">
-      <p class="field-hint" id="file-hint">The first row needs headings: one for the person (Slack ID, Email or Name), one for Clock in and one for Clock out. A separate Date column works too. People are matched to everyone who has signed in to {{ settings.app_name }}.</p>
+      <p class="field-hint" id="file-hint">Attendance Bot's Time Sheet Report works as it is. Other files need headings for the person (Slack ID, Email or Name) and the times (Clock in and Clock out, or Action Type and Timestamp). Names are matched to the team's Slack members; you can fix any match before importing.</p>
     </div>
     <div class="form-actions"><button class="button primary" type="submit">Preview</button></div>
   </form>
   {% else %}
-  <p class="lede">{{ preview.ready }} of {{ preview.rows|length }} rows are ready to import. Columns used: {{ preview.columns.person }}, {{ preview.columns['in'] }}, {{ preview.columns.out }}{% if preview.columns.date %}, {{ preview.columns.date }}{% endif %}.</p>
-  {% if preview.unmatched %}<p class="form-error">Not matched (ask them to sign in once, then import again): {{ preview.unmatched|join(', ') }}</p>{% endif %}
+  <p class="lede">{{ preview.ready }} of {{ preview.rows|length }} entries are ready to import. Columns used: {{ preview.columns|join(', ') }}.</p>
+
+  <form method="post" action="/timeclock/import/match">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th scope="col">In the file</th><th scope="col">Matched to</th><th scope="col" class="num">Entries</th><th scope="col" class="num">Hours</th><th scope="col">To check</th></tr></thead>
+        <tbody>
+          {% for p in preview.people %}
+          <tr{% if not p.key %} class="flagged"{% endif %}>
+            <td>{{ p.who or '(blank)' }}</td>
+            <td>
+              <input type="hidden" name="w{{ loop.index0 }}" value="{{ p.who }}">
+              <label class="visually-hidden" for="p{{ loop.index0 }}">Match {{ p.who }} to</label>
+              <select class="match" id="p{{ loop.index0 }}" name="p{{ loop.index0 }}">
+                <option value="" {% if not p.key %}selected{% endif %}>Don't import</option>
+                {% for key, name in preview.options %}<option value="{{ key }}" {% if key == p.key %}selected{% endif %}>{{ name }}{% if key.startswith('s:') %} (not signed in yet){% endif %}</option>{% endfor %}
+              </select>
+            </td>
+            <td class="num">{{ p.entries }}</td>
+            <td class="num">{{ '%.2f'|format(p.hours) }}</td>
+            <td class="fine">{% if p.problems %}{{ p.problems }} not readable{% endif %}{% if p.problems and p.long %} · {% endif %}{% if p.long %}{{ p.long }} over 12 h{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Save matches</button></div>
+  </form>
+  <p class="field-hint">Hours are the totals in the file, to compare with the other app's report. Entries over 12 hours are imported and listed under "Check these" on the Admin page. People not signed in yet get an account that their Slack sign-in uses later.</p>
+
+  {% set problems = preview.rows|selectattr('problem')|list %}
+  {% if problems %}
+  <details class="panel">
+    <summary>{{ problems|length }} rows can't be imported</summary>
+    <ul class="who-in">{% for r in problems %}<li>{{ r.who }}<span class="fine">{{ r.shown or '' }}: {{ r.problem }}</span></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+
   <div class="form-actions">
     <form method="post" action="/timeclock/import/confirm"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button primary" type="submit" {% if not preview.ready %}disabled{% endif %}>Import {{ preview.ready }} entries</button></form>
     <form method="post" action="/timeclock/import/cancel"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button quiet" type="submit">Start over</button></form>
   </div>
-  <div class="table-wrap">
-    <table class="data">
-      <thead><tr><th scope="col">In the file</th><th scope="col">Person</th><th scope="col">Time</th><th scope="col" class="num">Hours</th></tr></thead>
-      <tbody>
-        {% for r in preview.rows[:500] %}
-        <tr{% if r.problem %} class="flagged"{% endif %}><td>{{ r.who }}</td><td>{{ r.name or '—' }}</td><td>{{ r.shown or r.problem }}</td><td class="num">{{ r.hours or '' }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% if preview.rows|length > 500 %}<p class="fine">Showing the first 500 rows.</p>{% endif %}
   {% endif %}
 </section>
 {% endblock %}

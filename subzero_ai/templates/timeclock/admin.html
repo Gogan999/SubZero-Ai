@@ -18,7 +18,7 @@
 
   <section class="panel" aria-labelledby="flag-title">
     <h2 id="flag-title">Check these <span class="count-chip">{{ flagged|length }}</span></h2>
-    <p class="field-hint">Entries the nightly clock-out closed. Each one ends at the last time the person was seen; edit it to clear the flag.</p>
+    <p class="field-hint">Entries the nightly clock-out closed (each ends at the last time the person was seen) and imported entries over 12 hours. Edit one to clear its flag.</p>
     {% if flagged %}
     <ul class="who-in">{% for f in flagged %}<li><a href="/timeclock/entries/{{ f.id }}">{{ f.name }}</a><span class="fine">{{ f.day }}, {{ f.start }} to {{ f.end }}</span></li>{% endfor %}</ul>
     {% else %}<p class="fine">Nothing to check.</p>{% endif %}

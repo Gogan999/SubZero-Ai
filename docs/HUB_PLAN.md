@@ -320,8 +320,9 @@ the next tool.
    toggle), the Phone setup page.
 5. **Calendar:** iCal address sync, `.ics` upload, agenda and month pages, calendars that open the time clock.
    (A week view was left out: the agenda covers it on a phone.)
-6. **Import:** CSV import with a preview and undo. It finds the columns by their headings; check it against a
-   real Attendance Bot export when one is available.
+6. **Import:** CSV import with a preview, manual matching and undo. Checked against the team's real Attendance Bot
+   Time Sheet Report: each person's hours match its totals to within a few minutes (the export rounds to the
+   minute).
 7. **Still to do:** a release (version 1.0.0), the upgrade on the mini PC, and screenshots for the Shortcut guide.
 
 One installer and updater: `setup.cmd` installs, updates (from a newer release's folder, or by downloading the

@@ -93,6 +93,7 @@ Clock in and out by DMing the bot `in`, `out`, `status` or `hours`, with `/clock
 - **Pages:** My time (anyone edits their own entries; every change is logged), Team (who's in and hours per person), and Admin (anyone's time, entries to check, kiosks, settings, CSV export and import).
 - **Kiosk:** on the Admin page, add a kiosk and open its one-time pairing link on the screen by the door. Its QR code changes every 30 seconds.
 - **Shortcuts:** each person makes a key on the Phone setup page, which has step-by-step instructions.
+- **Moving from Attendance Bot:** on the Admin page, import its Time Sheet Report CSV as it is. Names are matched to the Slack workspace's members (people who haven't signed in yet get an account their sign-in uses later), the preview shows each person's hours to compare with Attendance Bot's totals, and you can fix any match first. Entries over 12 hours go on the list to check. An import can be undone.
 
 ## Calendar
 

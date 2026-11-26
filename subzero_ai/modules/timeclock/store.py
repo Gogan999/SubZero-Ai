@@ -329,14 +329,14 @@ class TimeClock:
         return {"clock_in": row["clock_in"], "clock_out": row["clock_out"], "note": row["note"]}
 
     def add_entry(self, user_id: int, start: datetime, end: datetime, note: str, *, editor_id: int | None,
-                  source: str = "edit", batch: str | None = None) -> int:
+                  source: str = "edit", batch: str | None = None, flag: str | None = None) -> int:
         self._check(user_id, start, end, None)
         now = iso(self.now())
         with self.db.transaction() as conn:
             cur = conn.execute(
                 "INSERT INTO tc_entries (user_id, clock_in, clock_out, in_source, out_source, note, import_batch, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (user_id, iso(start), iso(end), source, source, note or None, batch, now, now))
+                "flag, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, iso(start), iso(end), source, source, note or None, batch, flag, now, now))
             self._log(conn, cur.lastrowid, editor_id, "import" if batch else "add", None,
                       {"clock_in": iso(start), "clock_out": iso(end), "note": note or None})
             return cur.lastrowid

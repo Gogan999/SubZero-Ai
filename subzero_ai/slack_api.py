@@ -99,6 +99,17 @@ class SlackWebApi:
         body = await self.call("users.info", user=user_id)
         return body["user"]
 
+    async def workspace_members(self) -> list[dict[str, Any]]:
+        """Every member of the workspace (users.list), including bots and deactivated accounts."""
+        found: list[dict[str, Any]] = []
+        cursor = None
+        while True:
+            body = await self.call("users.list", limit=200, cursor=cursor)
+            found += body.get("members", [])
+            cursor = (body.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                return found
+
     async def private_channels(self) -> list[dict[str, str]]:
         """Private channels the bot has been invited to."""
         channels: list[dict[str, str]] = []
@@ -163,6 +174,9 @@ class FakeSlack:
 
     async def channel_members(self, channel: str) -> set[str]:
         return set(self.members)
+
+    async def workspace_members(self) -> list[dict[str, Any]]:
+        return [{"id": uid, **info} for uid, info in self.users.items()]
 
     async def user_info(self, user_id: str) -> dict[str, Any]:
         return self.users.get(user_id, {"id": user_id, "deleted": False,

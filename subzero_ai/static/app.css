@@ -585,7 +585,7 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
   border: 1px solid var(--field-edge); border-radius: 8px; background: var(--paper); color: var(--ink);
 }
 .field textarea { max-width: none; resize: vertical; }
-.inline-role input, .inline-role select, .range input, .range select, .week-grid input {
+.inline-role input, .inline-role select, .range input, .range select, .week-grid input, select.match {
   font: inherit; max-width: 100%; padding: .4rem .55rem;
   border: 1px solid var(--field-edge); border-radius: 8px; background: var(--paper); color: var(--ink);
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import secrets
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -14,11 +15,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from ...roles import is_builtin_user, is_dev_user
 from ...store import Viewer
 from ...web import current_viewer, error_page, page, render, services
 from . import EDIT_OTHERS, EDIT_OWN, USE, VIEW_ALL, clock_for, rules
-from .importer import CsvImportError, parse_csv
+from .importer import CsvImportError, match, parse_csv
 from .store import EntryError, TimeClock, iso, parse_iso
+
+log = logging.getLogger("subzero.timeclock")
 
 SOURCES = {"slack": "Slack", "web": "Website", "kiosk": "Kiosk", "nfc": "NFC tag", "shortcut": "Shortcut",
            "shortcut_leave": "Left the building", "auto_close": "Nightly clock-out", "edit": "Edited",
@@ -330,13 +334,44 @@ async def export_csv(request: Request, viewer: Viewer) -> Response:
 
 
 # ---------------------------------------------------------------------- import
+async def import_people(s) -> list[dict]:
+    """Everyone a row can be matched to: people who have signed in, then Slack members who haven't yet."""
+    people, known = [], set()
+    for row in s.db.all("SELECT id, name, email, slack_user_id FROM users WHERE active = 1"):
+        if is_builtin_user(row["slack_user_id"]) and not is_dev_user(row["slack_user_id"]):
+            continue
+        known.add(row["slack_user_id"])
+        people.append({"key": f"u:{row['id']}", "name": row["name"],
+                       "aliases": [row["name"], row["email"] or "", row["slack_user_id"]]})
+    if s.slack is not None:
+        try:
+            members = await s.slack.workspace_members()
+        except Exception:
+            log.warning("Couldn't list the Slack workspace's members for an import", exc_info=True)
+            members = []
+        for m in members:
+            if m.get("deleted") or m.get("is_bot") or m.get("id") in known or m.get("id") == "USLACKBOT":
+                continue
+            profile = m.get("profile") or {}
+            names = [profile.get("real_name"), profile.get("display_name"), m.get("real_name"), m.get("name")]
+            names = [n for n in names if n]
+            if names:
+                people.append({"key": f"s:{m['id']}", "name": names[0],
+                               "aliases": names + [profile.get("email") or "", m["id"]]})
+    return people
+
+
+def saved_preview(request: Request) -> tuple[str | None, dict | None]:
+    key = request.session.get("tc_import")
+    raw = services(request).db.get_kv(f"timeclock.import.{key}") if key else None
+    return (key, json.loads(raw)) if raw else (None, None)
+
+
 @page(require=EDIT_OTHERS)
 async def import_page(request: Request, viewer: Viewer) -> Response:
-    s = services(request)
-    key = request.session.get("tc_import")
-    preview = json.loads(s.db.get_kv(f"timeclock.import.{key}") or "null") if key else None
+    _, preview = saved_preview(request)
     return render(request, "timeclock/import.html", viewer, preview=preview, tools=tool_links(viewer),
-                  error=request.session.pop("tc_error", None))
+                  error=request.session.pop("tc_error", None), flash=request.session.pop("flash", None))
 
 
 @page(require=EDIT_OTHERS)
@@ -346,7 +381,7 @@ async def import_upload(request: Request, viewer: Viewer) -> Response:
     upload = form.get("file")
     data = await upload.read() if upload is not None and hasattr(upload, "read") else b""
     try:
-        preview = parse_csv(data[:5_000_000], clock_for(s), s.db)
+        preview = parse_csv(data[:5_000_000], clock_for(s), await import_people(s))
     except CsvImportError as exc:
         request.session["tc_error"] = str(exc)
         return RedirectResponse("/timeclock/import", status_code=303)
@@ -357,22 +392,47 @@ async def import_upload(request: Request, viewer: Viewer) -> Response:
 
 
 @page(require=EDIT_OTHERS)
+async def import_match(request: Request, viewer: Viewer) -> Response:
+    s = services(request)
+    key, preview = saved_preview(request)
+    if preview is None:
+        return RedirectResponse("/timeclock/import", status_code=303)
+    form = await request.form()
+    for index in range(len(preview["people"])):
+        who = str(form.get(f"w{index}", ""))
+        if f"p{index}" in form and any(p["who"] == who for p in preview["people"]):
+            preview = match(preview, who, str(form.get(f"p{index}", "")))
+    s.db.set_kv(f"timeclock.import.{key}", json.dumps(preview))
+    flash(request, "Saved the matches.")
+    return RedirectResponse("/timeclock/import", status_code=303)
+
+
+@page(require=EDIT_OTHERS)
 async def import_confirm(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     clock = clock_for(s)
-    key = request.session.pop("tc_import", None)
-    raw = s.db.get_kv(f"timeclock.import.{key}") if key else None
-    if not raw:
+    key, preview = saved_preview(request)
+    if preview is None:
         return RedirectResponse("/timeclock/import", status_code=303)
+    request.session.pop("tc_import", None)
     s.db.delete_kv(f"timeclock.import.{key}")
     batch = f"import-{key}"
+    names = dict(map(tuple, preview["options"]))
+    users: dict[str, int] = {}
     added, skipped = 0, 0
-    for row in json.loads(raw)["rows"]:
-        if not row.get("user_id"):
+    for row in preview["rows"]:
+        if not row["key"] or row["problem"]:
             continue
+        if row["key"] not in users:
+            kind, _, ident = row["key"].partition(":")
+            if kind == "s":
+                users[row["key"]] = s.store.upsert_user(slack_user_id=ident, name=names.get(row["key"], ident),
+                                                        role="student")["id"]
+            else:
+                users[row["key"]] = int(ident)
         try:
-            clock.add_entry(row["user_id"], parse_iso(row["start"]), parse_iso(row["end"]), "",
-                            editor_id=viewer.id, source="import", batch=batch)
+            clock.add_entry(users[row["key"]], parse_iso(row["start"]), parse_iso(row["end"]), row["note"],
+                            editor_id=viewer.id, source="import", batch=batch, flag="long" if row["long"] else None)
             added += 1
         except EntryError:
             skipped += 1
@@ -547,6 +607,7 @@ routes = [
     Route("/timeclock/export.csv", export_csv),
     Route("/timeclock/import", import_page),
     Route("/timeclock/import", import_upload, methods=["POST"]),
+    Route("/timeclock/import/match", import_match, methods=["POST"]),
     Route("/timeclock/import/confirm", import_confirm, methods=["POST"]),
     Route("/timeclock/import/cancel", import_cancel, methods=["POST"]),
     Route("/timeclock/import/{batch:str}/undo", import_undo, methods=["POST"]),
