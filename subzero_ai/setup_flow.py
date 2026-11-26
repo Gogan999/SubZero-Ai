@@ -68,7 +68,7 @@ def slack_manifest(settings: Settings, public_url: str | None = None) -> dict:
             "background_color": "#1a5a86",
         },
         "features": {
-            "app_home": {"home_tab_enabled": False, "messages_tab_enabled": True,
+            "app_home": {"home_tab_enabled": True, "messages_tab_enabled": True,
                          "messages_tab_read_only_enabled": False},
             "bot_user": {"display_name": settings.app_name, "always_online": True},
         },
@@ -80,7 +80,7 @@ def slack_manifest(settings: Settings, public_url: str | None = None) -> dict:
             },
         },
         "settings": {
-            "event_subscriptions": {"bot_events": ["message.im"]},
+            "event_subscriptions": {"bot_events": ["message.im", "app_home_opened"]},
             "interactivity": {"is_enabled": True},
             "org_deploy_enabled": False,
             "socket_mode_enabled": True,

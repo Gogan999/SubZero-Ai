@@ -51,13 +51,13 @@ module offers.
 subzero_ai/
   (existing files stay where they are: web.py, store.py, db.py, slack_handlers.py, ...)
   hub/                      core additions
-    modules.py              the Module interface and the list of installed modules
-    permissions.py          permission registry, role defaults, Viewer.can()
+    modules.py              the Module interface, per-module migrations, the tool switcher's entries
+    permissions.py          roles, permissions, role defaults and the Grants table
+    core.py                 the Hub's own module (hub.manage, the assigned_role column, hub_role_permissions)
     people.py               People and Permissions pages
-    home.py                 Hub home page and the Slack Home tab
-    router.py               routes Slack DMs, button taps and slash commands to modules
+    router.py               routes Slack DMs, button taps and the Home tab to modules
   modules/
-    ai/__init__.py          registers the existing chat, review and code pages (it wraps them; nothing moves)
+    ai.py                   the existing chat as a module: its permission, tool entry and Home tab section
     timeclock/              routes.py, store.py, slack.py, rules.py, kiosk.py, templates/
     calendar/               routes.py, store.py, ics.py, sync.py, templates/
 ```
@@ -102,19 +102,21 @@ Every method is optional. A module that only adds pages fills in `routes` and `n
 
 ### Roles and permissions
 
-- **Roles:** the old `admin` role becomes **coach**, `mentor` stays **mentor**, `student` stays
-  **student**, and **lead** is new. A `users.assigned_role` column holds the role picked on the People page.
+- **Roles:** the stored role keys stay SubZero AI's `admin`, `mentor` and `student`, plus a new `lead`. People
+  see them as **Coach**, **Mentor**, **Lead** and **Student**. A `users.assigned_role` column holds the role picked
+  on the People page.
 - **How a person's role is worked out:**
   1. People listed as admins in Settings, and the recovery sign-in, are always coaches. This means a coach
      can never be locked out.
-  2. Members of #claude-approvals are mentors, unless their assigned role is coach. This can be turned off.
+  2. Members of #claude-approvals are mentors, unless their assigned role is coach. This can be turned off on
+     the Settings page ("Members of the approvals channel are mentors").
   3. Everyone else gets their assigned role. New people start as students.
-- **Permissions:** each module registers its permissions with default roles. A `role_permissions` table holds
+- **Permissions:** each module registers its permissions with default roles. A `hub_role_permissions` table holds
   what coaches change on the Permissions page, which is a grid of checkboxes. The Coach column can't be unticked.
-- **Safety rule:** some permissions have a lowest allowed role. "Approve AI messages" can never be given to
-  students. This keeps the mentor approval flow as strong as it is today.
+- **Safety rule:** a permission can name roles that may never have it. Acting as an AI mentor and managing the
+  Hub can never be given to students, which keeps the mentor approval flow as strong as it is today.
 - **Code:** `Viewer.can("timeclock.edit_others")`. The existing `is_mentor` and `is_admin` become
-  `can("ai.review")` and `can("hub.manage")`, so the current checks keep working unchanged. `page(require=...)`
+  `can("ai.mentor")` and `can("hub.manage")`, so the current checks keep working unchanged. `page(require=...)`
   also accepts a permission name.
 
 Default permissions:
@@ -125,7 +127,7 @@ Default permissions:
 | `timeclock.edit_own`: edit own entries | ✓ | ✓ | ✓ | ✓ |
 | `timeclock.view_all`: who's in now, everyone's hours | ✓ | ✓ | ✓ | – |
 | `timeclock.edit_others`: edit anyone's time, CSV export and import | ✓ | ✓ | – | – |
-| `ai.review`: approve AI messages (what mentors do today) | ✓ | ✓ | – | never |
+| `ai.mentor`: act as a mentor in SubZero AI (what mentors do today) | ✓ | ✓ | – | never |
 | `calendar.view`: see the calendar | ✓ | ✓ | ✓ | ✓ |
 | `calendar.manage`: add calendars and upload files | ✓ | ✓ | – | – |
 | `hub.manage`: Settings, People, Permissions, audit log | ✓ | – | – | – |
@@ -310,13 +312,14 @@ README update.
    - set up `SubZero-Hub` from SubZero AI's history, with the `upstream` remote pointing at SubZero-Ai
    - change the user-facing name and the update source
    - update CLAUDE.md
-1. **Core and modules:**
+1. **Core and modules:** *done (on the local `hub` branch)*
    - module registry and per-module migrations
    - roles and permissions, People and Permissions pages
    - Slack router, Home tab, Hub home page, tool switcher
    - the AI module wrapper
 
-   No change to how the AI chat behaves.
+   No change to how the AI chat behaves. Until a second tool exists, `/` still opens the chat and the sidebar
+   shows no tool switcher.
 2. **Time Clock basics:**
    - Slack `in` / `out` / `status` / `hours`, `/clock`, Home-tab buttons
    - the My time, Team and Admin pages

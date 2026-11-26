@@ -1,5 +1,6 @@
 {% from "_icons.html" import icon %}
 {% set recent = recents() %}
+{% set tools = hub_tools() %}
 <aside class="sidebar" id="sidebar" aria-label="Sidebar">
   <div class="side-top">
     <a class="brand" href="/chats">
@@ -8,6 +9,16 @@
     </a>
   </div>
   <div class="side-scroll">
+    {% if tools|length > 1 %}
+    <nav aria-label="Tools">
+      <ul class="side-nav tools">
+        <li><a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ icon('star') }} Home</a></li>
+        {% for t in tools %}
+        <li><a href="{{ t.href }}" {% if path.startswith(t.href) %}aria-current="page"{% endif %}>{{ icon(t.icon) }} {{ t.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+    {% endif %}
     <nav aria-label="Main">
       <a class="side-new" href="/chats" {% if path == '/chats' %}aria-current="page"{% endif %}><span class="side-new-mark">{{ icon('plus') }}</span> New chat</a>
       <ul class="side-nav">

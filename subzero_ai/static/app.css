@@ -434,6 +434,12 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .audit th, .audit td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
 .audit th { background: var(--muted-bg); font-weight: 650; }
 .audit .details { display: grid; gap: .2rem; color: var(--ink-2); }
+/* Hub home: one tile per tool */
+.tool-tiles { list-style: none; padding: 0; margin: 1.25rem 0 0; display: grid; gap: .75rem;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.tool-tile { display: flex; align-items: center; gap: .6rem; padding: 1rem; border: 1px solid var(--rule);
+  border-radius: var(--radius); background: var(--sheet); color: var(--ink); font-weight: 600; text-decoration: none; }
+.tool-tile:hover { background: var(--frost); }
 /* People and Permissions */
 .people td .field-hint { display: block; }
 .inline-role { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }

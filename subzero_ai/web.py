@@ -83,6 +83,8 @@ from .roles import DEV_USERS, RECOVERY_USER, Directory, is_excluded_account
 from .slack_api import FakeSlack, SlackWebApi
 from .slack_dm import SlackDMs
 from .slack_handlers import SlackInteractions
+from .hub import modules as hub_modules
+from .hub.router import SlackRouter
 from .socket_mode import SocketModeClient, WebsocketsTransport
 from .store import (
     APPROVED,
@@ -251,6 +253,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
         interactions.dms = svc.dms = dms
         runner.on_reply, runner.on_reply_done = dms.on_reply, dms.on_reply_done
         approvals.on_decided = dms.on_decided
+        interactions.router = SlackRouter(svc)
     return svc
 
 
@@ -482,6 +485,7 @@ def render(request: Request, name: str, viewer: Viewer | None, status_code: int 
         # The sidebar's Recents: the viewer's own chats, looked up only when a page draws the sidebar
         "recents": (lambda: conversation_list(s, viewer, "mine", "", limit=RECENTS + 1)) if viewer else list,
         "recents_shown": RECENTS,
+        "hub_tools": (lambda: hub_modules.tools_for(viewer)) if viewer else list,
     }
     base.update(context)
     return templates.TemplateResponse(request, name, base, status_code=status_code)
@@ -615,7 +619,12 @@ def list_context(s: Services, viewer: Viewer, request: Request) -> dict[str, Any
 # --------------------------------------------------------------------------- pages
 async def home(request: Request) -> Response:
     viewer = await current_viewer(request)
-    return RedirectResponse("/chats" if viewer else "/login", status_code=303)
+    if viewer is None:
+        return RedirectResponse("/login", status_code=303)
+    tools = hub_modules.tools_for(viewer)
+    if len(tools) <= 1:
+        return RedirectResponse(tools[0].href if tools else "/chats", status_code=303)
+    return render(request, "hub_home.html", viewer, tools=tools)
 
 
 async def login_page(request: Request) -> Response:

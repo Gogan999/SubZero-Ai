@@ -48,13 +48,16 @@ class SlackInteractions:
         self.slack = slack
         self.tasks = tasks
         self.dms = None  # SlackDMs, set by build_services
+        self.router = None  # hub.router.SlackRouter, set by build_services
 
     async def dispatch(self, envelope: dict[str, Any]) -> dict[str, Any] | None:
         """Handles one Socket Mode envelope and returns its acknowledgement."""
         if envelope.get("type") == "events_api":
             event = (envelope.get("payload") or {}).get("event") or {}
-            if self.dms is not None and event.get("type") == "message" and event.get("channel_type") == "im":
-                self.tasks.spawn(self.dms.handle_event(event), name="slack-dm")
+            if event.get("type") == "message" and event.get("channel_type") == "im":
+                self.tasks.spawn(self._direct_message(event), name="slack-dm")
+            elif event.get("type") == "app_home_opened" and event.get("tab") == "home" and self.router is not None:
+                self.tasks.spawn(self.router.publish_home(event.get("user", "")), name="slack-home")
             return None
         if envelope.get("type") != "interactive":
             return None
@@ -66,6 +69,13 @@ class SlackInteractions:
         if kind == "view_submission":
             return await self.view_submission(payload)
         return None
+
+    async def _direct_message(self, event: dict[str, Any]) -> None:
+        """Offers a DM to the modules first, then to the AI."""
+        if self.router is not None and await self.router.direct_message(event):
+            return
+        if self.dms is not None:
+            await self.dms.handle_event(event)
 
     async def reviewer(self, slack_user_id: str, *, fresh: bool = True) -> Viewer | None:
         """The mentor behind a tap, or None. fresh=True re-reads #claude-approvals instead of using the cached list."""
@@ -87,6 +97,9 @@ class SlackInteractions:
     async def block_action(self, payload: dict[str, Any]) -> None:
         action = (payload.get("actions") or [{}])[0]
         action_id = action.get("action_id")
+        if ":" in str(action_id) and self.router is not None:
+            await self.router.action(payload, str(action_id))
+            return
         user_id = (payload.get("user") or {}).get("id", "")
         channel = (payload.get("channel") or {}).get("id") or (payload.get("container") or {}).get("channel_id")
         try:

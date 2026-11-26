@@ -95,7 +95,7 @@ The **Create Slack app** button and `slack-manifest.yaml` set all of these up fo
 | `groups:read` | Lists the private channels the bot was invited to (so the setup page can offer #claude-approvals) and reads that channel's members to know who the mentors are. Without it you get "missing_scope" after inviting the bot to the channel. | `conversations.list`, `conversations.members` |
 | `users:read` | Looks up names and profile pictures, and spots deactivated, guest, and bot accounts. | `users.info` |
 
-**Event subscriptions** (bot events): `message.im`, delivered over Socket Mode like button clicks. The app's **Messages** tab must also be on and not read-only (`messages_tab_read_only_enabled: false` in the manifest).
+**Event subscriptions** (bot events): `message.im` and `app_home_opened`, delivered over Socket Mode like button clicks. The app's **Messages** tab must also be on and not read-only (`messages_tab_read_only_enabled: false` in the manifest), and its **Home** tab on (`home_tab_enabled: true`), which shows each tool's section. Publishing the Home tab (`views.publish`) needs no extra scope.
 
 **User token scopes** (Sign in with Slack): `openid`, `email`, `profile`. These let a student sign in and give the app their Slack ID, name, email, and workspace. The app never keeps the user token.
 

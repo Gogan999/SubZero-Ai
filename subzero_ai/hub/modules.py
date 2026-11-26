@@ -47,6 +47,10 @@ class Module:
         """A Slack button tap whose action_id starts with "<key>:". Returns True if handled."""
         return False
 
+    def slack_home_blocks(self, services: Any, viewer: Viewer) -> list[dict[str, Any]]:
+        """The module's section of the Slack Home tab, as Block Kit blocks."""
+        return []
+
     async def tick(self, services: Any) -> None:
         """Called every minute."""
 
@@ -55,6 +59,11 @@ def installed() -> list[Module]:
     """The modules in this install, in menu order."""
     from ..modules import MODULES
     return MODULES
+
+
+def tools_for(viewer: Viewer) -> list[NavItem]:
+    """Every module's tool switcher entries for this viewer, in menu order."""
+    return [item for module in installed() for item in module.nav(viewer)]
 
 
 def module_versions(conn: sqlite3.Connection) -> dict[str, int]:

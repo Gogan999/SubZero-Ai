@@ -81,6 +81,9 @@ class SlackWebApi:
     async def open_view(self, trigger_id: str, view: dict) -> None:
         await self.call("views.open", trigger_id=trigger_id, view=view)
 
+    async def publish_home(self, user_id: str, view: dict) -> None:
+        await self.call("views.publish", user_id=user_id, view=view)
+
     # Lookups -----------------------------------------------------------------
     async def channel_members(self, channel: str) -> set[str]:
         members: set[str] = set()
@@ -127,6 +130,7 @@ class FakeSlack:
     ephemerals: list[dict[str, Any]] = field(default_factory=list)
     dms: list[dict[str, Any]] = field(default_factory=list)
     views: list[dict[str, Any]] = field(default_factory=list)
+    homes: list[dict[str, Any]] = field(default_factory=list)
     team_id: str = "TDEV"
     channels: list[dict[str, str]] = field(default_factory=list)
     fail_posts: bool = False
@@ -153,6 +157,9 @@ class FakeSlack:
 
     async def open_view(self, trigger_id: str, view: dict) -> None:
         self.views.append({"trigger_id": trigger_id, "view": view})
+
+    async def publish_home(self, user_id: str, view: dict) -> None:
+        self.homes.append({"user": user_id, "view": view})
 
     async def channel_members(self, channel: str) -> set[str]:
         return set(self.members)
