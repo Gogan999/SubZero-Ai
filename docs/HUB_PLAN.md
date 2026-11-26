@@ -308,8 +308,10 @@ Default permissions:
 Each phase ends with every existing test passing, plus new tests for what it adds, and a short
 README update.
 
-0. **Repository:** *done: the `hub` branch of SubZero-Ai*
-   - change the user-facing name
+0. **Repository and name:** *done: the `hub` branch of SubZero-Ai, renamed SubZero Hub*
+   - every name people see says SubZero Hub; SubZero AI is the AI chat's own name inside the Hub
+   - an install whose app name is still the old default "SubZero AI" (in config.env or saved on the Settings
+     page) shows SubZero Hub after the update; a custom name is kept
    - update CLAUDE.md
 1. **Core and modules:** *done (on the local `hub` branch)*
    - module registry and per-module migrations

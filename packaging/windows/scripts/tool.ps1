@@ -1,4 +1,4 @@
-# Runs one SubZero AI command as an administrator, with the bundled Python and the data in ProgramData.
+# Runs one SubZero Hub command as an administrator, with the bundled Python and the data in ProgramData.
 # Used by back-up-now.cmd, check-settings.cmd, and recovery-code.cmd.
 param(
     [Parameter(Mandatory = $true)][string]$Command

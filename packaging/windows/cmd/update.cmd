@@ -1,5 +1,5 @@
 @echo off
-rem Updates SubZero AI to the newest release, keeping all data.
+rem Updates SubZero Hub to the newest release, keeping all data.
 if exist "%~dp0scripts\update.ps1" goto run
 echo.
 echo This has to run from the unzipped folder, not from inside the zip.

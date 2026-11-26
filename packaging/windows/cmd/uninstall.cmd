@@ -1,5 +1,5 @@
 @echo off
-rem Removes SubZero AI. The data folder is kept.
+rem Removes SubZero Hub. The data folder is kept.
 if exist "%~dp0scripts\uninstall.ps1" goto run
 echo.
 echo This has to run from the unzipped folder, not from inside the zip.

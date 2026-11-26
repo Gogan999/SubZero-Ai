@@ -1,4 +1,4 @@
-# SubZero AI needs Python 3.12 or 3.13.
+# SubZero Hub needs Python 3.12 or 3.13.
 # Tested with the versions in the comments. Milestone 4's installer will bundle exact versions.
 starlette>=0.40,<2            # web framework (tested: 1.7.0)
 uvicorn>=0.30,<1              # web server (tested: 0.54.0)

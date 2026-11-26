@@ -1,4 +1,4 @@
-# Updates SubZero AI to the newest release (run update.cmd in C:\Program Files\SubZeroAI).
+# Updates SubZero Hub to the newest release (run update.cmd in C:\Program Files\SubZeroAI).
 #   - downloads the newest SubZeroAI-windows.zip from the GitHub releases page (or uses -Zip)
 #   - backs up the data first (a backup labelled pre-update)
 #   - replaces the app and its Python, keeping config.env, chats, files, and backups
@@ -19,9 +19,9 @@ $work = Join-Path $env:TEMP ("SZ-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 $previous = Join-Path $env:TEMP ("SZ-prev-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 
 try {
-    Write-Host "SubZero AI update" -ForegroundColor Cyan
+    Write-Host "SubZero Hub update" -ForegroundColor Cyan
     $current = Get-InstalledVersion
-    if (-not $current) { throw "SubZero AI isn't installed in $InstallDir. Run install.cmd from the release zip instead." }
+    if (-not $current) { throw "SubZero Hub isn't installed in $InstallDir. Run install.cmd from the release zip instead." }
     $release = Get-Content (Join-Path $InstallDir "release.json") -Raw | ConvertFrom-Json
     New-Item -ItemType Directory -Force -Path $work | Out-Null
 
@@ -60,7 +60,7 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $unpacked)
     $newRoot = Get-ChildItem -Path $unpacked -Recurse -Filter "release.json" | Select-Object -First 1 | ForEach-Object { $_.DirectoryName }
-    if (-not $newRoot -or -not (Test-Path (Join-Path $newRoot "python\python.exe"))) { throw "That zip isn't a SubZero AI release." }
+    if (-not $newRoot -or -not (Test-Path (Join-Path $newRoot "python\python.exe"))) { throw "That zip isn't a SubZero Hub release." }
     $newVersion = Get-InstalledVersion $newRoot
     if ((Compare-AppVersion $newVersion $current) -lt 0 -and -not $Force) {
         throw "That zip has version $newVersion, which is older than the installed $current. Nothing was changed."

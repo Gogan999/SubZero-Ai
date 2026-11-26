@@ -210,7 +210,7 @@ class PageTest(unittest.TestCase):
 
     def test_without_the_program(self):
         with mock.patch("subzero_ai.web_admin.claude_cli_path", return_value=None):
-            self.assertIn("Install the newest SubZero AI zip", self.admin.get("/settings").text)
+            self.assertIn("Install the newest SubZero Hub zip", self.admin.get("/settings").text)
             page = self.post("/settings/bridge/sign-in").text
         self.assertIn("Couldn&#39;t find the Claude Code program", page)
         self.assertFalse(self.h.services.bridge_login.waiting())

@@ -1,4 +1,4 @@
-// SubZero AI browser script: sending messages and files, mentor actions, explainers, and live updates.
+// SubZero Hub browser script: sending messages and files, mentor actions, explainers, and live updates.
 (() => {
   "use strict";
 

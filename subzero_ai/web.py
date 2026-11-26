@@ -697,7 +697,7 @@ async def auth_callback(request: Request) -> Response:
                 request.session["login_error"] = "Couldn't reach Slack to finish signing in. Try again in a minute."
                 return RedirectResponse("/login", status_code=303)
     if is_excluded_account(info, s.settings) and profile["slack_user_id"] not in s.settings.admin_slack_ids:
-        request.session["login_error"] = ("SubZero AI is for full members of the team's Slack workspace. "
+        request.session["login_error"] = ("SubZero Hub is for full members of the team's Slack workspace. "
                                           "Guest accounts can't sign in. Ask a coach if you think this is a mistake.")
         s.db.audit("sign_in_refused", actor_id=None, details={"slack_user_id": profile["slack_user_id"],
                                                                "reason": "guest or bot account"})
@@ -1703,7 +1703,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                 app.state.socket_client = client
                 s.health.socket_client = client
                 loops.append(asyncio.create_task(client.run_forever(stop)))
-        log.info("SubZero AI %s is running at %s", __version__, settings.public_url)
+        log.info("SubZero Hub %s is running at %s", __version__, settings.public_url)
         try:
             yield
         finally:

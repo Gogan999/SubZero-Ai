@@ -1,8 +1,8 @@
-<!-- WinSW settings for the SubZero AI Windows service. install.ps1 registers it; the app reads its
+<!-- WinSW settings for the SubZero Hub Windows service. install.ps1 registers it; the app reads its
      settings from C:\ProgramData\SubZeroAI\config.env. Changes to this file apply when the service restarts. -->
 <service>
   <id>SubZeroAI</id>
-  <name>SubZero AI</name>
+  <name>SubZero Hub</name>
   <description>Mentor-approved Claude for the robotics team. Answers on 127.0.0.1:8787 for the Cloudflare Tunnel.</description>
   <executable>%BASE%\..\python\python.exe</executable>
   <arguments>-m subzero_ai</arguments>

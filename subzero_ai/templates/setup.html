@@ -63,7 +63,7 @@
 
   <section class="panel" id="channel" aria-labelledby="s3">
     <div class="step-head"><h2 id="s3">3. Approvals channel</h2>{{ status('channel') }}</div>
-    <p class="field-hint">In Slack, create a private channel named #claude-approvals and add the coaches and mentors. Everyone in it can approve student messages. Then type <span class="mono">/invite @SubZero AI</span> in the channel and reload this page.</p>
+    <p class="field-hint">In Slack, create a private channel named #claude-approvals and add the coaches and mentors. Everyone in it can approve student messages. Then type <span class="mono">/invite @SubZero Hub</span> in the channel and reload this page.</p>
     <form method="post" action="/setup/channel">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       {% if channels %}
@@ -88,7 +88,7 @@
 
   <section class="panel" id="claude" aria-labelledby="s4">
     <div class="step-head"><h2 id="s4">4. Claude API key</h2>{{ status('claude') }}</div>
-    <p class="field-hint">At <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>, create a workspace named SubZero AI, set its monthly spend limit, and create an API key inside it. Saving sends one tiny test request, which costs a fraction of a cent.</p>
+    <p class="field-hint">At <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>, create a workspace named SubZero Hub, set its monthly spend limit, and create an API key inside it. Saving sends one tiny test request, which costs a fraction of a cent.</p>
     <form method="post" action="/setup/claude" autocomplete="off">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="field">

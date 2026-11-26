@@ -39,7 +39,7 @@ def card_body(text: str, link: str) -> str:
         body = body[:CARD_TEXT_LIMIT].rstrip() + "…"
     quoted = _quote(_mrkdwn_escape(body))
     if len(text) > CARD_TEXT_LIMIT:
-        quoted += f"\n<{link}|Open in SubZero AI to read the whole message>"
+        quoted += f"\n<{link}|Open in SubZero Hub to read the whole message>"
     return quoted
 
 
@@ -47,7 +47,7 @@ def files_line(files: list[tuple[str, int]], link: str) -> str:
     """The attached files as a list on the card, with a link to the chat."""
     names = ", ".join(f"{_mrkdwn_escape(name)} ({size_label(size)})" for name, size in files)
     word = "file" if len(files) == 1 else "files"
-    return f":paperclip: {len(files)} {word}: {names}. <{link}|View in SubZero AI>"
+    return f":paperclip: {len(files)} {word}: {names}. <{link}|View in SubZero Hub>"
 
 
 def approval_card(*, message_id: int, student_name: str, subteam: str | None, title: str | None,
@@ -176,10 +176,10 @@ def edit_modal(message_id: int, text: str) -> dict:
 def too_long_to_edit_modal(link: str) -> dict:
     return {
         "type": "modal",
-        "title": {"type": "plain_text", "text": "Edit in SubZero AI"},
+        "title": {"type": "plain_text", "text": "Edit in SubZero Hub"},
         "close": {"type": "plain_text", "text": "Close"},
         "blocks": [{"type": "section", "text": {"type": "mrkdwn",
-                    "text": f"This message is too long to edit in Slack. <{link}|Open it in SubZero AI> to edit it there."}}],
+                    "text": f"This message is too long to edit in Slack. <{link}|Open it in SubZero Hub> to edit it there."}}],
     }
 
 

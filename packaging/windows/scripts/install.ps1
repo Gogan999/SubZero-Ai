@@ -1,8 +1,8 @@
-# Installs SubZero AI on this PC (run install.cmd in the unzipped folder):
+# Installs SubZero Hub on this PC (run install.cmd in the unzipped folder):
 #   - copies the app, with its own Python, to C:\Program Files\SubZeroAI
 #   - creates C:\ProgramData\SubZeroAI for settings, chats, backups, and logs, readable only by administrators
 #     and the app's service account
-#   - installs the app as the "SubZero AI" Windows service, starting automatically with nobody signed in
+#   - installs the app as the "SubZero Hub" Windows service, starting automatically with nobody signed in
 #   - installs the Cloudflare Tunnel connector as a Windows service, using the tunnel token you paste
 #   - opens the setup page
 # Running it again repairs an install and keeps all data. To move to a newer version, use update.cmd.
@@ -22,8 +22,8 @@ Assert-Admin $PSCommandPath $fwd
 $Source = Split-Path -Parent $PSScriptRoot
 
 try {
-    Write-Host "SubZero AI installer" -ForegroundColor Cyan
-    if (-not [Environment]::Is64BitOperatingSystem) { throw "SubZero AI needs 64-bit Windows." }
+    Write-Host "SubZero Hub installer" -ForegroundColor Cyan
+    if (-not [Environment]::Is64BitOperatingSystem) { throw "SubZero Hub needs 64-bit Windows." }
     if (-not (Test-Path (Join-Path $Source "python\python.exe"))) {
         throw "This folder is missing the bundled Python. Unzip the whole SubZeroAI-windows.zip and run install.cmd from it."
     }
@@ -34,7 +34,7 @@ try {
     }
 
     # ------------------------------------------------------------------ files
-    Write-Step "Copying SubZero AI $version to $InstallDir"
+    Write-Step "Copying SubZero Hub $version to $InstallDir"
     Stop-AppService
     Copy-AppFiles $Source $InstallDir
     # Removes the "came from the internet" mark from the copied files.
@@ -56,7 +56,7 @@ try {
     }
 
     # ------------------------------------------------------------------ app service
-    Write-Step "Installing the SubZero AI Windows service"
+    Write-Step "Installing the SubZero Hub Windows service"
     $wrapper = Join-Path $InstallDir "service\SubZeroAI.exe"
     if (-not (Get-AppService)) {
         & $wrapper install | Out-Null
@@ -73,16 +73,16 @@ try {
     Set-DataFolderAccess
     Write-Ok "Installed. It starts on its own after a restart, with nobody signed in."
 
-    Write-Step "Starting SubZero AI"
+    Write-Step "Starting SubZero Hub"
     Start-AppService
     $health = Wait-Healthy 90
     if ($null -eq $health) {
-        throw "SubZero AI didn't start. The log is in $DataDir\logs (subzero.log and SubZeroAI.err.log)."
+        throw "SubZero Hub didn't start. The log is in $DataDir\logs (subzero.log and SubZeroAI.err.log)."
     }
     Write-Ok "Running version $($health.version) at http://localhost:$AppPort"
 
     # Checks that Windows restarts the app when it stops on its own.
-    Write-Note "Checking that Windows restarts SubZero AI if it stops..."
+    Write-Note "Checking that Windows restarts SubZero Hub if it stops..."
     $appPython = Join-Path $InstallDir "python\python.exe"
     $child = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Where-Object { $_.ExecutablePath -eq $appPython } | Select-Object -First 1
     if ($child) {
@@ -92,7 +92,7 @@ try {
             Write-Ok "It came back by itself."
         } else {
             Write-Problem "Windows didn't restart it. Starting it by hand. After finishing setup, if the site doesn't"
-            Write-Problem "come back, restart the SubZero AI service in services.msc, and report this."
+            Write-Problem "come back, restart the SubZero Hub service in services.msc, and report this."
             Start-AppService
             $null = Wait-Healthy 60
         }
@@ -130,7 +130,7 @@ try {
     # ------------------------------------------------------------------ finish
     Write-Step "Almost done"
     if ($health.setup_complete) {
-        Write-Ok "SubZero AI is already set up. Nothing else to do."
+        Write-Ok "SubZero Hub is already set up. Nothing else to do."
     } else {
         Write-Note "Finish on the setup page: http://localhost:$AppPort/setup (it only opens on this PC)."
         if (-not $NoBrowser) { Start-Process "http://localhost:$AppPort/setup" }

@@ -109,7 +109,7 @@ def health_rows(s: Services) -> list[dict[str, Any]]:
     if newer:
         rows.append({"label": "Version", "state": "Update available", "kind": "unknown",
                      "detail": f"You have {__version__}. Version {newer['version']} is out. "
-                               "On the mini PC, run update.cmd in the SubZero AI folder.",
+                               "On the mini PC, run update.cmd in the SubZero Hub folder.",
                      "link": newer.get("url")})
     else:
         rows.append({"label": "Version", "state": __version__, "kind": "plain", "detail": "Up to date as of the "
@@ -127,7 +127,7 @@ def _names_for(s: Services, slack_ids) -> str:
 
 
 KEY_HELP = {
-    "anthropic": "Create the key inside the SubZero AI workspace at platform.claude.com (Settings, API keys). "
+    "anthropic": "Create the key inside the SubZero Hub workspace at platform.claude.com (Settings, API keys). "
                  "It starts with sk-ant-.",
     "openai": "Make a key at platform.openai.com, under API keys.",
     "google": "Make a key at aistudio.google.com, with Get API key.",
@@ -386,7 +386,7 @@ def key_problem(provider: str, key: str) -> str:
     if not 16 <= len(key) <= 512:
         return f"That doesn't look like a {name} key. Copy the whole key again."
     if provider == "anthropic" and not key.startswith("sk-ant-"):
-        return "The Anthropic key starts with sk-ant-. Create it inside the SubZero AI workspace."
+        return "The Anthropic key starts with sk-ant-. Create it inside the SubZero Hub workspace."
     return ""
 
 
@@ -588,7 +588,7 @@ async def restart_app(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     restart = request.app.state.request_restart
     if restart is None:
-        flash(request, "This copy can't restart itself. Restart SubZero AI on the mini PC (or restart the "
+        flash(request, "This copy can't restart itself. Restart SubZero Hub on the mini PC (or restart the "
                        "SubZeroAI service in Windows Services).")
         return RedirectResponse("/settings#restart", status_code=303)
     s.db.audit("app_restarted", actor_id=viewer.id, details={"settings": [
@@ -636,7 +636,7 @@ async def bridge_sign_in(request: Request, viewer: Viewer) -> Response:
     cli = claude_cli_path(s.settings.pi_gateway_script or None)
     if cli is None:
         flash(request, "Couldn't find the Claude Code program that comes with the AI helper. Install the newest "
-                       "SubZero AI zip, then try again.")
+                       "SubZero Hub zip, then try again.")
         return RedirectResponse("/settings#bridge", status_code=303)
     try:
         await asyncio.to_thread(s.bridge_login.start, cli, login_env(s.settings.data_dir), viewer.name)
@@ -892,7 +892,7 @@ async def setup_step(request: Request) -> Response:
                 members = await s.slack_factory(s.settings.slack_bot_token).channel_members(channel)
             except Exception as exc:
                 errors["channel"] = (f"The app can't see that channel ({getattr(exc, 'error', '') or exc}). "
-                                     "Type /invite @SubZero AI in the channel, then try again.")
+                                     "Type /invite @SubZero Hub in the channel, then try again.")
             else:
                 _save_config(s, {"SLACK_APPROVALS_CHANNEL": channel})
                 s.settings.slack_approvals_channel = channel
@@ -902,7 +902,7 @@ async def setup_step(request: Request) -> Response:
     elif step == "claude":
         key = form.get("anthropic_api_key") or s.settings.anthropic_api_key
         if not key.startswith("sk-ant-"):
-            errors["claude"] = "The API key starts with sk-ant-. Create it inside the SubZero AI workspace."
+            errors["claude"] = "The API key starts with sk-ant-. Create it inside the SubZero Hub workspace."
         else:
             try:
                 await s.claude_factory(key).complete(

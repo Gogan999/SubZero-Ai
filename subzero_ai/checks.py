@@ -122,7 +122,7 @@ async def run_checks(settings: Settings, *, slack=None, claude=None, node_runner
                     error = getattr(exc, "error", "")
                     if error in ("not_in_channel", "channel_not_found"):
                         add(FAIL, "The bot can't see the approvals channel",
-                            "Check SLACK_APPROVALS_CHANNEL, then type /invite @SubZero AI in #claude-approvals.")
+                            "Check SLACK_APPROVALS_CHANNEL, then type /invite @SubZero Hub in #claude-approvals.")
                     else:
                         add(FAIL, "Couldn't read the approvals channel", _slack_reason(exc))
 
@@ -187,7 +187,7 @@ async def _check_sandbox_network(settings: Settings, add, runner=None) -> None:
     if problems:
         add(FAIL, "The sandbox network isn't locked down, so Code sandboxes won't start",
             "; ".join(problem.rstrip(".") for problem in problems) + ". An administrator needs to run "
-            "sandbox-network.ps1 -Action Install once, in an administrator PowerShell in the SubZero AI folder.")
+            "sandbox-network.ps1 -Action Install once, in an administrator PowerShell in the SubZero Hub folder.")
     else:
         add(OK, "The sandbox network is locked down",
             f"Sandboxes can reach only this PC, on the switch {settings.sandbox_switch}.")
@@ -200,7 +200,7 @@ def _check_egress(egress, add) -> None:
             f"Sandboxes reach the internet only through {egress.host}:{egress.port}, and only to the allowed websites.")
     else:
         add(FAIL, "The sandbox internet proxy isn't running, so Code sandboxes won't start",
-            egress.error or "Restart SubZero AI. If it still doesn't start, check the sandbox address and port.")
+            egress.error or "Restart SubZero Hub. If it still doesn't start, check the sandbox address and port.")
 
 
 async def _check_models(settings: Settings, client, add, *, pi: bool, node_runner=None) -> None:
@@ -227,7 +227,7 @@ async def _check_models(settings: Settings, client, add, *, pi: bool, node_runne
         models = [m for m in models if model_provider(m[1]) not in missing]
     elif not settings.anthropic_api_key:
         add(FAIL, "No Claude API key",
-            "Set ANTHROPIC_API_KEY. Create the key inside the SubZero AI workspace at platform.claude.com.")
+            "Set ANTHROPIC_API_KEY. Create the key inside the SubZero Hub workspace at platform.claude.com.")
         return
     for label, model, effort in models:
         try:
@@ -300,7 +300,7 @@ def _slack_reason(exc: Exception) -> str:
 
 def print_report(results: list[Check], out=None) -> int:
     out = out or sys.stdout
-    print("SubZero AI settings check", file=out)
+    print("SubZero Hub settings check", file=out)
     print("", file=out)
     for r in results:
         print(f"  {r.status:<5} {r.title}", file=out)

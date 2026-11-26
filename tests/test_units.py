@@ -138,7 +138,7 @@ class SlackCardsTest(unittest.TestCase):
                                            text="x" * 5000, link="https://ai.example.org/c/3")
         body = blocks[1]["text"]["text"]
         self.assertLess(len(body), 3000, "Slack section text is limited to 3,000 characters")
-        self.assertIn("Open in SubZero AI to read the whole message", body)
+        self.assertIn("Open in SubZero Hub to read the whole message", body)
 
     def test_text_is_escaped_for_slack(self):
         blocks = slack_cards.approval_card(message_id=7, student_name="<!channel>", subteam=None, title="a & b",

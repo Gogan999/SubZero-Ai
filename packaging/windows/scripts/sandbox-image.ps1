@@ -14,7 +14,7 @@
 # saved file. Remove: deletes only the base disk and its saved SHA-256 file, and only when no VM disk uses it as its
 # parent.
 # Only the file named by -ParentName, inside -Folder, and its .sha256 file are ever written or deleted. The folder must
-# be inside the SubZero AI data folder's sandbox folder, which Build creates.
+# be inside the SubZero Hub data folder's sandbox folder, which Build creates.
 # The release date must be a dated folder (such as 20261015), never "current".
 
 param(

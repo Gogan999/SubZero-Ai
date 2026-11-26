@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs SubZero AI on macOS or Linux.
+# Runs SubZero Hub on macOS or Linux.
 #   scripts/run.sh --test-mode --open   sample sign-ins and a pretend Claude
 #   scripts/run.sh check                check config.env, Slack, and the Claude API key
 #   scripts/run.sh                      start the app (reads ./data/config.env or ./config.env)

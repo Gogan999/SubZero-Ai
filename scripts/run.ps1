@@ -1,4 +1,4 @@
-# Runs SubZero AI on Windows. Use the .cmd files in the app folder rather than calling this directly.
+# Runs SubZero Hub on Windows. Use the .cmd files in the app folder rather than calling this directly.
 #   run.ps1            start the app with C:\ProgramData\SubZeroAI\config.env
 #   run.ps1 -TestMode  sample sign-ins and a pretend Claude, data in the app folder's test-data
 #   run.ps1 -Check     check config.env, Slack, and the Claude API key
@@ -67,7 +67,7 @@ if ($Installed -ne $Hash) {
 
 if ($TestMode) {
     Write-Host ""
-    Write-Host "Starting SubZero AI in test mode at http://localhost:8787" -ForegroundColor Cyan
+    Write-Host "Starting SubZero Hub in test mode at http://localhost:8787" -ForegroundColor Cyan
     Write-Host "Sign in as a sample person. Close this window to stop."
     Write-Host ""
     & $VenvPython -m subzero_ai --test-mode --open
@@ -94,7 +94,7 @@ if ($Check) {
 
 & $VenvPython -m subzero_ai check
 Write-Host ""
-Write-Host "Starting SubZero AI. Keep this window open; closing it stops the app." -ForegroundColor Cyan
+Write-Host "Starting SubZero Hub. Keep this window open; closing it stops the app." -ForegroundColor Cyan
 Write-Host ""
 # Exit code 3 means the app asked to restart.
 do {

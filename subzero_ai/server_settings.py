@@ -54,7 +54,7 @@ assert tuple(c for c, _ in BACKEND_CHOICES) == BACKENDS
 ENV_SECTIONS: dict[str, tuple[str, str, list[EnvField]]] = {
     "engine": ("AI engine", "Which program sends messages to the AI companies.", [
         EnvField("ai_backend", "AI engine", "choice",
-                 "The AI helper is a small Node.js program that came with SubZero AI. It's needed for any company "
+                 "The AI helper is a small Node.js program that came with SubZero Hub. It's needed for any company "
                  "besides Anthropic. After switching and restarting, press Run checks under Connected accounts.",
                  restart=True, choices=BACKEND_CHOICES),
         EnvField("pi_request_timeout", "Longest AI helper reply, in seconds", "int",
@@ -64,9 +64,9 @@ ENV_SECTIONS: dict[str, tuple[str, str, list[EnvField]]] = {
                  "Only for the AI helper. A reply that goes quiet for longer is stopped.", restart=True,
                  minimum=10, maximum=900),
         EnvField("pi_node", "Node.js program", "path",
-                 "Leave empty to use the copy that came with SubZero AI.", restart=True, optional=True),
+                 "Leave empty to use the copy that came with SubZero Hub.", restart=True, optional=True),
         EnvField("pi_gateway_script", "AI helper script", "path",
-                 "Leave empty to use pi_gateway\\gateway.mjs in the SubZero AI folder.", restart=True, optional=True),
+                 "Leave empty to use pi_gateway\\gateway.mjs in the SubZero Hub folder.", restart=True, optional=True),
         EnvField("anthropic_base_url", "Anthropic API address", "base-url",
                  "Leave it as https://api.anthropic.com unless Anthropic tells you otherwise.", restart=True),
     ]),

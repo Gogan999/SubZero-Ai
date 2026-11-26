@@ -1087,7 +1087,7 @@ def network_refusal(problems: list[str]) -> str:
     """The message a sandbox gets when the host network check doesn't pass."""
     reasons = "; ".join(problem.rstrip(".") for problem in problems)
     return (f"The sandbox network isn't locked down yet: {reasons}; an administrator needs to run the sandbox network "
-            "setup script (sandbox-network.ps1 in the SubZero AI folder, with -Action Install).")
+            "setup script (sandbox-network.ps1 in the SubZero Hub folder, with -Action Install).")
 
 
 # --------------------------------------------------------------------------- Hyper-V: guest commands
@@ -1743,7 +1743,7 @@ class SandboxManager:
         """Why sandboxes can't be made because the egress proxy isn't running, in plain words."""
         reason = self.egress.error if self.egress is not None and self.egress.error else "It hasn't started"
         return (f"The sandbox's internet proxy isn't running, so no sandbox can be made. {reason.rstrip('.')}. "
-                "Restart SubZero AI after changing sandbox settings, then try again.")
+                "Restart SubZero Hub after changing sandbox settings, then try again.")
 
     # ---- proxy tokens (see egress_proxy.py)
     def _issue_locked(self, handle: SandboxHandle) -> str:

@@ -86,7 +86,7 @@ See `docs/CODE_SANDBOX_PLAN.md`.
 **Internet access for sandboxes.** A sandbox can't reach the internet directly. Its commands reach it only through the egress proxy on the mini PC (`subzero_ai/egress_proxy.py`), which runs when `CODE_SANDBOX` is `hyperv`. The proxy opens only secure connections (port 443 by default) to the names in `SANDBOX_ALLOWED_HOSTS`. It refuses IP addresses, names that point at this PC or a private network, and every request that isn't a secure connection. Each sandbox has its own login, which is cut off when the sandbox is deleted, and the login is never written to the log, the audit log or a command's output. Refused websites are written to the audit log (`sandbox_proxy_blocked`), at most once a minute for each sandbox and name. Changing the websites, ports or limits applies to the next connection. If the proxy can't start (for example, the host address isn't on this PC), no sandbox is made, and the Settings overview says why.
 
 **One-time administrator step.** Before the first Hyper-V sandbox, an administrator runs the sandbox network setup
-script once, in an administrator PowerShell on the mini PC, from the SubZero AI folder:
+script once, in an administrator PowerShell on the mini PC, from the SubZero Hub folder:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\sandbox-network.ps1 -Action Install
@@ -236,7 +236,7 @@ claude-login` on the mini PC still works too. The Cloudflare Tunnel itself is ma
 ## Sandbox base image (one-time administrator step)
 
 Every Hyper-V sandbox is made from one base disk, set by `SANDBOX_BASE_IMAGE`. An administrator builds it once, on the
-mini PC, in an administrator PowerShell, from the SubZero AI folder:
+mini PC, in an administrator PowerShell, from the SubZero Hub folder:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\sandbox-image.ps1 -Action Build -ReleaseDate 20261015

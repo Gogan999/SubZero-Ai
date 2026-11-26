@@ -1,4 +1,4 @@
-# Removes SubZero AI from this PC (run uninstall.cmd in C:\Program Files\SubZeroAI).
+# Removes SubZero Hub from this PC (run uninstall.cmd in C:\Program Files\SubZeroAI).
 # The data folder (C:\ProgramData\SubZeroAI: config.env, chats, backups) is kept unless you ask to delete it.
 param(
     [switch]$RemoveData
@@ -10,12 +10,12 @@ if ($RemoveData) { $fwd += "-RemoveData" }
 Assert-Admin $PSCommandPath $fwd
 
 try {
-    Write-Host "Uninstall SubZero AI" -ForegroundColor Cyan
-    $answer = Read-Host "   This removes the SubZero AI service and program files. Type YES to continue"
+    Write-Host "Uninstall SubZero Hub" -ForegroundColor Cyan
+    $answer = Read-Host "   This removes the SubZero Hub service and program files. Type YES to continue"
     if ($answer -ne "YES") { Write-Note "Nothing was changed."; return }
 
     if (Get-AppService) {
-        Write-Step "Removing the SubZero AI service"
+        Write-Step "Removing the SubZero Hub service"
         Stop-AppService
         & (Join-Path $InstallDir "service\SubZeroAI.exe") uninstall | Out-Null
         Write-Ok "Removed."

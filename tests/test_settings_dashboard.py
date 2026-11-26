@@ -22,7 +22,7 @@ APP = "xapp-1-A111-SECRETAPPTOKEN99"
 CLIENT_SECRET = "SECRETCLIENTSECRET0123456789"
 OPENAI_KEY = "sk-openaiSECRETSECRET123456"
 
-SITE = {"public_url": "https://ai.team.org", "app_name": "SubZero AI", "timezone": "America/Chicago",
+SITE = {"public_url": "https://ai.team.org", "app_name": "SubZero Hub", "timezone": "America/Chicago",
         "max_text_file_kb": "200", "backup_dir": "", "backup_hour": "2", "check_for_updates": "1",
         "update_repo": "Gogan999/SubZero-Ai"}
 ENGINE = {"ai_backend": "fake", "pi_request_timeout": "300", "pi_idle_timeout": "120", "pi_node": "",
@@ -120,7 +120,7 @@ class SiteTest(Base):
         self.assertEqual(self.h.services.pending_restart, {"timezone": "America/New_York"})
         self.assertIn('value="America/New_York"', resp.text)
         changes = {d["setting"]: (d["from"], d["to"]) for d in self.audit()}
-        self.assertEqual(changes["App name"], ("SubZero AI", "Shop AI"))
+        self.assertEqual(changes["App name"], ("SubZero Hub", "Shop AI"))
         self.assertEqual(changes["Time zone"], ("America/Chicago", "America/New_York"))
         # Saving the old value again clears the restart note
         self.post("/settings/env/site", {**form, "timezone": "America/Chicago"})

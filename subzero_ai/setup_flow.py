@@ -64,7 +64,7 @@ def slack_manifest(settings: Settings, public_url: str | None = None) -> dict:
     return {
         "display_information": {
             "name": settings.app_name,
-            "description": "Mentor-approved Claude for the robotics team",
+            "description": "The robotics team's tools behind one Slack sign-in, with a mentor-approved AI chat",
             "background_color": "#1a5a86",
         },
         "features": {

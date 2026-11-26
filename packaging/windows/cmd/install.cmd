@@ -1,5 +1,5 @@
 @echo off
-rem Installs SubZero AI on this PC. Windows asks for administrator permission.
+rem Installs SubZero Hub on this PC. Windows asks for administrator permission.
 if exist "%~dp0scripts\install.ps1" goto run
 echo.
 echo This has to run from the unzipped folder, not from inside the zip.

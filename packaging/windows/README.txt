@@ -1,4 +1,4 @@
-SubZero AI for Windows
+SubZero Hub for Windows
 ======================
 
 Install (on the mini PC)
@@ -27,4 +27,4 @@ Where things are after installing
                                     Only administrators and the app's service can open it.
   C:\Program Files\cloudflared      the Cloudflare Tunnel connector
 
-Both the SubZero AI and Cloudflared services start on their own after a restart, with nobody signed in.
+Both the SubZero Hub and Cloudflared services start on their own after a restart, with nobody signed in.

@@ -1,4 +1,4 @@
-# Shared helpers for the SubZero AI install, update, restore, and uninstall scripts.
+# Shared helpers for the SubZero Hub install, update, restore, and uninstall scripts.
 # Dot-source it:  . (Join-Path $PSScriptRoot "common.ps1")
 # Written for Windows PowerShell 5.1. ASCII-only.
 
@@ -73,7 +73,7 @@ function Get-AppService { return Get-Service -Name $ServiceName -ErrorAction Sil
 function Stop-AppService {
     $svc = Get-AppService
     if ($null -eq $svc -or $svc.Status -eq "Stopped") { return }
-    Write-Note "Stopping the SubZero AI service..."
+    Write-Note "Stopping the SubZero Hub service..."
     Stop-Service -Name $ServiceName -Force
     $svc.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(60))
 }
@@ -98,7 +98,7 @@ function Wait-Healthy([int]$Seconds = 90, [string]$WantVersion = "") {
     return $null
 }
 
-# Run a SubZero AI command (like "backup") with the bundled Python, against the data in ProgramData.
+# Run a SubZero Hub command (like "backup") with the bundled Python, against the data in ProgramData.
 function Invoke-AppTool([string[]]$ToolArgs, [string]$Dir = $InstallDir) {
     $python = Join-Path $Dir "python\python.exe"
     $env:DATA_DIR = $DataDir

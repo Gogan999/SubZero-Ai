@@ -77,7 +77,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8787
     session_secret: str = field(default="", repr=False)
-    app_name: str = "SubZero AI"
+    app_name: str = "SubZero Hub"
     timezone: str = "America/Chicago"
 
     # Claude API
@@ -231,6 +231,9 @@ class Settings:
         return self.public_url.rstrip("/") + path
 
 
+# The app's default name before SubZero Hub; a config.env that still has it gets the new default
+OLD_APP_NAME = "SubZero AI"
+
 _CONVERTERS = {
     bool: _as_bool,
     int: int,
@@ -339,6 +342,8 @@ def load_settings(env_file: str | os.PathLike | None = None, *, search_cwd: bool
         setattr(settings, name, value)
     for name in MODEL_ID_SETTINGS:
         setattr(settings, name, normalize_model_id(getattr(settings, name)))
+    if settings.app_name == OLD_APP_NAME:
+        settings.app_name = Settings.app_name
 
     settings.data_dir = Path(settings.data_dir)
     for sub in ("data", "files", "backups", "logs"):

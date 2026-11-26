@@ -1,5 +1,5 @@
 @echo off
-rem Tries SubZero AI without installing it: sample sign-ins and a pretend Claude. Close the window to stop.
+rem Tries SubZero Hub without installing it: sample sign-ins and a pretend Claude. Close the window to stop.
 if exist "%~dp0scripts\test-mode.ps1" goto run
 echo.
 echo This has to run from the unzipped folder, not from inside the zip.

@@ -180,7 +180,7 @@
     {% else %}
     <p class="field-hint">No backups yet.</p>
     {% endif %}
-    <p class="field-hint">Backups are saved in <span class="mono">{{ backup_folder }}</span>. To put one back, run restore.cmd in the SubZero AI folder on the mini PC.</p>
+    <p class="field-hint">Backups are saved in <span class="mono">{{ backup_folder }}</span>. To put one back, run restore.cmd in the SubZero Hub folder on the mini PC.</p>
     <form method="post" action="/settings/backup" class="form-actions">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="button" type="submit">Back up now</button>
@@ -267,7 +267,7 @@
       </div>
     </form>
     {% elif not bridge.found %}
-    <p class="field-hint">The Claude Code program that comes with the AI helper isn't installed on the mini PC. Install the newest SubZero AI zip, then come back here.</p>
+    <p class="field-hint">The Claude Code program that comes with the AI helper isn't installed on the mini PC. Install the newest SubZero Hub zip, then come back here.</p>
     {% else %}
     <p class="field-hint">Press Sign in to get a sign-in link. You open it on any device, sign in, and paste back the code Claude shows. Nothing needs to be done on the mini PC.</p>
     <form method="post" action="/settings/bridge/sign-in" class="form-actions">

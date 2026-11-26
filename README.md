@@ -1,6 +1,10 @@
-# SubZero AI
+# SubZero Hub
 
-A claude.ai-style chat for a high school robotics team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
+The robotics team's tools behind one Sign in with Slack: SubZero AI today, with a Time Clock and a Calendar on the way
+(see [docs/HUB_PLAN.md](docs/HUB_PLAN.md)). Coaches set each person's role (Coach, Mentor, Lead or Student) on the People
+page and what each role can do on the Permissions page.
+
+**SubZero AI** is a claude.ai-style chat for the team. Students ask an AI (Claude by default) about code, mechanisms, physics, and materials. Student messages wait for a mentor to approve them in Slack before Claude sees them (with a short approval window for follow-ups, below), and the whole team can read approved chats.
 
 This is version 0.10.0: all four milestones of the build plan, optional AI providers beyond Claude (see [AI providers and models](#ai-providers-and-models)), messaging the bot in Slack (see [Messaging the bot in Slack](#messaging-the-bot-in-slack)), and every setting, API key and connected account on the Settings page, sorted into sections, with the Claude subscription signed in from the page itself (see [docs/SETTINGS.md](docs/SETTINGS.md)). Code sessions can run their commands in a disposable Hyper-V sandbox (see [docs/CODE_SANDBOX_PLAN.md](docs/CODE_SANDBOX_PLAN.md)); students can use Code once a mentor turns that on. Chats scroll inside the window, admins can delete chats, and mentors see an estimated cost next to token counts.
 
@@ -60,7 +64,7 @@ Download `SubZeroAI-windows.zip` from the [releases page](https://github.com/Gog
 
 - copies the app, with its own Python and Node.js (for the AI helper in `app\pi_gateway`), to `C:\Program Files\SubZeroAI`;
 - creates `C:\ProgramData\SubZeroAI` for settings, chats, files, backups, and logs, readable only by administrators and the app's service account;
-- installs the **SubZero AI** Windows service under its own low-privilege account, set to start automatically;
+- installs the **SubZero Hub** Windows service under its own low-privilege account, set to start automatically;
 - asks for the Cloudflare tunnel token and installs the Cloudflare connector as a Windows service;
 - opens `http://localhost:8787/setup` in the browser.
 
@@ -72,10 +76,10 @@ The setup page only opens on the mini PC, saves each step as you go, and locks w
 
 1. **Address.** Enter `https://ai.yourdomain.org`.
 2. **Slack app.** Click **Create Slack app**, choose the team workspace, and confirm. In the new app, click **Install to Workspace**, then generate an app-level token with the `connections:write` scope. The permissions the app asks for, and why, are listed in [Slack permissions](#slack-permissions). Paste the bot token, app-level token, client ID, and client secret. The page checks them with Slack before saving.
-3. **Approvals channel.** Create the private **#claude-approvals** channel in Slack, add the coaches and mentors, and type `/invite @SubZero AI` in it. Reload the setup page and pick the channel.
-4. **Claude.** At platform.claude.com, create a workspace named **SubZero AI**, set its monthly spend limit, and create an API key inside it. Paste it; the page sends one tiny test request.
+3. **Approvals channel.** Create the private **#claude-approvals** channel in Slack, add the coaches and mentors, and type `/invite @SubZero Hub` in it. Reload the setup page and pick the channel.
+4. **Claude.** At platform.claude.com, create a workspace named **SubZero Hub**, set its monthly spend limit, and create an API key inside it. Paste it; the page sends one tiny test request.
 5. **Admins.** Paste the coaches' Slack member IDs (click a person's name in Slack, open the three-dot menu, and choose **Copy member ID**).
-6. **Finish.** Write down the recovery code it shows and keep it somewhere safe. SubZero AI restarts with the new settings.
+6. **Finish.** Write down the recovery code it shows and keep it somewhere safe. SubZero Hub restarts with the new settings.
 
 ### 4. Check it
 
@@ -87,7 +91,7 @@ The **Create Slack app** button and `slack-manifest.yaml` set all of these up fo
 
 **Bot token scopes** (the `xoxb-` token)
 
-| Scope | Why SubZero AI needs it | Slack calls |
+| Scope | Why SubZero Hub needs it | Slack calls |
 | --- | --- | --- |
 | `chat:write` | Posts approval cards in #claude-approvals, updates them after a mentor decides, and sends DMs and private notes. | `chat.postMessage`, `chat.update`, `chat.postEphemeral` |
 | `im:write` | Opens a DM with a student or admin (approval results, health alerts). | `conversations.open` |
@@ -109,12 +113,12 @@ No scope is needed for `auth.test` (checking the token) or `views.open` (the rej
 
 1. Open the app at [api.slack.com/apps](https://api.slack.com/apps), go to **OAuth & Permissions**, and add the scope under **Bot Token Scopes** (or **User Token Scopes**).
 2. Click **Reinstall to Workspace** at the top of that page (Slack shows a yellow banner asking for it) and allow.
-3. The bot token usually stays the same, but copy the **Bot User OAuth Token** again to be sure. If it changed, paste it on the Settings page or the setup page (or in `SLACK_BOT_TOKEN` in config.env) and restart SubZero AI.
+3. The bot token usually stays the same, but copy the **Bot User OAuth Token** again to be sure. If it changed, paste it on the Settings page or the setup page (or in `SLACK_BOT_TOKEN` in config.env) and restart SubZero Hub.
 4. Run **check-settings.cmd** to confirm Slack is working.
 
 ## Messaging the bot in Slack
 
-You can ask the AI a question straight from Slack: open the bot (SubZero AI) under **Apps** and send it a message.
+You can ask the AI a question straight from Slack: open the bot (SubZero Hub) under **Apps** and send it a message.
 
 - **A mentor still checks it.** Your message goes through the same approval as a message on the website. The bot says "A mentor will check this before the AI answers" and posts the AI's reply in the same Slack thread once it is approved. If a mentor doesn't approve it, the bot tells you why in the thread, and only you see that.
 - **One chat per Slack thread.** A new message to the bot starts a new chat. Reply in that message's thread to keep talking in the same chat. A reply in a thread the bot didn't start won't work, so send a new message instead.
@@ -254,14 +258,14 @@ Everything lives in `C:\ProgramData\SubZeroAI` (in test mode, the `test-data` fo
 
 ## Troubleshooting
 
-- **The installer says SubZero AI didn't start**: read `C:\ProgramData\SubZeroAI\logs\subzero.log` and `SubZeroAI.err.log`. Run install.cmd again after fixing the cause.
+- **The installer says SubZero Hub didn't start**: read `C:\ProgramData\SubZeroAI\logs\subzero.log` and `SubZeroAI.err.log`. Run install.cmd again after fixing the cause.
 - **The setup page says "Not found"**: it only opens on the mini PC itself, at `http://localhost:8787/setup`, and only until setup is finished. To open it again, run `python\python.exe -m subzero_ai reset-setup` from `C:\Program Files\SubZeroAI` in an administrator window (with `DATA_DIR` set to `C:\ProgramData\SubZeroAI`), or change settings on the Settings page instead.
 - **"Python 3.12 or 3.13 isn't installed"** (only when running from a copy of the repository): install it from python.org with "Add python.exe to PATH" ticked, then close and reopen the window.
 - **Sign-in says the sign-in couldn't be verified or the link expired**: check that the computer's clock is right and that `PUBLIC_URL` matches the address in the browser exactly.
 - **Slack says "redirect_uri did not match"**: the Slack app's redirect URL must be `PUBLIC_URL` followed by `/auth/slack/callback`. Run the settings check to see the exact value.
-- **No cards appear in Slack**: run the settings check. Most often the app isn't in the channel (`/invite @SubZero AI`) or the channel ID is wrong.
-- **Buttons on the cards don't do anything**: `SLACK_APP_TOKEN` is missing or wrong, or the SubZero AI service is stopped (check services.msc).
-- **The site shows a Cloudflare error page**: the SubZero AI service isn't running, or the tunnel's URL isn't `127.0.0.1:8787`.
+- **No cards appear in Slack**: run the settings check. Most often the app isn't in the channel (`/invite @SubZero Hub`) or the channel ID is wrong.
+- **Buttons on the cards don't do anything**: `SLACK_APP_TOKEN` is missing or wrong, or the SubZero Hub service is stopped (check services.msc).
+- **The site shows a Cloudflare error page**: the SubZero Hub service isn't running, or the tunnel's URL isn't `127.0.0.1:8787`.
 
 ## For developers
 

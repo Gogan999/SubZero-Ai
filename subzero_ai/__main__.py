@@ -1,4 +1,4 @@
-"""Run SubZero AI.
+"""Run SubZero Hub.
 
     python -m subzero_ai               start the app, using config.env
     python -m subzero_ai --test-mode   start with sample sign-ins (and a pretend Claude if there's no API key)
@@ -34,7 +34,7 @@ COMMANDS = ["run", "check", "claude-login", "backup", "backups", "restore", "rec
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m subzero_ai", description="SubZero AI: mentor-approved Claude.")
+    parser = argparse.ArgumentParser(prog="python -m subzero_ai", description="SubZero Hub: the team's tools.")
     parser.add_argument("command", nargs="?", choices=COMMANDS, default="run",
                         help="run (default) starts the app; see the list above for the others")
     parser.add_argument("name", nargs="?",
@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="sample sign-ins on this PC, data in ./test-data, and a pretend Claude without an API key")
     parser.add_argument("--open", action="store_true", help="open the app in the browser once it starts")
     parser.add_argument("--verbose", action="store_true", help="log more detail")
-    parser.add_argument("--version", action="version", version=f"SubZero AI {__version__}")
+    parser.add_argument("--version", action="version", version=f"SubZero Hub {__version__}")
     return parser
 
 
@@ -224,7 +224,7 @@ def run_tool(command: str, name: str | None, settings: Settings) -> int:
                 print("Say which backup to restore: a file name from 'backups', or latest.")
                 return 2
             if app_is_running(settings):
-                print("SubZero AI is running. Stop it first (restore.cmd does this for you), then try again.")
+                print("SubZero Hub is running. Stop it first (restore.cmd does this for you), then try again.")
                 return 1
             path = backup.find_backup(settings, name)
             result = backup.restore_backup(settings, path)

@@ -18,6 +18,10 @@ MIGRATIONS = (
         PRIMARY KEY (role, permission)
     );
     """,
+    # Version 2: an app name saved on the Settings page as the old default becomes SubZero Hub
+    """
+    UPDATE settings SET value = 'SubZero Hub' WHERE key = 'app_name' AND value = 'SubZero AI';
+    """,
 )
 
 

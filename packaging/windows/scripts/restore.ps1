@@ -1,4 +1,4 @@
-# Puts a SubZero AI backup back (run restore.cmd in C:\Program Files\SubZeroAI).
+# Puts a SubZero Hub backup back (run restore.cmd in C:\Program Files\SubZeroAI).
 #   restore.cmd                     lists the backups and asks which one
 #   restore.cmd -Backup latest      restores the newest backup
 # The service is stopped while the backup goes back, and the current data is saved first
@@ -13,8 +13,8 @@ if ($Backup) { $fwd += @("-Backup", $Backup) }
 Assert-Admin $PSCommandPath $fwd
 
 try {
-    Write-Host "Restore a SubZero AI backup" -ForegroundColor Cyan
-    if (-not (Get-InstalledVersion)) { throw "SubZero AI isn't installed in $InstallDir." }
+    Write-Host "Restore a SubZero Hub backup" -ForegroundColor Cyan
+    if (-not (Get-InstalledVersion)) { throw "SubZero Hub isn't installed in $InstallDir." }
     if (-not $Backup) {
         Write-Step "Backups"
         Invoke-AppTool @("backups") | Out-Null
@@ -37,10 +37,10 @@ try {
     Set-DataFolderAccess
     if (Get-AppService) {
         Start-AppService
-        if ($null -eq (Wait-Healthy 90)) { throw "SubZero AI didn't start after the restore. The log is in $DataDir\logs." }
+        if ($null -eq (Wait-Healthy 90)) { throw "SubZero Hub didn't start after the restore. The log is in $DataDir\logs." }
     }
-    if ($code -ne 0) { throw "The restore didn't finish, so the data wasn't changed. SubZero AI is running again." }
-    Write-Ok "Restored, and SubZero AI is running again."
+    if ($code -ne 0) { throw "The restore didn't finish, so the data wasn't changed. SubZero Hub is running again." }
+    Write-Ok "Restored, and SubZero Hub is running again."
 } catch {
     Write-Host ""
     Write-Host "The restore stopped: $($_.Exception.Message)" -ForegroundColor Red

@@ -166,7 +166,7 @@ def check_backup(path: Path) -> dict:
     with zf, tempfile.TemporaryDirectory(prefix="subzero-check-") as tmp:
         names = set(zf.namelist())
         if MANIFEST not in names or DB_NAME not in names:
-            raise BackupError(f"{path.name} isn't a SubZero AI backup.")
+            raise BackupError(f"{path.name} isn't a SubZero Hub backup.")
         manifest = json.loads(zf.read(MANIFEST))
         for name in names:
             _safe_member(name)
@@ -189,7 +189,7 @@ def _check_database(path: Path) -> None:
     if result != "ok":
         raise BackupError(f"The database in the backup is damaged ({result}).")
     if version > len(MIGRATIONS):
-        raise BackupError("This backup was made by a newer version of SubZero AI. Update the app first, "
+        raise BackupError("This backup was made by a newer version of SubZero Hub. Update the app first, "
                           "then restore it.")
 
 

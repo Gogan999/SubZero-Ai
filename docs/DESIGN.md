@@ -1,6 +1,6 @@
-# SubZero AI design standards
+# SubZero Hub design standards
 
-This file is the rulebook for how the SubZero AI site looks and behaves. Every
+This file is the rulebook for how the SubZero Hub site looks and behaves. Every
 change to a template (`subzero_ai/templates/`), the stylesheet
 (`subzero_ai/static/app.css`) or front-end script (`subzero_ai/static/app.js`)
 must follow it. If a change needs something this file does not allow, update

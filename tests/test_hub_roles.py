@@ -33,7 +33,7 @@ class ModuleMigrationTest(TempDbTest):
     def test_a_new_database_has_the_hub_tables(self):
         columns = [r["name"] for r in self.db.all("PRAGMA table_info(users)")]
         self.assertIn("assigned_role", columns)
-        self.assertEqual(self.db.one("SELECT version FROM hub_module_migrations WHERE module = 'hub'")["version"], 1)
+        self.assertEqual(self.db.one("SELECT version FROM hub_module_migrations WHERE module = 'hub'")["version"], 2)
 
     def test_migrating_again_changes_nothing(self):
         Database(self.db.path)
@@ -56,6 +56,33 @@ class ModuleMigrationTest(TempDbTest):
             modules.installed = original
         self.assertIsNotNone(self.db.one("SELECT name FROM sqlite_master WHERE name = 'extra_b'"))
         self.assertEqual(self.db.one("SELECT version FROM hub_module_migrations WHERE module = 'extra'")["version"], 2)
+
+
+class RenameTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="hub-rename-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_old_default_name_in_config_env_becomes_subzero_hub(self):
+        for written, expected in (("SubZero AI", "SubZero Hub"), ("Shop Tools", "Shop Tools")):
+            with self.subTest(written=written):
+                (self.tmp / "config.env").write_text(f"APP_NAME={written}\n", encoding="utf-8")
+                settings = load_settings(self.tmp / "config.env", search_cwd=False, data_dir=self.tmp)
+                self.assertEqual(settings.app_name, expected)
+        self.assertEqual(load_settings(search_cwd=False, data_dir=self.tmp / "fresh").app_name, "SubZero Hub")
+
+    def test_an_old_saved_name_is_renamed_by_the_hub_migration(self):
+        path = self.tmp / "app.db"
+        db = Database(path)
+        with db.connect() as conn:
+            conn.executescript("BEGIN; DELETE FROM hub_module_migrations WHERE module = 'hub';"
+                               "INSERT INTO hub_module_migrations VALUES ('hub', 1);"
+                               "INSERT INTO settings (key, value, updated_at) VALUES ('app_name', 'SubZero AI', 'x');"
+                               "COMMIT;")
+        Database(path)
+        self.assertEqual(db.one("SELECT value FROM settings WHERE key = 'app_name'")["value"], "SubZero Hub")
 
 
 class GrantsTest(TempDbTest):
