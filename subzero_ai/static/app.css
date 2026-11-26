@@ -434,6 +434,12 @@ body.chat-page .composer { position: static; background: none; padding-top: .5re
 .audit th, .audit td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
 .audit th { background: var(--muted-bg); font-weight: 650; }
 .audit .details { display: grid; gap: .2rem; color: var(--ink-2); }
+/* People and Permissions */
+.people td .field-hint { display: block; }
+.inline-role { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.permissions th[scope="row"] { font-weight: 500; background: none; }
+.permissions td { text-align: center; }
+.permissions input { width: 1.25rem; height: 1.25rem; accent-color: var(--brand); }
 .audit .details .plain { margin-top: .25rem; padding: .4rem .6rem; background: var(--muted-bg); border-radius: 6px; color: var(--ink); }
 
 /* Appearance switch in the account menu, and the Profile page */

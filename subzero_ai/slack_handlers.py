@@ -10,13 +10,14 @@ from .approvals import ApprovalService
 from .config import Settings
 from .live import Tasks
 from .roles import Directory
-from .store import MENTOR_ROLES, PENDING, Store, Viewer
+from .store import PENDING, Store, Viewer
 
 log = logging.getLogger("subzero.slack")
 
 
 async def viewer_for_slack_user(store: Store, slack, slack_user_id: str, role: str,
-                                info: dict[str, Any] | None = None) -> Viewer:
+                                info: dict[str, Any] | None = None,
+                                permissions: frozenset[str] | None = None) -> Viewer:
     """The app account for a Slack member: created from their Slack profile the first time (pass `info` if the
     profile was already fetched), and given the role they have now."""
     row = store.user_by_slack_id(slack_user_id)
@@ -34,7 +35,7 @@ async def viewer_for_slack_user(store: Store, slack, slack_user_id: str, role: s
     elif row["role"] != role:
         store.set_user_role(row["id"], role)
     return Viewer(id=row["id"], slack_user_id=slack_user_id, name=row["name"], role=role,
-                  avatar_url=row["avatar_url"])
+                  avatar_url=row["avatar_url"], permissions=permissions)
 
 
 class SlackInteractions:
@@ -69,9 +70,10 @@ class SlackInteractions:
     async def reviewer(self, slack_user_id: str, *, fresh: bool = True) -> Viewer | None:
         """The mentor behind a tap, or None. fresh=True re-reads #claude-approvals instead of using the cached list."""
         role = await self.directory.role_for(slack_user_id, force=fresh)
-        if role not in MENTOR_ROLES:
+        if not self.directory.allows(role, "ai.mentor"):
             return None
-        return await viewer_for_slack_user(self.store, self.slack, slack_user_id, role)
+        return await viewer_for_slack_user(self.store, self.slack, slack_user_id, role,
+                                           permissions=self.directory.permissions_for(role))
 
     async def _tell(self, channel: str | None, user: str, text: str) -> None:
         try:

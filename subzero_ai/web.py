@@ -233,7 +233,7 @@ def build_services(settings: Settings, *, slack=None, claude=None) -> Services:
     runner.on_alert = approvals.mentor_alert
     health = Health(settings, slack, claude)
     runner.on_result = lambda ok, error: health.record("claude", ok, error)
-    directory = Directory(settings, slack)
+    directory = Directory(settings, slack, db=db)
     interactions = SlackInteractions(settings=settings, store=store, approvals=approvals, directory=directory,
                                      slack=slack, tasks=tasks)
     svc = Services(settings, db, store, slack, claude, broker, tasks, runner, approvals, directory, interactions,
@@ -293,7 +293,7 @@ async def current_viewer(request: Request) -> Viewer | None:
     if role != row["role"]:
         s.store.set_user_role(row["id"], role)
     return Viewer(id=row["id"], slack_user_id=row["slack_user_id"], name=row["name"], role=role,
-                  avatar_url=row["avatar_url"], theme=row["theme"])
+                  avatar_url=row["avatar_url"], theme=row["theme"], permissions=s.directory.permissions_for(role))
 
 
 def is_local_request(request: Request) -> bool:
@@ -415,7 +415,7 @@ def json_error(outcome: Outcome) -> JSONResponse:
 
 
 def page(require: str = "login"):
-    """Route decorator: resolves the viewer and enforces login, mentor, or admin access."""
+    """Route decorator: resolves the viewer and enforces login, mentor, or admin access, or a permission's key."""
 
     def wrap(handler: Callable[[Request, Viewer], Awaitable[Response]]):
         async def endpoint(request: Request) -> Response:
@@ -426,7 +426,8 @@ def page(require: str = "login"):
                     return JSONResponse({"ok": False, "error": "Sign in again to continue."}, status_code=401)
                 request.session["next"] = request.url.path
                 return RedirectResponse("/login", status_code=303)
-            if (require == "mentor" and not viewer.is_mentor) or (require == "admin" and not viewer.is_admin):
+            if ((require == "mentor" and not viewer.is_mentor) or (require == "admin" and not viewer.is_admin)
+                    or ("." in require and not viewer.can(require))):
                 if wants_json:
                     return JSONResponse({"ok": False, "error": "You don't have access to that."}, status_code=403)
                 return error_page(request, viewer, 403, "Mentors only", "This page is for mentors and coaches.")
@@ -1170,7 +1171,8 @@ def _review_action(kind: str):
             if role != viewer.role:
                 s.store.set_user_role(viewer.id, role)
                 viewer = Viewer(id=viewer.id, slack_user_id=viewer.slack_user_id, name=viewer.name, role=role,
-                                avatar_url=viewer.avatar_url, theme=viewer.theme)
+                                avatar_url=viewer.avatar_url, theme=viewer.theme,
+                                permissions=s.directory.permissions_for(role))
         if kind == "approve":
             text = form.get("text")
             outcome = await s.approvals.approve(viewer, mid, edited_text=str(text) if text is not None else None)
@@ -1651,6 +1653,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
                background: bool = True) -> Starlette:
     from .web_admin import admin_routes, apply_live
     from .web_code import code_routes
+    from .hub.people import people_routes
 
     settings = settings or load_settings()
     s = build_services(settings, slack=slack, claude=claude)
@@ -1761,6 +1764,7 @@ def create_app(settings: Settings | None = None, *, slack=None, claude=None,
         Route("/queue/events", queue_events),
         Route("/audit", audit_page),
         *admin_routes,
+        *people_routes,
         *code_routes,
         Route("/about", about_page),
         Route("/healthz", health),

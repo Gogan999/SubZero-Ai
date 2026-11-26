@@ -1,7 +1,8 @@
-"""Who is a student, mentor, or admin.
+"""Who is a coach (admin), mentor, lead or student, and what their role lets them do.
 
-Admins are named in settings. Mentors are the members of the private approvals channel in Slack,
-checked live and cached for a few minutes. Everyone else who signs in is a student.
+In order: admins named in settings and the recovery sign-in are coaches; a role a coach picked on the People page
+as coach wins next; members of the private approvals channel in Slack (checked live and cached for a few minutes)
+are mentors while mentors_from_channel is on; then the role picked on the People page; everyone else is a student.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import logging
 import time
 
 from .config import Settings
+from .db import Database
+from .hub.permissions import ADMIN, ROLES, Grants, default_permissions
 
 log = logging.getLogger("subzero.roles")
 
@@ -18,6 +21,7 @@ log = logging.getLogger("subzero.roles")
 DEV_USERS = [
     {"slack_user_id": "DEV-student-ava", "name": "Ava (student)", "role": "student"},
     {"slack_user_id": "DEV-student-ben", "name": "Ben (student)", "role": "student"},
+    {"slack_user_id": "DEV-lead-lee", "name": "Lee (lead)", "role": "lead"},
     {"slack_user_id": "DEV-mentor-kim", "name": "Mentor Kim", "role": "mentor"},
     {"slack_user_id": "DEV-admin-coach", "name": "Head coach", "role": "admin"},
 ]
@@ -45,10 +49,12 @@ def is_excluded_account(info: dict, settings: Settings) -> bool:
 
 
 class Directory:
-    def __init__(self, settings: Settings, slack, ttl_seconds: float = 300):
+    def __init__(self, settings: Settings, slack, ttl_seconds: float = 300, *, db: Database | None = None):
         self.settings = settings
         self.slack = slack
         self.ttl = ttl_seconds
+        self.db = db
+        self.grants = Grants(db) if db is not None else None
         self._mentors: set[str] = set()
         self._fetched_at: float | None = None
         self._lock = asyncio.Lock()
@@ -75,11 +81,29 @@ class Directory:
     def invalidate(self) -> None:
         self._fetched_at = None
 
+    def assigned_role(self, slack_user_id: str) -> str | None:
+        """The role picked on the People page, if any."""
+        if self.db is None:
+            return None
+        row = self.db.one("SELECT assigned_role FROM users WHERE slack_user_id = ?", (slack_user_id,))
+        role = row["assigned_role"] if row is not None else None
+        return role if role in ROLES else None
+
     async def role_for(self, slack_user_id: str, force: bool = False) -> str:
         if slack_user_id in self.settings.admin_slack_ids or slack_user_id == RECOVERY_USER["slack_user_id"]:
-            return "admin"
+            return ADMIN
+        assigned = self.assigned_role(slack_user_id)
         if is_dev_user(slack_user_id):
-            return _DEV_ROLES.get(slack_user_id, "student")
-        if slack_user_id in await self.mentor_ids(force=force):
+            return assigned or _DEV_ROLES.get(slack_user_id, "student")
+        if assigned == ADMIN:
+            return ADMIN
+        if self.settings.mentors_from_channel and slack_user_id in await self.mentor_ids(force=force):
             return "mentor"
-        return "student"
+        return assigned or "student"
+
+    def permissions_for(self, role: str) -> frozenset[str]:
+        """The permissions a role has now, with the Permissions page's changes."""
+        return self.grants.for_role(role) if self.grants is not None else default_permissions(role)
+
+    def allows(self, role: str, permission: str) -> bool:
+        return role == ADMIN or permission in self.permissions_for(role)

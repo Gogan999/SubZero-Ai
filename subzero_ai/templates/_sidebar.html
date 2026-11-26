@@ -24,6 +24,7 @@
         <li><a href="/queue" {% if path.startswith('/queue') %}aria-current="page"{% endif %}>{{ icon('review') }} Review
           {% if pending_count %}<span class="count" aria-label="{{ pending_count }} waiting">{{ pending_count }}</span>{% endif %}</a></li>
         {% if viewer.is_admin %}
+        <li><a href="/people" {% if path.startswith('/people') or path.startswith('/permissions') %}aria-current="page"{% endif %}>{{ icon('person') }} People</a></li>
         <li><a href="/audit" {% if path.startswith('/audit') %}aria-current="page"{% endif %}>{{ icon('log') }} Audit log</a></li>
         <li><a href="/settings" {% if path.startswith('/settings') %}aria-current="page"{% endif %}>{{ icon('settings') }} Settings
           {% if setting_alert %}<span class="count alert"><span aria-hidden="true">!</span><span class="visually-hidden">needs attention</span></span>{% endif %}</a></li>
@@ -56,7 +57,7 @@
       {% if viewer.avatar_url %}<img class="avatar" src="{{ viewer.avatar_url }}" alt="" width="32" height="32">{% else %}<span class="avatar initial" aria-hidden="true">{{ viewer.name[0] }}</span>{% endif %}
       <span class="account-text">
         <span class="account-name">{{ viewer.name }}</span>
-        <span class="account-role">{{ viewer.role|capitalize }}</span>
+        <span class="account-role">{{ viewer.role_label }}</span>
       </span>
       {{ icon('chevron') }}
     </summary>

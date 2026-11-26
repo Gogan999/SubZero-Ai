@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .db import Database, utcnow
+from .hub.permissions import ADMIN, default_permissions, role_label
 
 MENTOR_ROLES = {"mentor", "admin"}
 THEMES = ("system", "light", "dark")
@@ -39,14 +40,25 @@ class Viewer:
     role: str
     avatar_url: str | None = None
     theme: str = "system"
+    permissions: frozenset[str] | None = None  # None: the role's default permissions
+
+    def can(self, permission: str) -> bool:
+        if self.role == ADMIN:
+            return True
+        granted = self.permissions if self.permissions is not None else default_permissions(self.role)
+        return permission in granted
 
     @property
     def is_mentor(self) -> bool:
-        return self.role in MENTOR_ROLES
+        return self.can("ai.mentor")
 
     @property
     def is_admin(self) -> bool:
-        return self.role == "admin"
+        return self.can("hub.manage")
+
+    @property
+    def role_label(self) -> str:
+        return role_label(self.role)
 
 
 class Store:

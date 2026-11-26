@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}People · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page">
+  <h1>People</h1>
+  <p class="lede">Everyone who has signed in, and their role. New people start as students. <a href="/permissions">Permissions</a> sets what each role can do.</p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  <div class="table-wrap">
+    <table class="audit people">
+      <thead><tr><th scope="col">Name</th><th scope="col">Role now</th><th scope="col">Picked role</th><th scope="col">Last sign-in</th></tr></thead>
+      <tbody>
+        {% for p in people %}
+        <tr>
+          <td>{{ p.name }}</td>
+          <td>{{ p.role }}{% if p.source %}<span class="field-hint">{{ p.source }}</span>{% endif %}</td>
+          <td>
+            {% if p.locked or p.id == viewer.id %}
+            <span class="field-hint">{{ 'Always a coach' if p.locked else 'Your own role' }}</span>
+            {% else %}
+            <form class="inline-role" method="post" action="/people/{{ p.id }}/role">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <label class="visually-hidden" for="role-{{ p.id }}">Role for {{ p.name }}</label>
+              <select id="role-{{ p.id }}" name="role">
+                <option value="" {% if not p.assigned %}selected{% endif %}>Not picked (student)</option>
+                {% for value, label in roles %}<option value="{{ value }}" {% if p.assigned == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+              <button class="button small" type="submit">Save</button>
+            </form>
+            {% endif %}
+          </td>
+          <td>{{ p.last_login }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">Nobody has signed in yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

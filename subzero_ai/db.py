@@ -376,6 +376,8 @@ class Database:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             for index, script in enumerate(MIGRATIONS[version:], start=version + 1):
                 conn.executescript("BEGIN;" + script + f"PRAGMA user_version = {index}; COMMIT;")
+            from .hub.modules import migrate_modules
+            migrate_modules(conn)
         finally:
             conn.close()
 

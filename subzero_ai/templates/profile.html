@@ -10,7 +10,7 @@
       {% if viewer.avatar_url %}<img class="avatar" src="{{ viewer.avatar_url }}" alt="" width="48" height="48">{% else %}<span class="avatar initial" aria-hidden="true">{{ viewer.name[0] }}</span>{% endif %}
       <div>
         <p class="profile-name">{{ viewer.name }}</p>
-        <p class="fine">{{ viewer.role|capitalize }}. Your name and picture come from Slack, so change them there.</p>
+        <p class="fine">{{ viewer.role_label }}. Your name and picture come from Slack, so change them there.</p>
       </div>
     </div>
   </section>

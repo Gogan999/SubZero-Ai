@@ -346,7 +346,8 @@ class SlackDMs:
         if row is not None and not row["active"]:
             return None
         role = await self.directory.role_for(slack_user_id, force=False)
-        return await viewer_for_slack_user(self.store, self.slack, slack_user_id, role, info)
+        return await viewer_for_slack_user(self.store, self.slack, slack_user_id, role, info,
+                                           permissions=self.directory.permissions_for(role))
 
     # ----------------------------------------------------------- posting replies
     def _thread_of(self, user_message_id: int):

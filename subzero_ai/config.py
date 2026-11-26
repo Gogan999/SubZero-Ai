@@ -119,6 +119,7 @@ class Settings:
 
     # Approval rules
     mentors_need_approval: bool = False
+    mentors_from_channel: bool = True  # members of the approvals channel are mentors
     limit_pending_per_student: int = 3
     limit_approved_per_day: int = 25
     reminder_minutes: int = 120

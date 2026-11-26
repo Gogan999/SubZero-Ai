@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Permissions · {{ settings.app_name }}{% endblock %}
+{% block main %}
+<section class="page">
+  <h1>Permissions</h1>
+  <p class="lede">What each role can do. Coaches can always do everything, and some permissions can't be given to students. <a href="/people">People</a> sets each person's role.</p>
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  <form method="post" action="/permissions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="table-wrap">
+      <table class="audit permissions">
+        <thead><tr><th scope="col">Permission</th>{% for value, label in roles %}<th scope="col">{{ label }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for p in table %}
+          <tr>
+            <th scope="row">{{ p.label }}</th>
+            {% for c in p.cells %}
+            <td><input type="checkbox" name="{{ c.name }}" value="1" aria-label="{{ roles[loop.index0][1] }}: {{ p.label }}" {% if c.on %}checked{% endif %} {% if c.fixed %}disabled{% endif %}></td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions"><button class="button primary" type="submit">Save permissions</button></div>
+  </form>
+</section>
+{% endblock %}
