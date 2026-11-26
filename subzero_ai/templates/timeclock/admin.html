@@ -47,24 +47,39 @@
   <section class="panel" id="kiosks" aria-labelledby="kiosk-title">
     <h2 id="kiosk-title">Kiosks</h2>
     <p class="field-hint">A kiosk is a screen by the door that shows a QR code. People scan it with their phone's camera to clock in or out. The code changes every 30 seconds.</p>
-    {% if pairing %}
+    <p class="field-hint">A Slides code puts the QR code in a Google Slides deck instead. It changes at 3 am and 3 pm, so a photo of it stops working within 12 hours.</p>
+    {% if pairing and pairing.slides %}
+    <div class="flash" role="status">
+      <p><strong>This is the Slides code's secret image link.</strong> It's shown only now. Anyone with it can see the current code, so keep it in the deck's script and nowhere else.</p>
+      <ol class="steps">
+        <li>In the Slides deck, open <strong>Extensions</strong>, then <strong>Apps Script</strong>.</li>
+        <li>Replace everything there with this script, then save.</li>
+        <li>Choose <strong>setUp</strong> in the function list, press <strong>Run</strong>, and allow it. The QR code appears on the first slide; move and resize it as you like.</li>
+      </ol>
+      <label class="visually-hidden" for="slides-script">Apps Script</label>
+      <textarea id="slides-script" class="mono" rows="10" readonly>{% include "timeclock/_slides_script.html" %}</textarea>
+      <p><button class="button small" type="button" data-copy-value="#slides-script">Copy</button></p>
+      <p class="fine">The script checks every 10 minutes and changes the picture only when the code changes. The old code keeps working for 20 minutes after each switch.</p>
+    </div>
+    {% elif pairing %}
     <div class="flash" role="status">
       <p><strong>Open this link on the kiosk's screen</strong> within 30 minutes. It works once.</p>
       <p class="mono copyable">{{ pairing.url }}</p>
     </div>
     {% endif %}
     {% if kiosks %}
-    <ul class="who-in">{% for k in kiosks %}<li>{{ k.name }}<span class="fine">last seen {{ k.seen }}</span>
+    <ul class="who-in">{% for k in kiosks %}<li>{{ k.name }}<span class="fine">{{ "Slides, updated" if k.slides else "Screen, last seen" }} {{ k.seen }}</span>
       <span class="row-actions">
-      <form method="post" action="/timeclock/admin/kiosks/{{ k.id }}/pair"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit">New pairing link</button></form>
-      <form method="post" action="/timeclock/admin/kiosks/{{ k.id }}/remove"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit" data-confirm="Remove {{ k.name }}? Its screen stops working.">Remove</button></form>
+      <form method="post" action="/timeclock/admin/kiosks/{{ k.id }}/pair"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit"{% if k.slides %} data-confirm="Make a new image link for {{ k.name }}? The old link stops working, so the deck's script needs the new one."{% endif %}>{{ "New image link" if k.slides else "New pairing link" }}</button></form>
+      <form method="post" action="/timeclock/admin/kiosks/{{ k.id }}/remove"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button small quiet" type="submit" data-confirm="Remove {{ k.name }}? Its QR code stops working.">Remove</button></form>
       </span></li>{% endfor %}</ul>
     {% endif %}
     <form class="inline-role" method="post" action="/timeclock/admin/kiosks">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label class="visually-hidden" for="kiosk-name">Kiosk name</label>
-      <input id="kiosk-name" name="name" maxlength="60" placeholder="Shop door">
-      <button class="button small" type="submit">Add a kiosk</button>
+      <label class="visually-hidden" for="kiosk-name">Name</label>
+      <input id="kiosk-name" name="name" maxlength="60" placeholder="Name, like Shop door">
+      <button class="button small" type="submit" name="kind" value="screen">Add a kiosk</button>
+      <button class="button small quiet" type="submit" name="kind" value="slides">Add a Slides code</button>
     </form>
   </section>
 

@@ -577,6 +577,9 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
 .settings-tab > .field-hint { margin: .3rem 0 0; }
 .settings-tab-title + .field-hint + .panel { margin-top: 1rem; }
 .flash { background: var(--frost); color: var(--ink); border-radius: 8px; padding: .55rem .8rem; margin: 1rem 0 0; }
+.flash textarea { display: block; width: 100%; font-size: .78rem; padding: .5rem; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); color: var(--ink); resize: vertical; }
+.flash .steps { margin: .4rem 0 .6rem; padding-left: 1.3rem; }
+.flash .steps li { margin: .2rem 0; }
 .fields { display: grid; gap: 1rem; }
 .field { display: grid; gap: .3rem; min-width: 0; }
 .field > label { font-weight: 650; font-size: .92rem; }

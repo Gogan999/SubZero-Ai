@@ -249,15 +249,16 @@ async def admin(request: Request, viewer: Viewer) -> Response:
 
 
 def admin_view(request: Request, viewer: Viewer, pairing: dict | None = None) -> Response:
-    """The Admin page. A new kiosk pairing link is shown once, on a page the browser doesn't store."""
+    """The Admin page. A new pairing or image link is shown once, on a page the browser doesn't store."""
     s = services(request)
     clock = clock_for(s)
     settings = clock.settings()
     today = clock.local(clock.now()).date()
     flagged = [{"id": r["id"], "user_id": r["user_id"], "name": r["name"], **entry_view(clock, r, set())}
                for r in clock.flagged()]
-    kiosks = [{"id": k["id"], "name": k["name"], "seen": rules.when_text(clock.local(k["last_seen_at"]), today)
-               if k["last_seen_at"] else "Never"} for k in clock.kiosks()]
+    kiosks = [{"id": k["id"], "name": k["name"], "slides": k["kind"] == "slides",
+               "seen": rules.when_text(clock.local(k["last_seen_at"]), today) if k["last_seen_at"] else "never"}
+              for k in clock.kiosks()]
     batches = s.db.all("SELECT import_batch, COUNT(*) AS n, MIN(created_at) AS at FROM tc_entries WHERE "
                        "import_batch IS NOT NULL AND deleted = 0 GROUP BY import_batch ORDER BY at DESC")
     return render(request, "timeclock/admin.html", viewer, settings=settings, days=rules.DAYS, flagged=flagged,
@@ -285,9 +286,17 @@ async def admin_settings(request: Request, viewer: Viewer) -> Response:
 async def kiosk_add(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     form = await request.form()
+    if form.get("kind") == "slides":
+        kiosk_id, token = clock_for(s).create_slides(str(form.get("name", "")))
+        s.db.audit("kiosk_added", actor_id=viewer.id, target_type="kiosk", target_id=kiosk_id)
+        return admin_view(request, viewer, slides_link(s, kiosk_id, token))
     kiosk_id, code = clock_for(s).create_kiosk(str(form.get("name", "")))
     s.db.audit("kiosk_added", actor_id=viewer.id, target_type="kiosk", target_id=kiosk_id)
     return admin_view(request, viewer, {"id": kiosk_id, "url": s.settings.url(f"/timeclock/kiosk/pair/{code}")})
+
+
+def slides_link(s, kiosk_id: int, token: str) -> dict:
+    return {"id": kiosk_id, "slides": True, "url": s.settings.url(f"/timeclock/slides/{kiosk_id}/{token}.png")}
 
 
 @page(require=EDIT_OTHERS)
@@ -297,6 +306,10 @@ async def kiosk_repair(request: Request, viewer: Viewer) -> Response:
     kiosk = clock.kiosk(request.path_params["kid"])
     if kiosk is None:
         return RedirectResponse("/timeclock/admin#kiosks", status_code=303)
+    if kiosk["kind"] == "slides":
+        token = clock.new_image_token(kiosk["id"])
+        s.db.audit("kiosk_image_link", actor_id=viewer.id, target_type="kiosk", target_id=kiosk["id"])
+        return admin_view(request, viewer, slides_link(s, kiosk["id"], token))
     code = clock.new_pairing_code(kiosk["id"])
     s.db.audit("kiosk_pairing_link", actor_id=viewer.id, target_type="kiosk", target_id=kiosk["id"])
     return admin_view(request, viewer, {"id": kiosk["id"], "url": s.settings.url(f"/timeclock/kiosk/pair/{code}")})
@@ -307,7 +320,7 @@ async def kiosk_remove(request: Request, viewer: Viewer) -> Response:
     s = services(request)
     clock_for(s).revoke_kiosk(request.path_params["kid"])
     s.db.audit("kiosk_removed", actor_id=viewer.id, target_type="kiosk", target_id=request.path_params["kid"])
-    flash(request, "Removed the kiosk. Its screen stops working at once.")
+    flash(request, "Removed it. Its QR code stops working at once.")
     return RedirectResponse("/timeclock/admin#kiosks", status_code=303)
 
 
@@ -568,6 +581,21 @@ def kiosk_state(request: Request, kiosk) -> dict[str, Any]:
     return {"svg": svg, "inside": names, "open": clock.window_open(), "closed_message": clock.closed_message()}
 
 
+async def slides_image(request: Request) -> Response:
+    """The current QR code of a Slides code, as a PNG, for the deck's script to fetch."""
+    s = services(request)
+    clock = clock_for(s)
+    kiosk = clock.slides_for_image(request.path_params["kid"], request.path_params["token"])
+    if kiosk is None:
+        return PlainTextResponse("Not found.", status_code=404, headers=NO_STORE)
+    clock.kiosk_seen(kiosk["id"])
+    out = io.BytesIO()
+    segno.make(s.settings.url(f"/timeclock/k/{kiosk['id']}/{clock.kiosk_code(kiosk)}"), error="m").save(
+        out, kind="png", scale=12, border=2, dark="#142231")
+    return Response(out.getvalue(), media_type="image/png",
+                    headers={**NO_STORE, "X-Robots-Tag": "noindex", "Referrer-Policy": "no-referrer"})
+
+
 async def kiosk_page(request: Request) -> Response:
     kiosk = kiosk_of(request)
     if kiosk is None:
@@ -591,8 +619,9 @@ async def scan(request: Request) -> Response:
     code = request.path_params["code"]
     if code != "done":
         if kiosk is None or not clock.kiosk_code_ok(kiosk, code):
-            return error_page(request, await current_viewer(request), 410, "That code has expired",
-                              "Scan the code on the screen again. It changes every 30 seconds.")
+            again = ("Scan the code on the slide again. It changes at 3 am and 3 pm." if kiosk and
+                     kiosk["kind"] == "slides" else "Scan the code on the screen again. It changes every 30 seconds.")
+            return error_page(request, await current_viewer(request), 410, "That code has expired", again)
         request.session["carry_tc_scan"] = {"kiosk": kiosk["id"], "at": clock.now().timestamp()}
     pending = request.session.get("carry_tc_scan") or {}
     if kiosk is None or pending.get("kiosk") != kiosk["id"] or clock.now().timestamp() - pending.get("at", 0) > 300:
@@ -636,6 +665,7 @@ routes = [
     Route("/timeclock/phone/keys", phone_key, methods=["POST"]),
     Route("/timeclock/phone/keys/{kid:int}/revoke", phone_key_revoke, methods=["POST"]),
     Route("/timeclock/api/event", api_event, methods=["POST"]),
+    Route("/timeclock/slides/{kid:int}/{token:str}.png", slides_image),
     Route("/timeclock/kiosk", kiosk_page),
     Route("/timeclock/kiosk/code", kiosk_code),
     Route("/timeclock/kiosk/pair/{code:str}", kiosk_pair),

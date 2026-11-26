@@ -3,9 +3,12 @@ CSV import and export, personal keys for Shortcuts, and the kiosk."""
 
 from __future__ import annotations
 
+import io
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+import segno
 
 from subzero_ai.hub.modules import tick_all
 from subzero_ai.modules.calendar import calendars_for
@@ -579,3 +582,90 @@ class KioskTest(ClockedHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlidesTest(ClockedHarness):
+    def add(self):
+        page = self.browse(self.kim, "POST", "/timeclock/admin/kiosks", data={"name": "Morning deck",
+                                                                              "kind": "slides"})
+        self.assertEqual(page.headers.get("cache-control"), "no-store")
+        self.url = page.text.split("const IMAGE_URL = '")[1].split("'")[0]
+        self.image_path = self.url.replace("http://localhost:8787", "")
+        self.kiosk = self.clock.kiosks()[0]
+        return page.text
+
+    def code(self):
+        return self.clock.kiosk_code(self.kiosk)
+
+    def test_switches_at_3_am_and_3_pm(self):
+        cases = [(at(2026, 12, 1, 2, 59), at(2026, 11, 30, 15)), (at(2026, 12, 1, 3), at(2026, 12, 1, 3)),
+                 (at(2026, 12, 1, 14, 59), at(2026, 12, 1, 3)), (at(2026, 12, 1, 15), at(2026, 12, 1, 15)),
+                 (at(2026, 11, 1, 2, 30), at(2026, 10, 31, 15)), (at(2026, 11, 1, 9), at(2026, 11, 1, 3))]
+        for moment, start in cases:
+            with self.subTest(moment=moment):
+                self.assertEqual(self.clock.slides_period(moment), start)
+
+    def test_the_admin_page_shows_the_script_once(self):
+        page = self.add()
+        self.assertIn("Extensions", page)
+        self.assertIn("function setUp()", page)
+        self.assertRegex(self.image_path, r"^/timeclock/slides/\d+/[\w-]{32}\.png$")
+        again = self.browse(self.kim, "GET", "/timeclock/admin").text
+        self.assertNotIn(self.image_path, again)
+        self.assertIn("New image link", again)
+        self.assertNotIn(self.image_path.split("/")[-1].removesuffix(".png"), str(self.kiosk["image_hash"]))
+
+    def test_the_image(self):
+        self.add()
+        resp = self.h.client.get(self.image_path)
+        self.assertEqual((resp.status_code, resp.headers["content-type"]), (200, "image/png"))
+        self.assertEqual(resp.headers["cache-control"], "no-store")
+        expected = io.BytesIO()
+        segno.make(f"http://localhost:8787/timeclock/k/{self.kiosk['id']}/{self.code()}", error="m").save(
+            expected, kind="png", scale=12, border=2, dark="#142231")
+        self.assertEqual(resp.content, expected.getvalue())
+        self.now += timedelta(hours=1)
+        self.assertEqual(self.h.client.get(self.image_path).content, resp.content, "same code until 3 am")
+        self.assertIsNotNone(self.clock.kiosk(self.kiosk["id"])["last_seen_at"])
+        for bad in (self.image_path.replace(".png", "x.png"), f"/timeclock/slides/999/{self.image_path[-36:]}"):
+            self.assertEqual(self.h.client.get(bad).status_code, 404)
+
+    def test_a_new_link_stops_the_old_one(self):
+        self.add()
+        page = self.browse(self.kim, "POST", f"/timeclock/admin/kiosks/{self.kiosk['id']}/pair").text
+        fresh = page.split("const IMAGE_URL = '")[1].split("'")[0].replace("http://localhost:8787", "")
+        self.assertNotEqual(fresh, self.image_path)
+        self.assertEqual(self.h.client.get(self.image_path).status_code, 404)
+        self.assertEqual(self.h.client.get(fresh).status_code, 200)
+        self.assertIsNone(self.clock.pair(fresh.split("/")[-1].removesuffix(".png")))
+
+    def test_scanning_and_the_grace_after_a_switch(self):
+        self.add()
+        self.now = at(2026, 12, 5, 14, 50)  # a Saturday, open all day
+        morning = self.code()
+        self.assertIn("re clocked in</h1>", self.ava.get(f"/timeclock/k/{self.kiosk['id']}/{morning}").text)
+        self.now = at(2026, 12, 5, 15, 15)
+        self.assertNotEqual(self.code(), morning)
+        self.assertIn("re clocked out</h1>", self.ava.get(f"/timeclock/k/{self.kiosk['id']}/{morning}").text)
+        self.now = at(2026, 12, 5, 15, 25)
+        resp = self.ben.get(f"/timeclock/k/{self.kiosk['id']}/{morning}")
+        self.assertEqual(resp.status_code, 410)
+        self.assertIn("It changes at 3 am and 3 pm.", resp.text)
+        self.assertIn("re clocked in</h1>", self.ben.get(f"/timeclock/k/{self.kiosk['id']}/{self.code()}").text)
+
+    def test_removing_it(self):
+        self.add()
+        code = self.code()
+        self.kim.post(f"/timeclock/admin/kiosks/{self.kiosk['id']}/remove")
+        self.assertEqual(self.h.client.get(self.image_path).status_code, 404)
+        self.assertEqual(self.ava.get(f"/timeclock/k/{self.kiosk['id']}/{code}").status_code, 410)
+
+    def test_screen_kiosks_still_change_every_30_seconds(self):
+        self.browse(self.kim, "POST", "/timeclock/admin/kiosks", data={"name": "Door", "kind": "screen"})
+        kiosk = self.clock.kiosks()[0]
+        self.assertEqual(kiosk["kind"], "screen")
+        code = self.clock.kiosk_code(kiosk)
+        self.now += timedelta(seconds=35)
+        self.assertTrue(self.clock.kiosk_code_ok(kiosk, code))
+        self.now += timedelta(seconds=30)
+        self.assertFalse(self.clock.kiosk_code_ok(kiosk, code))

@@ -18,6 +18,8 @@ from . import rules
 SETTINGS_KEY = "timeclock.settings"
 MAX_ENTRY = timedelta(hours=24)
 KIOSK_SLOT_SECONDS = 30
+SLIDES_SWITCH_HOURS = (3, 15)
+SLIDES_GRACE = timedelta(minutes=20)
 PAIR_MINUTES = 30
 
 MIGRATIONS = (
@@ -73,6 +75,11 @@ MIGRATIONS = (
         last_seen_at TEXT,
         revoked_at TEXT
     );
+    """,
+    # Version 2: Slides codes, which change twice a day and are fetched from a secret image link
+    """
+    ALTER TABLE tc_kiosks ADD COLUMN kind TEXT NOT NULL DEFAULT 'screen';
+    ALTER TABLE tc_kiosks ADD COLUMN image_hash TEXT;
     """,
 )
 
@@ -431,6 +438,28 @@ class TimeClock:
              iso(now + timedelta(minutes=PAIR_MINUTES)), iso(now)))
         return cur.lastrowid, code
 
+    def create_slides(self, name: str) -> tuple[int, str]:
+        """A new Slides code and its secret image link token."""
+        token = secrets.token_urlsafe(24)
+        cur = self.db.execute(
+            "INSERT INTO tc_kiosks (name, kind, secret, image_hash, created_at) VALUES (?, 'slides', ?, ?, ?)",
+            (name.strip()[:60] or "Slides", secrets.token_hex(32), digest(token), iso(self.now())))
+        return cur.lastrowid, token
+
+    def new_image_token(self, kiosk_id: int) -> str:
+        """A new image link token for a Slides code; the old link stops working."""
+        token = secrets.token_urlsafe(24)
+        self.db.execute("UPDATE tc_kiosks SET image_hash = ? WHERE id = ? AND kind = 'slides'",
+                        (digest(token), kiosk_id))
+        return token
+
+    def slides_for_image(self, kiosk_id: int, token: str) -> sqlite3.Row | None:
+        """The Slides code an image link token belongs to."""
+        row = self.kiosk(kiosk_id)
+        if row is None or row["kind"] != "slides" or not row["image_hash"]:
+            return None
+        return row if hmac.compare_digest(row["image_hash"], digest(token)) else None
+
     def new_pairing_code(self, kiosk_id: int) -> str:
         code = secrets.token_urlsafe(16)
         self.db.execute("UPDATE tc_kiosks SET pair_hash = ?, pair_expires = ? WHERE id = ?",
@@ -439,7 +468,8 @@ class TimeClock:
 
     def pair(self, code: str) -> int | None:
         """The kiosk a pairing code belongs to; each code works once, before it expires."""
-        row = self.db.one("SELECT * FROM tc_kiosks WHERE pair_hash = ? AND revoked_at IS NULL", (digest(code),))
+        row = self.db.one("SELECT * FROM tc_kiosks WHERE pair_hash = ? AND kind = 'screen' AND revoked_at IS NULL",
+                          (digest(code),))
         if row is None or row["pair_expires"] < iso(self.now()):
             return None
         self.db.execute("UPDATE tc_kiosks SET pair_hash = NULL, pair_expires = NULL WHERE id = ?", (row["id"],))
@@ -451,13 +481,30 @@ class TimeClock:
     def kiosk_seen(self, kiosk_id: int) -> None:
         self.db.execute("UPDATE tc_kiosks SET last_seen_at = ? WHERE id = ?", (iso(self.now()), kiosk_id))
 
-    def kiosk_code(self, kiosk: sqlite3.Row, slot: int | None = None) -> str:
-        """The code in the kiosk's QR link for a 30-second slot (the current one by default)."""
-        if slot is None:
-            slot = int(self.now().timestamp()) // KIOSK_SLOT_SECONDS
+    def slides_period(self, moment: datetime | None = None) -> datetime:
+        """When the Slides code in use at `moment` started: the last switch hour, local time."""
+        local = self.local(moment or self.now())
+        for hour in sorted(SLIDES_SWITCH_HOURS, reverse=True):
+            start = local.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if start <= local:
+                return start
+        yesterday = local - timedelta(days=1)
+        return yesterday.replace(hour=max(SLIDES_SWITCH_HOURS), minute=0, second=0, microsecond=0)
+
+    def code_slot(self, kiosk: sqlite3.Row, moment: datetime) -> str:
+        """A screen's 30-second slot, or a Slides code's half day."""
+        if kiosk["kind"] == "slides":
+            return "slides " + self.slides_period(moment).strftime("%Y-%m-%dT%H")
+        return str(int(moment.timestamp()) // KIOSK_SLOT_SECONDS)
+
+    def kiosk_code(self, kiosk: sqlite3.Row, slot: str | None = None) -> str:
+        """The code in the kiosk's QR link for a slot (the current one by default)."""
+        slot = self.code_slot(kiosk, self.now()) if slot is None else slot
         return hmac.new(kiosk["secret"].encode(), str(slot).encode(), hashlib.sha256).hexdigest()[:16]
 
     def kiosk_code_ok(self, kiosk: sqlite3.Row, code: str) -> bool:
-        """True for the current or the previous slot's code."""
-        slot = int(self.now().timestamp()) // KIOSK_SLOT_SECONDS
-        return any(hmac.compare_digest(self.kiosk_code(kiosk, s), code) for s in (slot, slot - 1))
+        """True for the current code, or the one in use a slot ago (a screen) or SLIDES_GRACE ago (Slides)."""
+        now = self.now()
+        back = SLIDES_GRACE if kiosk["kind"] == "slides" else timedelta(seconds=KIOSK_SLOT_SECONDS)
+        slots = {self.code_slot(kiosk, now), self.code_slot(kiosk, now - back)}
+        return any(hmac.compare_digest(self.kiosk_code(kiosk, slot), code) for slot in slots)

@@ -1,0 +1,25 @@
+const IMAGE_URL = '{{ pairing.url }}';
+const TITLE = 'SubZero Hub QR code';
+
+// Replaces the QR code image when the Hub's code has changed, or adds it to the first slide.
+function updateQrCode() {
+  const resp = UrlFetchApp.fetch(IMAGE_URL, {muteHttpExceptions: true});
+  if (resp.getResponseCode() !== 200) return;
+  const blob = resp.getBlob();
+  const hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, blob.getBytes()));
+  const props = PropertiesService.getScriptProperties();
+  const deck = SlidesApp.getActivePresentation();
+  let image = null;
+  deck.getSlides().forEach(slide => slide.getImages().forEach(i => { if (i.getTitle() === TITLE) image = i; }));
+  if (image && props.getProperty('hash') === hash) return;
+  if (image) image.replace(blob);
+  else deck.getSlides()[0].insertImage(blob).setTitle(TITLE);
+  props.setProperty('hash', hash);
+}
+
+// Runs updateQrCode every 10 minutes.
+function setUp() {
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('updateQrCode').timeBased().everyMinutes(10).create();
+  updateQrCode();
+}

@@ -173,7 +173,7 @@ Default permissions:
   overwritten without a record here.
 - `tc_tokens`: personal keys for Shortcuts. They're stored hashed and shown once. A person can have
   several (phone and iPad) and can revoke any of them.
-- `tc_kiosks`: paired kiosk laptops (name, hashed secret, last seen).
+- `tc_kiosks`: paired kiosk laptops and Slides codes (name, kind, secret, hashed image link, last seen).
 - **Settings:**
   - practice-window rules (default: Mon to Fri from 3:15 pm, Sat and Sun all day)
   - how many minutes before a calendar event clock-in opens (15)
@@ -231,6 +231,11 @@ Default permissions:
   `segno`, which is pure Python. Either is pinned by SHA-256 like everything else in the Windows build.
 - **Laptop setup:** Edge or Chrome in kiosk mode, started when Windows starts, with sleep turned off. Any
   laptop with internet works.
+- **Slides codes:** the same QR code in a Google Slides deck, for rooms without a kiosk screen. Its code is
+  an HMAC of the kiosk's secret and the half day, switching at 3 am and 3 pm local time; the previous code works
+  for 20 more minutes. A secret image link (`/timeclock/slides/<kiosk>/<token>.png`, stored hashed, shown
+  once) serves the current code as a PNG. An Apps Script in the deck, shown on the Admin page, fetches it every
+  10 minutes and replaces the picture when it changes. A photo of the code works until the next switch.
 
 ### Shortcuts
 
