@@ -23,9 +23,12 @@ def next_ts() -> str:
     return f"17000{_counter[0]:05d}.000100"
 
 
-def dm_event(text="How do I tune a PID loop?", *, user=KID, ts=None, thread_ts=None, channel=DM, **extra):
-    event = {"type": "message", "channel_type": "im", "channel": channel, "user": user, "text": text,
-             "ts": ts or next_ts()}
+def dm_event(text="How do I tune a PID loop?", *, user=KID, ts=None, thread_ts=None, channel=DM, ask=True, **extra):
+    """A Slack DM event. A top-level message starts with "ask ", which the router removes before the AI sees it."""
+    ts = ts or next_ts()
+    if ask and text.strip() and (not thread_ts or thread_ts == ts) and not extra.get("subtype"):
+        text = "ask " + text
+    event = {"type": "message", "channel_type": "im", "channel": channel, "user": user, "text": text, "ts": ts}
     if thread_ts:
         event["thread_ts"] = thread_ts
     event.update(extra)

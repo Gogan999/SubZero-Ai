@@ -59,6 +59,12 @@ class TimeClockModule(Module):
     def nav(self, viewer) -> list[NavItem]:
         return [NavItem("Time Clock", "/timeclock", "clock")] if viewer.can(USE) else []
 
+    def dm_help(self, services: Any, viewer) -> list[str]:
+        if not viewer.can(USE):
+            return []
+        return ["*in* or *out*: clock in or out", "*status*: whether you're clocked in",
+                "*hours*: your hours this week, the last 30 days and this season"]
+
     def home_card(self, services: Any, viewer) -> dict[str, Any] | None:
         if not viewer.can(USE):
             return None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ..roles import is_excluded_account
@@ -11,27 +12,63 @@ from . import modules
 
 log = logging.getLogger("subzero.hub")
 
+HELP_WORDS = frozenset({"help", "?", "commands", "hi", "hello", "hey"})
+ASK = re.compile(r"(?:ask|ai)\b[\s:,.-]*(.*)", re.IGNORECASE | re.DOTALL)
+
 
 class SlackRouter:
     def __init__(self, services: Any):
         self.services = services
 
-    async def direct_message(self, event: dict[str, Any]) -> bool:
-        """Offers a top-level DM from a person to each module in turn. Returns True if one handled it.
-        Thread replies, edits, bot messages and messages with files are left to the AI."""
+    async def direct_message(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        """Offers a top-level DM from a person to each module in turn, and answers help and anything unknown.
+        Returns the event for the AI (an "ask" message with the word removed), or None when it was handled here.
+        Thread replies, edits, bot messages and messages with files go to the AI as they are."""
         if event.get("subtype") or event.get("bot_id") or not event.get("user") or event.get("files"):
-            return False
+            return event
         if event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
-            return False
+            return event
         text = (event.get("text") or "").strip()
+        if not text:
+            return event
+        if text.lower().rstrip("!.") in HELP_WORDS:
+            return await self.reply_help(event, "")
         for module in modules.installed():
             try:
                 if await module.on_dm(self.services, event, text):
-                    return True
+                    return None
             except Exception:
                 log.exception("The %s module failed on a Slack DM", module.key)
-                return True
-        return False
+                return None
+        ask = ASK.fullmatch(text)
+        if ask is None:
+            return await self.reply_help(event, "I didn't understand that, so nothing happened.\n")
+        if not ask.group(1).strip():
+            return await self.reply(event, "Put your question right after *ask*, like: ask how do we wire a limit "
+                                           "switch?")
+        return {**event, "text": ask.group(1).strip()}
+
+    async def reply(self, event: dict[str, Any], text: str) -> None:
+        """Answers a DM once, even if Slack delivers it twice."""
+        s = self.services
+        if s.store.claim_dm_event(event.get("channel", ""), event.get("ts", "")):
+            try:
+                await s.slack.post_message(event["channel"], text)
+            except Exception:
+                log.warning("Couldn't answer a Slack DM", exc_info=True)
+
+    async def reply_help(self, event: dict[str, Any], lead: str) -> None:
+        """The list of DM commands this person can use, after `lead`."""
+        s = self.services
+        viewer = await self.viewer(event["user"])
+        if viewer is None:
+            return await self.reply(event, "This Slack account can't use the team's tools. Ask a mentor if you "
+                                           "think this is a mistake.")
+        lines = [line for module in modules.installed() for line in module.dm_help(s, viewer)]
+        lines.append("*help*: show this list")
+        text = (f"{lead}*Here's what you can send me:*\n" + "\n".join(f"• {line}" for line in lines)
+                + f"\nEverything is also on the website: {s.settings.url('/')}")
+        return await self.reply(event, text)
 
     async def action(self, payload: dict[str, Any], action_id: str) -> None:
         """A button tap with a "<module key>:" action_id."""

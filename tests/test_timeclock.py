@@ -331,9 +331,25 @@ class SlackTest(ClockedHarness):
         self.dm("in", "2.1")
         self.assertEqual(len(self.dm("in", "2.1")), 1)
 
-    def test_other_messages_still_go_to_the_ai(self):
-        self.dm("How do I clock the motor controller?", "3.1")
+    def test_ask_goes_to_the_ai_and_anything_else_gets_help(self):
+        self.dm("ask How do I clock the motor controller?", "3.1")
+        self.assertEqual(self.h.services.db.one("SELECT content FROM messages")["content"],
+                         "How do I clock the motor controller?")
+        reply = self.dm("How do I clock the motor controller?", "3.2")[-1]
+        self.assertTrue(reply.startswith("I didn't understand that, so nothing happened."))
+        self.assertIn("*in* or *out*", reply)
+        self.assertIn("*ask* and then your question", reply)
         self.assertEqual(self.h.services.db.one("SELECT COUNT(*) AS n FROM messages")["n"], 1)
+
+    def test_help_and_other_ways_to_say_in(self):
+        reply = self.dm("Help", "3.3")[-1]
+        self.assertTrue(reply.startswith("*Here's what you can send me:*"))
+        self.assertIn("*hours*", reply)
+        self.assertIn("*help*: show this list", reply)
+        self.assertEqual(self.dm("Checking in!", "3.4")[-1], "Clocked in at 4:00 pm.")
+        self.assertEqual(self.dm("punch out", "3.5")[-1], "Clocked out at 4:00 pm. That's 0 m.")
+        self.assertIn("Put your question right after *ask*", self.dm("ask", "3.6")[-1])
+        self.assertEqual(self.h.services.db.one("SELECT COUNT(*) AS n FROM messages")["n"], 0)
 
     def test_outside_the_window(self):
         self.now = TUESDAY_NOON

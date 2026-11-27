@@ -140,13 +140,14 @@ Default permissions:
   - the new `hub.` redirect URL
 
   Coaches update the manifest and reinstall the app once.
-- **DM router:** every message sent to the bot goes to each module's `on_dm` in turn. The Time Clock
-  handles only exact commands:
-  - `in`, `out`, `status`, `hours`, `clock in`, `clock out`
-  - any capitalization, with an optional `!` or `.`
+- **DM router:** `help` (or `?`, `hi`) gets the list of commands, built from each module's `dm_help`. Every
+  other top-level message goes to each module's `on_dm` in turn. The Time Clock handles only exact commands:
+  - `in`, `out`, `status`, `hours`, and `clock`, `check` or `punch` (or `clocking` and the like) before `in`/`out`
+  - any capitalization, with an optional `!`, `.` or `?`
+- **The AI only on request:** a top-level message reaches the AI only when it starts with `ask` (or `ai`); the
+  router removes that word. Anything no module handled gets "I didn't understand that, so nothing happened" and
+  the command list. Replies in an AI chat's thread go straight to the AI.
 
-  **Everything else goes to the AI exactly as it does today**, through mentor approval. A message in a
-  thread the AI started always goes to the AI.
 - **Buttons:** an action ID starts with the module key (`timeclock:out_now`), and the router sends it to that
   module. The AI's existing action IDs have no prefix and keep going to the AI.
 - **Home tab:** the core builds it from each module's `slack_home_blocks`, such as the Clock In/Out button,
@@ -338,8 +339,9 @@ newest release when run from the install folder) or repairs.
 - Same setup as today: `python -m unittest discover -s tests -t .`, with fake Slack clients and no network.
 - **Time rules are tested with a fixed clock:** the window edges at 3:14 and 3:15, weekends, daylight-saving
   changes, entries that cross midnight, the grace period, the nightly close.
-- **The DM router has tests showing AI messages still go through mentor approval.** The words `in` and `out`
-  are the only change, and messages in AI threads are never treated as clock commands.
+- **The DM router has tests showing AI messages still go through mentor approval.** `ask` messages and thread
+  replies reach the AI as before, other messages get the command list, and messages in AI threads are never
+  treated as clock commands.
 - **Kiosk codes:** an expired code is refused, a code from another kiosk is refused, and a scan without a
   session goes through sign-in and then clocks the person in.
 - **Calendar:** sample `.ics` files from Google, Outlook and Apple, with recurring events, exceptions and

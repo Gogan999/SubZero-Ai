@@ -47,6 +47,10 @@ class Module:
         """A message sent to the bot in Slack. Returns True if this module handled it."""
         return False
 
+    def dm_help(self, services: Any, viewer: Viewer) -> list[str]:
+        """Lines for the bot's help reply, one per Slack DM command this module answers."""
+        return []
+
     async def on_action(self, services: Any, payload: dict[str, Any], action_id: str) -> bool:
         """A Slack button tap whose action_id starts with "<key>:". Returns True if handled."""
         return False

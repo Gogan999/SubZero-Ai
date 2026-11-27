@@ -19,7 +19,7 @@ DEFAULTS: dict = {
 }
 
 TIME_RE = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
-COMMAND_RE = re.compile(r"(?:clock\s+)?(in|out)|status|hours", re.IGNORECASE)
+COMMAND_RE = re.compile(r"(?:(?:clock(?:ing)?|check(?:ing)?|punch(?:ing)?)\s+)?(in|out)|status|hours", re.IGNORECASE)
 
 
 @dataclass

@@ -50,16 +50,35 @@ class RouterTest(DMTestBase):
         super().tearDown()
 
     def test_a_module_answers_its_own_words_and_the_ai_never_sees_them(self):
-        ts = self.send("Ping")
+        ts = self.send("Ping", ask=False)
         self.assertEqual(self.echo.dms, ["Ping"])
         self.assertIsNone(self.message_for(ts))
         self.assertTrue(any(p["text"] == "pong" for p in self.slack.posts))
 
-    def test_everything_else_still_goes_to_the_ai_for_review(self):
+    def test_ask_goes_to_the_ai_for_review(self):
         ts = self.send("How do I tune a PID loop?")
         mid = self.message_for(ts)
         self.assertEqual(self.h.message(mid)["status"], "pending")
+        self.assertEqual(self.h.message(mid)["content"], "How do I tune a PID loop?")
         self.assertIsNotNone(self.store.card(mid))
+
+    def test_anything_else_gets_the_command_list_and_starts_nothing(self):
+        for text in ("How do I tune a PID loop?", "I'm here", "asking for a friend"):
+            with self.subTest(text=text):
+                ts = self.send(text, ask=False)
+                self.assertIsNone(self.message_for(ts))
+                self.assertTrue(self.slack.posts[-1]["text"].startswith("I didn't understand that"))
+        self.assertEqual(self.echo.dms[-1], "asking for a friend", "modules still see it first")
+        help_reply = self.send("help", ask=False)
+        self.assertTrue(self.slack.posts[-1]["text"].startswith("*Here's what you can send me:*"))
+        self.assertIsNone(self.message_for(help_reply))
+        self.assertNotIn("help", self.echo.dms, "help is answered before the modules")
+
+    def test_a_reply_in_an_ai_thread_needs_no_ask(self):
+        first = self.send("How do I tune a PID loop?")
+        self.send("And the I term?", thread_ts=first)
+        self.assertFalse(self.slack.posts[-1]["text"].startswith("I didn't understand"))
+        self.assertNotIn("And the I term?", self.echo.dms)
 
     def test_thread_replies_edits_and_files_skip_the_modules(self):
         first = self.send("How do I tune a PID loop?")

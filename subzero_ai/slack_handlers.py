@@ -76,9 +76,9 @@ class SlackInteractions:
 
     async def _direct_message(self, event: dict[str, Any]) -> None:
         """Offers a DM to the modules first, then to the AI."""
-        if self.router is not None and await self.router.direct_message(event):
-            return
-        if self.dms is not None:
+        if self.router is not None:
+            event = await self.router.direct_message(event)
+        if event is not None and self.dms is not None:
             await self.dms.handle_event(event)
 
     async def reviewer(self, slack_user_id: str, *, fresh: bool = True) -> Viewer | None:

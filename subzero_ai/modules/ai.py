@@ -19,10 +19,17 @@ class AIModule(Module):
     def nav(self, viewer) -> list[NavItem]:
         return [NavItem("SubZero AI", "/chats", "chats")]
 
+    def dm_help(self, services: Any, viewer) -> list[str]:
+        if not services.settings.slack_dms_enabled:
+            return []
+        reviewed = not viewer.is_mentor or services.settings.mentors_need_approval
+        return ["*ask* and then your question, like _ask how do we tune a PID loop?_: start a chat with the AI"
+                + (" (a mentor checks it first)" if reviewed else "") + ". Reply in its thread to keep going."]
+
     def slack_home_blocks(self, services: Any, viewer) -> list[dict[str, Any]]:
         lines = [f"*SubZero AI*  <{services.settings.url('/chats')}|Open the chat>"]
         if services.settings.slack_dms_enabled:
             reviewed = not viewer.is_mentor or services.settings.mentors_need_approval
-            lines.append("Ask the AI by sending a message in the Messages tab."
-                         + (" A mentor checks it first." if reviewed else ""))
+            lines.append("Ask the AI by sending *ask* and your question in the Messages tab."
+                         + (" A mentor checks it first." if reviewed else "") + " Send *help* for every command.")
         return [{"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}}]

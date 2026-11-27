@@ -24,6 +24,7 @@ Every method is optional:
 | `home_card(services, viewer)` | A card on the Hub home page: `{"template": "notes/_home_card.html", ...}`. |
 | `slack_home_blocks(services, viewer)` | The module's section of the Slack Home tab. |
 | `on_dm(services, event, text)` | Top-level DMs to the bot. Return True to keep a message from the AI. Claim it first with `services.store.claim_dm_event`. |
+| `dm_help(services, viewer)` | Lines for the bot's `help` reply, one per DM command the module answers. |
 | `on_action(services, payload, action_id)` | Slack buttons whose `action_id` starts with `<key>:`. |
 | `commands` / `on_command(services, payload)` | Slash commands. Add each to `slack-manifest.yaml` and `setup_flow.slack_manifest`. |
 | `tick(services)` | Runs every minute. Put slow work in `asyncio.to_thread`. |

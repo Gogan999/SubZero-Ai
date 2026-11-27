@@ -133,10 +133,11 @@ No scope is needed for `auth.test` (checking the token) or `views.open` (the rej
 
 ## Messaging the bot in Slack
 
-You can ask the AI a question straight from Slack: open the bot (SubZero Hub) under **Apps** and send it a message.
+You can ask the AI a question straight from Slack: open the bot (SubZero Hub) under **Apps** and send **ask** followed by your question, like `ask how do we tune a PID loop?`.
 
+- **Commands.** The bot answers only these: `in`, `out`, `status` and `hours` for the Time Clock (`clock in`, `check out` and the like work too), `ask` and a question for the AI, and `help` for the list. Anything else gets the list back and nothing happens, so a stray message never starts an AI chat.
 - **A mentor still checks it.** Your message goes through the same approval as a message on the website. The bot says "A mentor will check this before the AI answers" and posts the AI's reply in the same Slack thread once it is approved. If a mentor doesn't approve it, the bot tells you why in the thread, and only you see that.
-- **One chat per Slack thread.** A new message to the bot starts a new chat. Reply in that message's thread to keep talking in the same chat. A reply in a thread the bot didn't start won't work, so send a new message instead.
+- **One chat per Slack thread.** Each `ask` message starts a new chat. Reply in that message's thread to keep talking in the same chat; replies don't need `ask`. A reply in a thread the bot didn't start won't work, so send a new message instead.
 - **Files go on the website.** The bot can't take pictures or files in Slack yet. Attach them on the website.
 - **Interactive explainers too.** The bot sends a link to the website when a reply has one.
 - **The chat is on the website too.** Chats started in Slack show up in the chat list like any other, where the team can see approved ones.
