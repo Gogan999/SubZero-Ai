@@ -162,15 +162,23 @@ async def entry_form(request: Request, viewer: Viewer) -> Response:
         if row is None or not may_edit(viewer, row["user_id"]):
             return error_page(request, viewer, 404, "Not found", "That entry doesn't exist or isn't yours to edit.")
         person, history = s.store.user(row["user_id"]), clock.history(entry_id)
-    error = request.session.pop("tc_error", None)
-    values = request.session.pop("tc_values", None) or {
+    dialog = request.query_params.get("partial") == "1"
+    error = None if dialog else request.session.pop("tc_error", None)
+    values = (None if dialog else request.session.pop("tc_values", None)) or {
         "start": local_input(clock, row["clock_in"]) if row else "",
         "end": local_input(clock, row["clock_out"]) if row else "",
         "note": (row["note"] or "") if row else ""}
-    return render(request, "timeclock/entry.html", viewer, person=person, row=row, values=values, error=error,
+    action = f"/timeclock/entries/{row['id']}" if row else f"/timeclock/entries/new?user={person['id']}"
+    return render(request, "timeclock/_entry_form.html" if dialog else "timeclock/entry.html", viewer,
+                  person=person, row=row, values=values, error=error, dialog=dialog, action=action,
                   history=[{"who": h["editor"] or "System", "what": h["action"], "when": rules.when_text(
                       clock.local(h["created_at"]), clock.local(clock.now()).date())} for h in history],
                   back=back_link(viewer, person["id"]), tools=tool_links(viewer))
+
+
+def from_dialog(request: Request) -> bool:
+    """True for a save or delete sent by the pop-out editor, which wants JSON instead of a redirect."""
+    return request.headers.get("x-requested-with") == "fetch"
 
 
 def back_link(viewer: Viewer, user_id: int) -> str:
@@ -205,9 +213,13 @@ async def entry_save(request: Request, viewer: Viewer) -> Response:
         else:
             clock.edit_entry(entry_id, start, end, values["note"].strip()[:300], editor_id=viewer.id)
     except EntryError as exc:
+        if from_dialog(request):
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         request.session["tc_error"], request.session["tc_values"] = str(exc), values
         return RedirectResponse(here, status_code=303)
     flash(request, "Saved.")
+    if from_dialog(request):
+        return JSONResponse({"ok": True})
     return RedirectResponse(back_link(viewer, user_id), status_code=303)
 
 
@@ -219,6 +231,8 @@ async def entry_delete(request: Request, viewer: Viewer) -> Response:
         return error_page(request, viewer, 404, "Not found", "That entry doesn't exist or isn't yours to edit.")
     clock.delete_entry(row["id"], editor_id=viewer.id)
     flash(request, "Deleted the entry.")
+    if from_dialog(request):
+        return JSONResponse({"ok": True})
     return RedirectResponse(back_link(viewer, row["user_id"]), status_code=303)
 
 

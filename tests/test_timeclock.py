@@ -252,6 +252,57 @@ class EditingTest(ClockedHarness):
         self.assertEqual(self.clock.undo_import("b1", editor_id=None), 2)
 
 
+class PopOutEditorTest(ClockedHarness):
+    FETCH = {"X-Requested-With": "fetch"}
+
+    def setUp(self):
+        super().setUp()
+        start = TUESDAY_AFTERNOON - timedelta(days=1)
+        self.entry = self.clock.add_entry(self.uid(self.ava), start, start + timedelta(hours=2), "",
+                                          editor_id=self.uid(self.ava))
+
+    def test_the_links_open_the_pop_out(self):
+        page = self.ava.get("/timeclock").text
+        self.assertIn(f'href="/timeclock/entries/{self.entry}" data-entry-link', page)
+        self.assertIn('href="/timeclock/entries/new" data-entry-link', page)
+
+    def test_the_form_alone(self):
+        part = self.ava.get(f"/timeclock/entries/{self.entry}?partial=1").text
+        self.assertNotIn("<html", part)
+        self.assertIn('id="entry-dialog-title">Edit time</h2>', part)
+        self.assertIn(f'action="/timeclock/entries/{self.entry}"', part)
+        self.assertIn("data-close-dialog", part)
+        new = self.kim.get(f"/timeclock/entries/new?user={self.uid(self.ava)}&partial=1").text
+        self.assertIn("Add time for Ava (student)", new)
+        self.assertIn(f'action="/timeclock/entries/new?user={self.uid(self.ava)}"', new)
+        self.assertEqual(self.ben.get(f"/timeclock/entries/{self.entry}?partial=1").status_code, 404)
+
+    def test_saving_and_deleting_answer_with_json(self):
+        start = TUESDAY_AFTERNOON - timedelta(days=1)
+        form = {"start": f"{start.astimezone(CHICAGO):%Y-%m-%dT%H:%M}",
+                "end": f"{(start + timedelta(hours=3)).astimezone(CHICAGO):%Y-%m-%dT%H:%M}", "note": "Stayed late"}
+        resp = self.ava.post(f"/timeclock/entries/{self.entry}", data=form, headers=self.FETCH)
+        self.assertEqual(resp.json(), {"ok": True})
+        self.assertEqual(self.clock.entry(self.entry)["note"], "Stayed late")
+        bad = self.ava.post(f"/timeclock/entries/{self.entry}", data={**form, "end": form["start"]}, headers=self.FETCH)
+        self.assertEqual(bad.status_code, 400)
+        self.assertFalse(bad.json()["ok"])
+        self.assertIn("after the start", bad.json()["error"])
+        added = self.ava.post("/timeclock/entries/new", headers=self.FETCH, data={
+            "start": "2026-11-27T15:30", "end": "2026-11-27T17:00", "note": ""})
+        self.assertEqual(added.json(), {"ok": True})
+        gone = self.ava.post(f"/timeclock/entries/{self.entry}/delete", headers=self.FETCH)
+        self.assertEqual(gone.json(), {"ok": True})
+        self.assertIsNone(self.clock.entry(self.entry))
+
+    def test_the_full_page_still_works_without_the_pop_out(self):
+        page = self.ava.get(f"/timeclock/entries/{self.entry}").text
+        self.assertIn("<h1>Edit time</h1>", page)
+        resp = self.ava.post(f"/timeclock/entries/{self.entry}", data={"start": "", "end": "", "note": ""},
+                             follow_redirects=False)
+        self.assertEqual((resp.status_code, resp.headers["location"]), (303, f"/timeclock/entries/{self.entry}"))
+
+
 class SlackTest(ClockedHarness):
     def setUp(self):
         super().setUp()

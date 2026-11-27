@@ -628,6 +628,17 @@ fieldset.field legend { font-weight: 650; font-size: .92rem; padding: 0; margin-
 .connector-dialog { width: min(560px, calc(100vw - 2rem)); max-height: min(640px, calc(100vh - 2rem)); padding: 1rem 1.1rem; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); color: var(--ink); }
 .connector-dialog[open] { display: flex; flex-direction: column; gap: .6rem; }
 .connector-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.entry-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 0; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); color: var(--ink); }
+.entry-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.entry-dialog-body { padding: .6rem 1.1rem 1.1rem; }
+.entry-dialog .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.entry-dialog .dialog-head h2 { margin: 0; font-size: 1.15rem; }
+.entry-dialog .form-error { margin: 0 0 .6rem; }
+.entry-history { margin-top: .8rem; color: var(--ink-2); }
+.entry-history summary { cursor: pointer; }
+@media (max-width: 600px) {
+  .entry-dialog { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+}
 .connector-dialog .fine, .connector-dialog .form-actions { margin: 0; }
 .connector-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .connector-head h2 { margin: 0; font-size: 1.15rem; }

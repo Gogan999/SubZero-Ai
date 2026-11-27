@@ -1,0 +1,49 @@
+{% from "_icons.html" import icon %}
+{% set heading = ('Edit time' if row else 'Add time') ~ ((' for ' ~ person.name) if person.id != viewer.id else '') %}
+{% if dialog %}
+<div class="dialog-head">
+  <h2 id="entry-dialog-title">{{ heading }}</h2>
+  <button class="icon-button" type="button" data-close-dialog aria-label="Close">{{ icon('close') }}</button>
+</div>
+{% else %}
+<h1>{{ heading }}</h1>
+{% endif %}
+<p class="form-error" role="alert" data-entry-error{% if not error %} hidden{% endif %}>{{ error or '' }}</p>
+<form class="entry-form{{ '' if dialog else ' panel' }}" method="post" action="{{ action }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="fields">
+    <div class="field">
+      <label for="start">Clocked in</label>
+      <input id="start" name="start" type="datetime-local" required value="{{ values.start }}">
+    </div>
+    <div class="field">
+      <label for="end">Clocked out</label>
+      <input id="end" name="end" type="datetime-local" {% if not row or row.clock_out %}required{% endif %} value="{{ values.end }}"{% if row and not row.clock_out %} aria-describedby="end-hint"{% endif %}>
+      {% if row and not row.clock_out %}<p class="field-hint" id="end-hint">Leave empty to stay clocked in.</p>{% endif %}
+    </div>
+    <div class="field">
+      <label for="note">Note <span class="fine">(optional)</span></label>
+      <input id="note" name="note" maxlength="300" value="{{ values.note }}" placeholder="Forgot to clock out after the build session">
+    </div>
+  </div>
+  <div class="form-actions">
+    <button class="button primary" type="submit">Save</button>
+    {% if dialog %}<button class="button quiet" type="button" data-close-dialog>Cancel</button>{% else %}<a class="button quiet" href="{{ back }}">Cancel</a>{% endif %}
+  </div>
+</form>
+{% if row %}
+<form method="post" action="/timeclock/entries/{{ row.id }}/delete" class="danger-zone">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="button small reject" type="submit" data-confirm="Delete this entry? It stays in the edit log.">Delete entry</button>
+</form>
+{% if history %}
+{% if dialog %}
+<details class="entry-history"><summary>Changes ({{ history|length }})</summary>
+  <ul class="history">{% for h in history %}<li>{{ h.who }}: {{ h.what }}, {{ h.when }}</li>{% endfor %}</ul>
+</details>
+{% else %}
+<h2>Changes</h2>
+<ul class="history">{% for h in history %}<li>{{ h.who }}: {{ h.what }}, {{ h.when }}</li>{% endfor %}</ul>
+{% endif %}
+{% endif %}
+{% endif %}

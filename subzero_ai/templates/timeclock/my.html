@@ -33,7 +33,7 @@
 
   <div class="section-head">
     <h2>Last 60 days</h2>
-    {% if editable %}<a class="button small" href="/timeclock/entries/new{{ '' if own else '?user=' ~ person.id }}">Add time</a>{% endif %}
+    {% if editable %}<a class="button small" href="/timeclock/entries/new{{ '' if own else '?user=' ~ person.id }}" data-entry-link>Add time</a>{% endif %}
   </div>
   <div class="table-wrap">
     <table class="data">
@@ -49,7 +49,7 @@
             {% if e.edited %}<span class="pill plain">Edited</span>{% endif %}</td>
           <td class="fine hide-small">{{ e.how }}{% if e.how_out and e.how_out != e.how %} · {{ e.how_out }}{% endif %}
             {% if e.note %}<span class="note">{{ e.note }}</span>{% endif %}</td>
-          {% if editable %}<td><a href="/timeclock/entries/{{ e.id }}">Edit</a></td>{% endif %}
+          {% if editable %}<td><a href="/timeclock/entries/{{ e.id }}" data-entry-link>Edit</a></td>{% endif %}
         </tr>
         {% else %}
         <tr><td colspan="{{ 6 if editable else 5 }}">No time in the last 60 days.</td></tr>

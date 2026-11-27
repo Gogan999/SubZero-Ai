@@ -270,6 +270,89 @@
     if (event.target.matches?.(".composer textarea")) autosize(event.target);
   });
 
+  // ------------------------------------------------------------ time entries
+  // Edit and Add time links open the entry form in a pop-out window and save without leaving the page.
+  function entryDialog() {
+    let dialog = document.querySelector("dialog.entry-dialog");
+    if (!dialog) {
+      dialog = document.createElement("dialog");
+      dialog.className = "entry-dialog";
+      dialog.setAttribute("aria-labelledby", "entry-dialog-title");
+      dialog.addEventListener("click", (event) => {
+        if (event.target === dialog || event.target.closest("[data-close-dialog]")) dialog.close();
+      });
+      document.body.append(dialog);
+    }
+    return dialog;
+  }
+
+  async function openEntry(link) {
+    const url = new URL(link.href, window.location.href);
+    url.searchParams.set("partial", "1");
+    let html;
+    try {
+      const resp = await fetch(url, { headers: { Accept: "text/html" }, credentials: "same-origin" });
+      if (!resp.ok) throw new Error(String(resp.status));
+      html = await resp.text();
+    } catch {
+      window.location.href = link.href;
+      return;
+    }
+    const dialog = entryDialog();
+    dialog.innerHTML = `<div class="entry-dialog-body">${html}</div>`;
+    dialog.showModal();
+  }
+
+  async function refreshMain() {
+    try {
+      const resp = await fetch(window.location.href, { headers: { Accept: "text/html" }, credentials: "same-origin" });
+      const fresh = new DOMParser().parseFromString(await resp.text(), "text/html").querySelector("main#main");
+      const current = document.querySelector("main#main");
+      if (resp.ok && fresh && current) {
+        current.innerHTML = fresh.innerHTML;
+        return;
+      }
+    } catch {
+      // Falls through to a full reload.
+    }
+    window.location.reload();
+  }
+
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("a[data-entry-link]");
+    if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    openEntry(link);
+  });
+
+  document.addEventListener("submit", async (event) => {
+    const form = event.target.closest("dialog.entry-dialog form");
+    if (!form || event.defaultPrevented) return;
+    event.preventDefault();
+    const dialog = form.closest("dialog");
+    const error = dialog.querySelector("[data-entry-error]");
+    const button = event.submitter || form.querySelector('[type="submit"]');
+    button.disabled = true;
+    let result;
+    try {
+      const resp = await fetch(form.action, {
+        method: "POST", body: new FormData(form), credentials: "same-origin",
+        headers: { Accept: "application/json", "X-Requested-With": "fetch" },
+      });
+      result = await resp.json();
+    } catch {
+      result = { ok: false, error: "That didn't save. Reload the page and try again." };
+    }
+    button.disabled = false;
+    if (!result.ok) {
+      error.textContent = result.error || "That didn't save. Reload the page and try again.";
+      error.hidden = false;
+      return;
+    }
+    dialog.close();
+    await refreshMain();
+  });
+
   // ------------------------------------------------------------- attachments
   // The chosen files are kept here and copied into the form's file input, so sending the form sends them.
   // Picking more files, dropping them on the form, or pasting a screenshot adds to the list.
